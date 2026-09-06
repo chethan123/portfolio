@@ -1,16 +1,6 @@
-/**
- * The columns screen's form contract (`parseMappingForm`, DESIGN.md §5.3,
- * spec 0004 step 03). Pure — every risk is a decision made out of posted
- * strings, and three are silent when wrong: **the sign of every imported
- * liability** (a checkbox posts its value or nothing; absence read as
- * "ticked" would negate every quantity in a bank export — §14.8's overdraft
- * case), **the scale of every cost basis** (a per_share/total flip does not
- * fail — it rescales the file and prints a plausible wrong number), and
- * **what the mapping is checked against** (the header row rides in a hidden
- * field; a stale or forged one must refuse at form level). Refusals are
- * checked as a set: the single `superRefine` exists so three faults come
- * back as three messages.
- */
+// Columns screen's form contract (parseMappingForm, DESIGN.md §5.3, spec 0004 step 03). Pure. Three silent-failure
+// risks pinned: a liability's sign (§14.8 overdraft case), cost-basis scale (per_share/total flip), and what the
+// mapping is checked against (hidden header-row field must refuse if stale/forged).
 import { describe, expect, it } from "vitest";
 
 import { NOT_IN_FILE, parseMappingForm } from "~/lib/column-mapping.server";
@@ -18,12 +8,8 @@ import { FORM_ERROR, ValidationError } from "~/lib/input.server";
 
 import type { Delimiter } from "~/lib/csv";
 
-/**
- * A file shaped the way brokerages actually export: two preamble rows above
- * the header, so a header row of 2 is the ordinary case rather than the edge.
- * Quantities and money are decimal strings here for the reason they are
- * everywhere else (§4.1) — nothing in this slice may reach a float.
- */
+/** File shaped like a real export: two preamble rows, header row 2 is the ordinary case.
+ * Quantities/money are decimal strings (§4.1) — nothing here may reach a float. */
 const ROWS: ReadonlyArray<ReadonlyArray<string>> = [
   ["Positions as of 30 Jun 2026"],
   [],
@@ -44,11 +30,8 @@ const WELL_FORMED: Readonly<Record<string, string>> = {
   owedAsPositive: "true",
 };
 
-/**
- * The well-formed post with fields changed or removed. `undefined` removes,
- * because "the field never arrived" is a distinct answer from "the field
- * arrived blank" and both are things a real post does.
- */
+/** Well-formed post with fields changed or removed. undefined removes — "never arrived" is
+ * distinct from "arrived blank", both real post shapes. */
 function submission(overrides: Readonly<Record<string, string | undefined>> = {}) {
   const fields: Record<string, string> = { ...WELL_FORMED };
 
@@ -88,8 +71,7 @@ describe("a mapping assembled from a well-formed submission", () => {
       },
       costBasisIs: "per_share",
       owedAsPositive: true,
-      // Not a control on the screen: combining is what the lot-level story
-      // promises, so it is true for every mapping this form can produce.
+      // Not a screen control — combining is the lot-level story's promise, true for every mapping.
       combineDuplicateRows: true,
     });
   });
@@ -104,9 +86,7 @@ describe("a mapping assembled from a well-formed submission", () => {
 
 describe("the owed-as-positive box, where a liability's sign is decided", () => {
   it("keeps the file's own sign when the box is unticked and posts nothing at all", () => {
-    // The overdraft case (§14.8): a bank export that already writes an
-    // overdraft negative must not be negated a second time. Absence is the
-    // only thing an unticked checkbox sends, so absence has to read as false.
+    // Overdraft case (§14.8): an export already negative must not be negated twice. Absence is all an unticked checkbox sends.
     const mapping = parseMappingForm(submission({ owedAsPositive: undefined }), ROWS, ",");
 
     expect(mapping.owedAsPositive).toBe(false);
@@ -121,9 +101,7 @@ describe("the owed-as-positive box, where a liability's sign is decided", () => 
   it.each(["", "on", "false", "TRUE", "1"])(
     "reads %j as unticked, because only the box's own value counts as ticked",
     (posted) => {
-      // "on" is the one that matters: it is what a browser posts for a
-      // checkbox with no `value`, so if the markup ever loses `value="true"`
-      // this rule is what keeps a ticked box from silently reading as unticked.
+      // "on" matters most: what a browser posts for a checkbox with no value.
       const mapping = parseMappingForm(submission({ owedAsPositive: posted }), ROWS, ",");
 
       expect(mapping.owedAsPositive).toBe(false);
@@ -146,9 +124,7 @@ describe("what the cost basis column states", () => {
     ["left blank", ""],
     ["a value no radio can produce", "Total"],
   ])("refuses a cost basis answer that is %s, rather than guessing per-share", (_case, posted) => {
-    // The guess is the whole danger: the two readings differ by the position
-    // size, so an assumed `per_share` would rescale every basis in the file
-    // and still print a plausible number. The radio must be answered.
+    // Guessing per_share would rescale every basis by position size and still print a plausible number.
     const refusal = refusalOf(() =>
       parseMappingForm(submission({ costBasisIs: posted }), ROWS, ","),
     );
@@ -170,8 +146,7 @@ describe("the two columns a statement cannot be read without", () => {
   ])(
     "refuses under the %s select when it is %j, wherever the unchosen answer came from",
     (field, label, posted) => {
-      // Absent, placeholder and "not in this file" are three different answers
-      // to an optional column and the same answer to a required one.
+      // Absent, placeholder and "not in this file" are three different answers to an optional column, one to a required one.
       const refusal = refusalOf(() => parseMappingForm(submission({ [field]: posted }), ROWS, ","));
 
       expect(refusal[field]).toBe(
@@ -181,8 +156,7 @@ describe("the two columns a statement cannot be read without", () => {
   );
 
   it("returns three messages for a submission with three faults, not one per round trip", () => {
-    // The reason every check lives in one `superRefine`: a reader who missed
-    // three controls fixes all three before submitting again.
+    // One superRefine: a reader who missed three controls fixes all three in one round trip.
     const refusal = refusalOf(() =>
       parseMappingForm(
         submission({ instrument: undefined, quantity: NOT_IN_FILE, costBasisIs: undefined }),
@@ -201,8 +175,7 @@ describe("the four columns a statement can do without", () => {
     ["left on the unchosen placeholder", ""],
     ["marked as deliberately not in this file", NOT_IN_FILE],
   ])("records %s as null, never as an empty string", (_case, posted) => {
-    // An empty string here would be `parseStatement`'s "names a column that is
-    // not there"; null is what the schema already means by absent.
+    // Empty string would mean "names a column that isn't there" to parseStatement; null means absent.
     const mapping = parseMappingForm(
       submission({ name: posted, costBasis: posted, asOf: posted, accountNumber: posted }),
       ROWS,
@@ -225,8 +198,7 @@ describe("a column that the file's header does not have", () => {
     ["instrument", "Ticker"],
     ["asOf", "Trade Date"],
   ])("refuses under the %s select, quoting what was posted", (field, posted) => {
-    // The options are the header cells verbatim, so a value outside them is a
-    // forged post rather than a slip a reader could make at the keyboard.
+    // Options are header cells verbatim — a value outside them is forged, not a keyboard slip.
     const refusal = refusalOf(() => parseMappingForm(submission({ [field]: posted }), ROWS, ","));
 
     expect(refusal[field]).toBe(`"${posted}" is not a column of this file's header row.`);
@@ -242,15 +214,12 @@ describe("one column claimed by two fields", () => {
     expect(refusal.quantity).toBe(
       '"Symbol" is already mapped to Instrument, and one column cannot also be the quantity.',
     );
-    // Only the later field is refused: the first claim on a column stands, so
-    // the reader is asked to fix one select rather than both.
+    // Only the later field is refused — first claim stands, reader fixes one select, not both.
     expect(Object.keys(refusal)).toEqual(["quantity"]);
   });
 
   it("treats two header cells differing only in padding as the same column", () => {
-    // Trim-compared, matching how `parseStatement` finds a column. Mapping
-    // both would be two fields reading one cell, which is the duplicate this
-    // refusal exists for even though the posted strings are not equal.
+    // Trim-compared, matching parseStatement — same cell read by two fields, though posted strings differ.
     const padded: ReadonlyArray<ReadonlyArray<string>> = [["Symbol", " Symbol ", "Quantity"]];
 
     const refusal = refusalOf(() =>
@@ -277,9 +246,7 @@ describe("the hidden header row", () => {
   ])(
     "refuses a header row that is %s at form level, never against a row that is not there",
     (_case, posted) => {
-      // No reader typed this field, so there is no control to hang the message
-      // under — and a mapping built against an undefined header would pass
-      // every column check by accident.
+      // No control to hang a field message under — a mapping built against an undefined header would pass every column check.
       const refusal = refusalOf(() =>
         parseMappingForm(submission({ headerRow: posted }), ROWS, ","),
       );

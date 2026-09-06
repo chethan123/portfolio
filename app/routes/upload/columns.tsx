@@ -24,18 +24,15 @@ import type { Route } from "./+types/columns";
 
 /**
  * Step two — map the file's columns, once per institution (ingest brief
- * §4). The screen's whole job is to be readable: a household maps by
- * looking at *values*, not column names, so the preview rows are the
- * feature and every control is answered against them. A saved mapping
- * prefills the controls — the screen still renders every time, because a
- * changed export must be visible rather than silently reapplied. No client
- * state: the header-row change is a GET round trip, the mapping one POST.
+ * §4). A saved mapping prefills but the screen still renders every time — a
+ * changed export must be visible, not silently reapplied. No client state:
+ * header-row change is a GET, mapping a POST.
  */
 export function meta() {
   return [{ title: "Columns · Upload · Portfolio" }];
 }
 
-/** The columns screen's form fields, in the order the screen draws them. */
+// Form fields, in the order the screen draws them.
 const COLUMN_CONTROLS = [
   { field: "instrument", caption: "Instrument", optional: false },
   { field: "quantity", caption: "Quantity", optional: false },
@@ -45,12 +42,7 @@ const COLUMN_CONTROLS = [
   { field: "accountNumber", caption: "Account number", optional: true },
 ] as const;
 
-/**
- * The draft's file as rows, read the way the loader and the action must both
- * read it: a saved mapping forces its recorded delimiter, so a re-read never
- * depends on the sniff reaching the same verdict twice; without one, the
- * sniff is deterministic over the same bytes, so the pair still agree.
- */
+// Saved mapping forces its recorded delimiter, so a re-read can't disagree with the original sniff.
 function readDraftFile(draft: UploadDraft) {
   const saved = statementMapping.safeParse(draft.mapping);
   const savedMapping = saved.success ? saved.data : null;
@@ -65,11 +57,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const account = await getAccount(draft.accountId);
     const { savedMapping, rows } = readDraftFile(draft);
 
-    // The header row: an explicit re-read (`header` param) wins — this
-    // request's own instruction; then the saved mapping's row, so returning
-    // shows what was saved; then candidate detection. The GET param
-    // outranking the saved row keeps "Re-read with this header row" working
-    // on a draft that already holds a mapping.
+    // Precedence: explicit `header` param, then the saved mapping's row, then candidate detection.
     const headerParam = new URL(request.url).searchParams.get("header");
     const requested =
       headerParam !== null && /^\d+$/.test(headerParam) ? Number(headerParam) : null;
@@ -82,24 +70,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     const headerCells = rows[headerRow] ?? [];
 
-    // A saved mapping that no longer parses clean explains itself on the GET
-    // too: review and instruments bounce such a draft back here, and
-    // POST-only problems would leave that arrival a blank form with no word
-    // of why. Parsed as saved — its own header row — what the bounce refused.
+    // Parsed here too, not only on POST — a bounce from review/instruments needs to explain itself on arrival.
     const savedParse = savedMapping === null ? null : parseStatement(rows, savedMapping);
     const savedProblems = savedParse === null ? [] : savedParse.problems;
 
-    // The draft's own mapping wins over the institution's remembered one —
-    // returning from a later step must show what was saved on *this* draft —
-    // and the lookup only runs when the draft has nothing yet.
+    // Draft's own mapping wins over the institution's remembered one — the lookup only runs when the draft has none.
     const remembered =
       savedMapping ?? (await findMapping(account.institution, headerFingerprint(headerCells)));
     const fromInstitution = savedMapping === null && remembered !== null;
 
-    // Preselects, resolved against the header actually on screen. A saved
-    // column the file no longer has leaves its control unselected and is
-    // named in the intro, because the reader's next move — remap it, or mark
-    // it not in this file — depends on knowing the column disappeared.
+    // A saved column the file no longer has leaves its control unselected and is named in the intro.
     const missingColumns: string[] = [];
     let defaults: Record<string, string>;
     if (remembered === null) {
@@ -114,8 +94,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         owedAsPositive: isOwed(account.kind) ? "true" : "",
       };
     } else {
-      // Matched the way `parseStatement` finds a column — by trimmed cell —
-      // and preselected as the raw cell, because that is the option's value.
+      // Matched by trimmed cell, same as `parseStatement`.
       const cellFor = (name: string): string | undefined =>
         headerCells.find((cell) => cell.trim() === name.trim());
       const value = (name: string | null | undefined, optional: boolean): string => {
@@ -142,10 +121,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       };
     }
 
-    // Candidate rows first, then every other non-blank row: a real header
-    // with two same-named columns fails candidate detection and must still
-    // be choosable (`headerRowChoices` documents why that is safe) — plus
-    // the row on screen, whatever detection thinks of it.
+    // Candidates first, then every other non-blank row (`headerRowChoices` — a real header can fail candidate detection).
     const headerOptions = headerRowChoices(rows, headerRow).map((index) => {
       const cells = (rows[index] ?? [])
         .map((cell) => cell.trim())
@@ -158,8 +134,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       };
     });
 
-    // The first three data rows, blank spacer lines skipped, each padded to
-    // the header's width so its cells sit under the columns they belong to.
+    // First three data rows, spacer lines skipped, padded to the header's width.
     const preview: string[][] = [];
     for (let index = headerRow + 1; index < rows.length && preview.length < 3; index++) {
       const cells = rows[index] ?? [];
@@ -191,8 +166,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       savedProblems: savedProblems.map((problem) => problem.message),
       savedProblemFields:
         savedMapping === null ? [] : problemFieldsOf(savedMapping, savedProblems),
-      // The route's component cannot import a `.server` module, so the
-      // sentinel rides down with the data it belongs to.
+      // Component can't import a `.server` module — sentinel rides down with the data.
       notInFile: NOT_IN_FILE,
     };
   } catch (error) {
@@ -233,15 +207,10 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     const mapping = parseMappingForm(values, rows, delimiter);
 
-    // One call decides everything downstream: whether the file parses,
-    // whether the mapping is remembered, and which step this reader goes to
-    // — the same answer that lands on the draft, so the strip on the next
-    // screen can never describe a different journey.
+    // Decides everything downstream: parses, remembers, and picks the next step — the same answer that lands on the draft.
     const outcome = await rememberMapping(draft.id, mapping);
 
-    // Parse problems land here, not later (brief §4.5): each names the row
-    // and column that caused it, because remapping is the fix and an error
-    // two screens downstream from its cure is a round trip nobody asked for.
+    // Parse problems land here, not later (brief §4.5) — remapping is the fix, so the error belongs on this screen.
     if ("problems" in outcome) {
       return {
         errors: {} as Record<string, string>,
@@ -255,8 +224,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${draft.id}/${outcome.nextStep}`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module the client bundle must not drag in.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return {
         errors: fieldErrors,
@@ -288,15 +256,11 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   } = loaderData;
 
   const errors = actionData?.errors;
-  // What was posted wins over what was saved, exactly as with the values
-  // below: after a refused POST the problems describe that post, and only a
-  // fresh GET renders the saved mapping's own (the bounced-redirect case).
+  // Posted wins over saved — after a refused POST these describe that post; only a fresh GET shows the saved mapping's own.
   const problems = actionData?.problems ?? savedProblems;
   const problemFields = actionData?.problemFields ?? savedProblemFields;
 
-  // What was posted wins over what was saved, so a refusal never costs an
-  // edit. A checkbox absent from the post means unticked, which is why the
-  // whole record is swapped rather than merged.
+  // Posted wins over saved. Whole record swapped, not merged — an absent checkbox means unticked.
   const values: Record<string, string | undefined> = actionData?.values ?? defaults;
 
   const invalid = (field: string): true | undefined =>
@@ -317,9 +281,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           aria-invalid={invalid(field)}
         >
           <option value="">Choose…</option>
-          {/* An explicit option rather than an empty one: "unset" and
-              "deliberately absent" are different answers, and only this one
-              survives a save. */}
+          {/* "unset" and "deliberately absent" are different answers — only the latter survives a save. */}
           {optional ? <option value={notInFile}>Not in this file</option> : null}
           {headerCells
             .filter((cell) => cell.trim() !== "")
@@ -341,10 +303,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   return (
     <section className="panel">
       <div className="panel-body form-intro">
-        {/* The file and the account lead: a draft survives a closed laptop
-            and the reader may be resuming cold — exactly when a bare name
-            fails a house with two same-named accounts, so the account
-            arrives with owner and number tail (brief §4.1). */}
+        {/* Owner and number tail included — a bare name fails a house with two same-named accounts (brief §4.1). */}
         <p>
           <strong>{draft.filename}</strong> · {draft.accountName}
           {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
@@ -366,9 +325,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
         ))}
       </div>
 
-      {/* The header-row choice sits first, above the controls it resets: a
-          re-read changes what every select below offers, so selections not
-          yet saved are rightly lost with the round trip. */}
+      {/* First, above the controls it resets — a re-read changes what every select below offers. */}
       <Form method="get" className="panel-form">
         <div>
           <label htmlFor="header-row">
@@ -387,11 +344,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
         </button>
       </Form>
 
-      {/* The evidence: the file's own words verbatim — dollar signs, n/a
-          and all — because the reader chooses columns by these values, and
-          laundering them removes the evidence. No .is-numeric anywhere: the
-          preview does not yet know which columns are numbers; that is what
-          the screen is deciding. */}
+      {/* File's own words verbatim — no `.is-numeric`, since which columns are numbers is what the screen decides. */}
       <div className="data-table-scroll">
         <table className="data-table">
           <thead>
@@ -437,9 +390,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           columnSelect(field, caption, optional),
         )}
 
-        {/* Always rendered, even with no cost basis column mapped: a reveal
-            that reacts to another control needs JavaScript, and the note
-            costs one line. */}
+        {/* Always rendered — a reveal reacting to another control needs JavaScript. */}
         <fieldset>
           <legend>Cost basis is</legend>
           <label className="choice">
@@ -468,9 +419,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           ) : null}
         </fieldset>
 
-        {/* Where a liability's sign is decided: the file states a number, the
-            box states its direction. Unticked keeps the file's own sign,
-            which is how an overdraft records (DESIGN.md §14.8). */}
+        {/* Unticked keeps the file's own sign — how an overdraft records (DESIGN.md §14.8). */}
         <label className="choice">
           <input
             type="checkbox"

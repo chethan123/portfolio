@@ -1,13 +1,5 @@
-/**
- * Settings → one account (the close acknowledgement).
- *
- * The rule itself — no acknowledgement, no close — belongs to
- * `accounts.server.ts` and is tested there. What is only true of *this route*
- * is the wiring around it: a ticked close redirects to the list, and a refused
- * close reports as `closeError` with `values` left undefined — the close POST
- * carries no account fields, so echoing it as `values` would blank every box
- * on the save form above the danger zone.
- */
+// Settings → one account, close acknowledgement. The rule (no ack, no close) is accounts.server.ts's; this covers only the route's
+// wiring: a ticked close redirects to the list, a refused close reports closeError with values left undefined (see below).
 import { afterAll, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -54,8 +46,7 @@ describe("closing an account from its editor", () => {
         saved: false,
         closeError: expect.stringContaining("Old Brokerage"),
       });
-      // Undefined, not the close POST's fields: the save form falls back to
-      // the stored account, keeping every box filled.
+      // Undefined, not the close POST's fields — save form falls back to the stored account.
       expect(outcome).toMatchObject({ values: undefined, errors: undefined });
       expect((await getAccount(account.id, db)).isClosed).toBe(false);
     }),

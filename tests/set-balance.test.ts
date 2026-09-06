@@ -1,21 +1,4 @@
-/**
- * Setting the balance of a single-position account (DESIGN.md §5.2).
- *
- * Against a real Postgres, because everything at risk here is in the database:
- * the sign a liability is stored with, the exactness of a `numeric` that never
- * met a float, and the tie-break that decides which of two recorded balances an
- * account is currently reading.
- *
- * The tests are grouped around the three ways this write could be silently
- * wrong rather than around the function's arguments:
- *
- *   * it stores the wrong sign, and a debt is counted as an asset;
- *   * it lands a position set with no holding, which does not read as a failed
- *     write but as "this account now holds nothing";
- *   * it accepts an account whose holdings a one-row set would erase.
- *
- * Every money assertion is an exact decimal string.
- */
+// setBalance for a single-position account (DESIGN.md §5.2), against real Postgres — sign, numeric exactness, tie-break all live there
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ValidationError, NotFoundError } from "~/lib/input.server";
@@ -27,7 +10,6 @@ import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
-/** The refusal a call produced, or a failure if it did not refuse. */
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -49,9 +31,7 @@ describe("setBalance", () => {
       expect(recorded.amount).toBe("42000.00");
 
       const total = await accountTotal(bank.id, db);
-      // USD prices at 1.00 on every date (`0001_initial_schema.sql` seeds both
-      // the quote and a 1970 close), so the balance and the valuation are the
-      // same figure at the column's scale.
+      // USD prices at 1.00 every date (0001_initial_schema.sql seeds the quote + 1970 close)
       expect(total?.amount).toBe("42000.0000");
       expect(total?.coverage).toEqual({ known: 1, total: 1 });
     }),
@@ -62,7 +42,7 @@ describe("setBalance", () => {
     withDatabase(async ({ db, seedAccount }) => {
       const loan = await seedAccount({ kind: "liability", name: "Chase Auto Loan" });
 
-      // Typed the way a person reads it off a statement: what is owed, unsigned.
+      // typed the way a person reads it off a statement: what is owed, unsigned
       const recorded = await setBalance(loan.id, { amount: "14,500.00", asOf: "2026-08-16" }, db);
 
       expect(recorded.amount).toBe("-14500.00");
@@ -73,9 +53,7 @@ describe("setBalance", () => {
   it(
     "moves household net worth down by the loan, not up by it",
     withDatabase(async ({ db, seedAccount, seedPerson }) => {
-      // The failure this guards is the one a signed input invites: a debt typed
-      // as 14500 landing as an asset moves net worth by +14,500 instead of
-      // −14,500, a swing of twice the loan, and nothing on any screen says so.
+      // a debt landing as an asset swings net worth by twice the loan, silently
       const owner = await seedPerson({ name: "Alex" });
       const bank = await seedAccount({ kind: "bank", owner });
       const loan = await seedAccount({ kind: "liability", owner });
@@ -93,8 +71,7 @@ describe("setBalance", () => {
     withDatabase(async ({ db, seedAccount }) => {
       const loan = await seedAccount({ kind: "liability" });
 
-      // A paid-off loan. "−0.00" is a debt of nothing written as though it were
-      // something, and it would read as one in the holdings table.
+      // a paid-off loan — "-0.00" would read as a debt of nothing written as though it were something
       const recorded = await setBalance(loan.id, { amount: "0.00", asOf: "2026-08-16" }, db);
 
       expect(recorded.amount).toBe("0.00");
@@ -120,8 +97,7 @@ describe("setBalance", () => {
         .groupBy(["position_set.id", "position_set.source"])
         .execute();
 
-      // An empty position set is legal and means "sold everything" — which is
-      // exactly why this write must never produce one by accident.
+      // an empty position set is legal and reads "sold everything" — must never happen by accident
       expect(sets).toHaveLength(1);
       expect(sets[0]?.source).toBe("manual");
       expect(Number(sets[0]?.holdings)).toBe(1);
@@ -138,12 +114,10 @@ describe("setBalance", () => {
       await setBalance(bank.id, { amount: "1100.00", asOf: "2026-08-16" }, db);
       const afterSecond = await lastRecorded(bank.id, db);
 
-      // Two writes for one date still move the id, so the second submission is
-      // distinguishable from a refusal even though the date did not change.
+      // id moves even though the date didn't — distinguishes a submission from a refusal
       expect(afterSecond?.id).not.toBe(afterFirst?.id);
 
-      // Two sets, not one edited in place: undo is free because nothing was
-      // overwritten (§5.2).
+      // two sets, not one edited in place: undo is free because nothing was overwritten (§5.2)
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -151,8 +125,7 @@ describe("setBalance", () => {
         .execute();
       expect(sets).toHaveLength(2);
 
-      // And the tie-break on a shared as-of date is the same one a re-uploaded
-      // statement resolves through, so the last one submitted speaks.
+      // tie-break on a shared as-of date is the same one a re-uploaded statement resolves through
       expect((await accountTotal(bank.id, db))?.amount).toBe("1100.0000");
     }),
   );
@@ -163,7 +136,6 @@ describe("setBalance", () => {
       const bank = await seedAccount({ kind: "bank" });
 
       await setBalance(bank.id, { amount: "1100.00", asOf: "2026-08-16" }, db);
-      // Filling in a date that was missed. It is history, not news.
       await setBalance(bank.id, { amount: "900.00", asOf: "2026-07-01" }, db);
 
       expect((await accountTotal(bank.id, db))?.amount).toBe("1100.0000");
@@ -187,18 +159,11 @@ describe("setBalance", () => {
       );
       expect(refusal.fieldErrors.form).toMatch(/record everything else it holds as sold/);
 
-      // The refusal is the point: the securities are untouched.
       expect((await accountTotal(brokerage.id, db))?.amount).toBe("25000.0000");
     }),
   );
 
-  // One case over the kinds, not three copies: the check is that
-  // `SINGLE_POSITION` admits exactly two of the five. The case value is
-  // threaded in by calling `withDatabase` per case, never by handing
-  // `it.each` the wrapper directly: `withDatabase` returns a
-  // `() => Promise<void>`, which type-checks where `it.each` wants a
-  // one-argument body — and silently discards the kind. This file did
-  // exactly that, and `ira` went untested while the title claimed otherwise.
+  // regression: it.each handed the case value directly once, silently discarding it and leaving `ira` untested
   it.each(["401k", "ira"] as const)("refuses a %s account for the same reason", (kind) =>
     withDatabase(async ({ db, seedAccount }) => {
       const account = await seedAccount({ kind });
@@ -212,14 +177,7 @@ describe("setBalance", () => {
   it(
     "refuses an account holding securities under a bank label, which the kind alone cannot catch",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // The regression (report `SET-1`). The kind check above passes here —
-      // the label says `bank`, and a label is what a Settings edit used to be
-      // free to hang on a brokerage full of securities. Nothing but the rows
-      // themselves says this write would record both holdings as sold.
-      //
-      // Seeded directly, because that state is no longer reachable through a
-      // kind change and is still reachable through an upload: `commitUpload`
-      // never reads `kind` at all.
+      // regression (SET-1): a kind change can't reach this state anymore, but an upload still can — commitUpload never reads kind
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });
@@ -238,13 +196,9 @@ describe("setBalance", () => {
         setBalance(bank.id, { amount: "5000.00", asOf: "2026-08-16" }, db),
       );
 
-      // Named, both of them: "this would lose something" is not actionable,
-      // and the reader is the person who has to decide whether it is true.
       expect(refusal.fieldErrors.form).toMatch(/Vanguard Total Stock Market/);
       expect(refusal.fieldErrors.form).toMatch(/Schwab US Dividend Equity/);
 
-      // A refusal, not a write that happened to be smaller: no second set,
-      // and the figure the household reads is the one it read before.
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -258,10 +212,7 @@ describe("setBalance", () => {
   it(
     "records a balance over a position that was sold out, which is stored as zero rather than dropped",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, usdInstrument }) => {
-      // `revisePosition` writes a sold-out position as a zero row rather than
-      // dropping it (`positions.server.ts:31-36`), so a guard that counted
-      // rows instead of non-zero quantities would lock this account out of
-      // typed balances for good.
+      // a sold-out position is a zero row, not dropped — a guard counting rows, not non-zero quantities, would lock this out for good
       const bank = await seedAccount({ kind: "bank" });
       const usd = await usdInstrument();
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
@@ -284,11 +235,7 @@ describe("setBalance", () => {
   it(
     "refuses a money-market fund, which is priced as fixed without being cash",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // Pins how "cash" is resolved: the seeded `USD` row, by symbol *and*
-      // price source together. `price_source = 'fixed'` alone is the tempting
-      // answer and it is wrong — `seed-demo.ts` files SPAXX as `fixed`, so a
-      // reader that took `fixed` for cash would call this account cash-only
-      // and let one typed figure sell 16,000 money-market shares.
+      // "cash" resolves by symbol AND price_source together — price_source='fixed' alone is tempting and wrong (seed-demo.ts files SPAXX as fixed too)
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Cash Management" });
       const spaxx = await seedInstrument({
         symbol: "SPAXX",
@@ -311,9 +258,7 @@ describe("setBalance", () => {
   it(
     "writes to the seeded USD row when a second instrument carries the same symbol",
     withDatabase(async ({ db, seedAccount, seedInstrument, usdInstrument }) => {
-      // The instruments step of an upload will create a second row carrying
-      // `USD` with no warning (report `ING-8`), so "the USD instrument" has to
-      // name one row rather than whichever the plan returns first.
+      // an upload's instrument step can create a second USD row with no warning (ING-8)
       const bank = await seedAccount({ kind: "bank" });
       const seeded = await usdInstrument();
       const second = await seedInstrument({
@@ -332,9 +277,7 @@ describe("setBalance", () => {
         .where("position_set.account_id", "=", bank.id)
         .execute();
 
-      // The seeded row, which is priced at 1.00 on every date. The other one
-      // has no price at all, so a balance written against it would read as an
-      // uncovered holding rather than as money.
+      // the other row has no price — writing to it would read as an uncovered holding, not money
       expect(written.map((holding) => holding.instrument_id)).toEqual([seeded.id]);
       expect(seeded.id).not.toBe(second.id);
     }),
@@ -343,12 +286,7 @@ describe("setBalance", () => {
   it(
     "refuses a cash line the seed did not create, rather than dropping it silently",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // An accepted behaviour change, stated rather than discovered: no
-      // `instrument_alias` rows are seeded, so an uploaded "CASH" line becomes
-      // its own instrument, and this account can no longer take a typed
-      // balance. The refusal is true — that row really would be dropped — and
-      // it names the escape, which is zeroing the row on Holdings rather than
-      // re-uploading the statement that produced it.
+      // accepted limitation: no instrument_alias seeded, so "CASH" becomes its own instrument — escape is zeroing on Holdings, not re-uploading
       const bank = await seedAccount({ kind: "bank", name: "Schwab Checking" });
       const cash = await seedInstrument({
         symbol: "CASH",
@@ -384,9 +322,7 @@ describe("setBalance", () => {
   it(
     "reports the kind refusal before the field refusals",
     withDatabase(async ({ db, seedAccount }) => {
-      // A person who reached this form for a brokerage has a problem that
-      // correcting the boxes will not fix, and "that is not a number" would
-      // bury it.
+      // "not a number" would bury the real problem: a brokerage shouldn't have reached this form
       const brokerage = await seedAccount({ kind: "brokerage" });
       const refusal = await refusalOf(() =>
         setBalance(brokerage.id, { amount: "not a number", asOf: "nonsense" }, db),
@@ -400,12 +336,7 @@ describe("setBalance", () => {
   it(
     "reports the statement refusal before the field refusals, for the same reason",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // The ordering above, pinned for the guard the kind check cannot make —
-      // and this is the half that can move. `setBalance`'s statement
-      // pre-check sits ahead of `parseInput` deliberately; dropped below it,
-      // the case above still passes and this reader is told their amount is
-      // not a number, with nothing about the position that a corrected
-      // amount would then have recorded as sold.
+      // the statement pre-check sits ahead of parseInput deliberately — else "not a number" hides what a fix would then sell
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       await seedPositionSet({
@@ -479,8 +410,7 @@ describe("lastRecorded", () => {
       const second = await lastRecorded(bank.id, db);
       expect(second).toMatchObject({ asOf: "2026-08-16", source: "manual" });
 
-      // The id moves, which is what the form keys its boxes on: a write that
-      // lands empties them, and a refusal — which writes nothing — does not.
+      // id moves — what the form keys its boxes on: a landed write empties them, a refusal doesn't
       expect(second?.id).not.toBe(first?.id);
     }),
   );
@@ -498,9 +428,7 @@ describe("lastRecorded", () => {
         holdings: [{ instrument: usd, quantity: "500.00000000" }],
       });
 
-      // The panel says "reading the statement for…" rather than "the balance
-      // set for…", so the reader knows whether typing over it is a correction
-      // or a contradiction.
+      // panel wording differs by source, so typing over it reads as correction or contradiction
       expect(await lastRecorded(bank.id, db)).toMatchObject({
         asOf: "2026-08-16",
         source: "upload",

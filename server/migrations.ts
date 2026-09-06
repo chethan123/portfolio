@@ -1,31 +1,21 @@
 /**
- * Plain `.sql` files applied in filename order, each in a transaction, applied
- * filenames recorded in `schema_migrations`. No schema DSL, nothing to compile
- * — the database is the source of truth (DESIGN.md §9) — and re-runs skip
- * what is recorded, which is what makes container restarts always safe.
- * `server/migrate.ts` is the CLI; `/healthz` reads {@link pendingMigrations}.
+ * Plain .sql files applied in filename order, each its own transaction,
+ * recorded in schema_migrations — no schema DSL (DESIGN.md §9). Re-runs skip
+ * what's recorded, so restarts are always safe. CLI: server/migrate.ts.
  */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { Pool, PoolClient } from "pg";
 
-/** The ledger. Created by the runner, since it must exist before anything else. */
 export const MIGRATIONS_TABLE = "schema_migrations";
 
-/**
- * Resolved from cwd (repo root, `/app` in the container): `import.meta.url`
- * would not survive Vite bundling the app half of this into `build/server`.
- */
+/** Resolved from cwd, not import.meta.url — the latter doesn't survive Vite bundling into build/server. */
 export function migrationsDirectory(): string {
   return path.resolve(process.cwd(), "migrations");
 }
 
-/**
- * Guards two runners racing on a cold start — single-instance makes that
- * unlikely, not impossible (a restart can overlap a still-stopping container).
- * The number is arbitrary but must not change.
- */
+/** Guards two runners racing on a cold start (a restart can overlap a stopping container). Arbitrary but must not change. */
 const ADVISORY_LOCK_KEY = "7295380114023641";
 
 /** `42P01 undefined_table` — the ledger has never been created. */
@@ -40,11 +30,7 @@ export async function migrationsOnDisk(directory: string = migrationsDirectory()
   return entries.filter((entry) => entry.endsWith(".sql")).sort();
 }
 
-/**
- * A missing ledger reads as "nothing applied" rather than an error, so
- * `/healthz` on an unmigrated database reports pending migrations, not a
- * stack trace.
- */
+/** Missing ledger reads as "nothing applied", not an error — /healthz reports pending, not a stack trace. */
 export async function appliedMigrations(pool: Pool): Promise<string[]> {
   try {
     const result = await pool.query<{ filename: string }>(
@@ -57,11 +43,7 @@ export async function appliedMigrations(pool: Pool): Promise<string[]> {
   }
 }
 
-/**
- * On disk but not recorded. Empty is the definition of "the schema is
- * current"; non-empty makes `/healthz` non-200 — image and database disagree,
- * the exact state the startup ordering exists to keep requests away from.
- */
+/** On disk, not recorded. Non-empty makes /healthz non-200: image and database disagree. */
 export async function pendingMigrations(
   pool: Pool,
   directory: string = migrationsDirectory(),
@@ -84,12 +66,9 @@ async function createMigrationsTable(client: PoolClient): Promise<void> {
 }
 
 /**
- * A failure rolls that migration back whole and rethrows with its filename off
- * the ledger, so the next run retries it from clean rather than resuming
- * halfway. The CLI turns the rethrow into the non-zero exit that stops the
- * entrypoint from starting the server.
- *
- * @returns filenames applied by this call, in order; empty on a normal restart.
+ * Failed migration rolls back whole, rethrows unrecorded so a retry is clean.
+ * CLI exits non-zero on throw, keeping the server from starting.
+ * @returns filenames applied this call, in order; empty on a normal restart.
  */
 export async function applyPendingMigrations(
   pool: Pool,
@@ -123,8 +102,7 @@ export async function applyPendingMigrations(
 
       await client.query("begin");
       try {
-        // One simple-protocol query, so a file may hold many statements — all
-        // of them plus the ledger row commit or roll back together.
+        // Simple-protocol query: a file may hold many statements; all + the ledger row commit or rollback together.
         await client.query(statements);
         await client.query(`insert into ${MIGRATIONS_TABLE} (filename) values ($1)`, [filename]);
         await client.query("commit");

@@ -1,10 +1,5 @@
-/**
- * What a fresh install still needs, and when it stops needing it.
- *
- * The order is the rule being protected: People before Accounts, because an
- * account has a `not null` owner and genuinely cannot be created first
- * (DESIGN.md §8.4).
- */
+// What a fresh install still needs, and when it stops. Order is the rule: People before
+// Accounts, since an account has a not-null owner and can't be created first (DESIGN.md §8.4).
 import { afterAll, describe, expect, it } from "vitest";
 
 import { closeAccount } from "~/lib/accounts.server";
@@ -43,9 +38,8 @@ describe("the first-run step", () => {
   it(
     "stays finished when the only account is closed",
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
-      // A closed account is still an account: the instance is set up, and its
-      // historical figures are computed from exactly this row. Re-showing the
-      // setup prompt here would call a configured instance unconfigured.
+      // Closed account is still an account — historical figures compute from this row;
+      // re-showing the prompt would call a configured instance unconfigured.
       const account = await seedAccount({ owner: await seedPerson() });
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
@@ -56,8 +50,7 @@ describe("the first-run step", () => {
   it(
     "does not wait for an upload before considering the instance set up",
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
-      // Accounts with no statements yet is a correctly configured instance
-      // waiting for Sunday, not an unfinished one.
+      // Accounts with no statements is a configured instance waiting for Sunday, not an unfinished one.
       await seedAccount({ owner: await seedPerson() });
 
       expect(await firstRunStep(db)).toBeNull();

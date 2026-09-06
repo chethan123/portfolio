@@ -1,21 +1,8 @@
 /**
- * The net worth trend line (DESIGN.md §8.1, §13.6). Not a chart library:
- * the brief is one 3px stroke over a vertical gradient with dashed rules
- * behind it — a polyline, a path and a handful of CSS rules; a charting
- * dependency would mean fighting its defaults to arrive back here.
- *
- * **Every colour resolves from a custom property, via classes rather than
- * SVG presentation attributes.** §12 names this as the piece that gets
- * forgotten: `stroke="#0055ff"` cannot follow a theme, and the symptom is a
- * light chart in a dark page. The gradient's stops are classed too, so the
- * area re-derives from `--chart-line` along with the line it sits under.
- *
- * **Masking arrives as a prop, not a hook** (spec 0007): the figures here
- * are axis ticks, an `aria-label` and per-point readouts — no place a
- * component can go — so this is the one file besides `amount.tsx` allowed
- * to call a money formatter, and `masking-boundary.test.ts` names it. The
- * line, grid and fill are unchanged either way: story 10 wants the shape of
- * the year without the size of it.
+ * Net worth trend line (DESIGN.md §8.1, §13.6) — a polyline, a path, no charting library. Every
+ * colour resolves from a custom property via classes, not SVG presentation attributes (§12).
+ * Masking is a prop, not a hook (spec 0007): this is the one file besides `amount.tsx` allowed to
+ * call a money formatter (`masking-boundary.test.ts` enforces it) — line/grid/fill stay unchanged either way.
  */
 import { useId, type ReactNode } from "react";
 
@@ -26,33 +13,19 @@ import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
 import type { ChartPoint, SessionAxis } from "~/lib/chart-range";
 
-/**
- * The drawing is done in an abstract 1000×300 box and stretched to fit, so the
- * component needs no measurement pass and renders identically on the server.
- * `vector-effect="non-scaling-stroke"` is what keeps the line 3px after that
- * stretch rather than smeared horizontally — and, on the grid rules, keeps a
- * `4 4` dash from being stretched into a `40 40` one.
- */
+// Abstract 1000×300 box, stretched to fit — no measurement pass, identical server render.
+// `vector-effect="non-scaling-stroke"` keeps the line 3px (and the grid dash undistorted) after that stretch.
 const WIDTH = 1000;
 const HEIGHT = 300;
 
-/** Breathing room above and below the extremes, as a share of the range. */
 const PADDING = 0.08;
 
-/**
- * Where the horizontal rules sit, as fractions of the drawn value domain.
- * One array feeds both the grid and the axis labels: a rule drawn at a
- * height its label does not name is worse than no rule at all.
- */
+// Fractions of the drawn value domain — feeds both grid and axis labels, so a rule always has a label.
 const GRID = [1, 0.5, 0];
 
 const DAY_MS = 86_400_000;
 
-/**
- * Under this span an x tick names the day; over it, the month. A month-long
- * window labelled by month reads "Aug 2025" three times; a thirty-year one
- * labelled by day offers a precision nobody reads.
- */
+// Under this span an x tick names the day, over it the month.
 const DAY_TICKS_UNDER = 180 * DAY_MS;
 
 const MONTHS = [
@@ -73,9 +46,7 @@ const MONTHS = [
 export type Scale = {
   x: (date: string) => number;
   y: (amount: string) => number;
-  /** The value domain actually drawn, padding included. */
   domain: { floor: number; span: number };
-  /** The time domain actually drawn, which is what the x labels name. */
   time: { start: number; end: number };
 };
 
@@ -88,17 +59,14 @@ export function buildScale(points: ChartPoint[]): Scale {
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
 
-  // Time, not index: the manual series is annual dots and the computed series
-  // is fortnightly, so spacing points evenly would compress two decades of
-  // history into the same width as the last month of it.
+  // Time, not index — spacing points evenly would compress decades of annual manual dots into the width of a month.
   const timeSpan = maxTime - minTime || 1;
   const valueSpan = (maxValue - minValue) * (1 + PADDING * 2);
   const floor = minValue - (maxValue - minValue) * PADDING;
 
   return {
     x: (date) => ((Date.parse(date) - minTime) / timeSpan) * WIDTH,
-    // A perfectly flat line — one upload, or a portfolio that has not moved —
-    // has no range to scale against; centre it rather than divide by zero.
+    // A flat line has no range to scale against — centre it rather than divide by zero.
     y: (amount) =>
       valueSpan === 0
         ? HEIGHT / 2
@@ -108,49 +76,15 @@ export function buildScale(points: ChartPoint[]): Scale {
   };
 }
 
-/**
- * The most decimals an axis will spend. Three is where the thousands scale
- * reaches $1, which is the quantum the rules are rounded to before they are
- * ever formatted — a fourth decimal there is ten cents of a figure that has
- * none, always renders `0`, and, being finer than the amounts themselves,
- * breaks the separation argument below rather than sharpening it.
- */
+// Where the thousands scale reaches $1 — the rounding quantum; a fourth decimal there always renders `0`.
 const MAX_TICK_DP = 3;
 
-/**
- * How many decimals the rules need, from the span rather than from trying
- * labels until two stop matching. The rules sit `span / 2` apart, so rounding
- * to a unit of at most a quarter of the span leaves at least two units
- * between neighbours and cannot land them on the same number — distinctness
- * falls out of the arithmetic instead of being searched for. Fewest such
- * decimals, so the axis never spends a digit it has no use for.
- *
- * The searching version of this was worse than it looked. It asked only
- * whether the labels differed, never whether the difference was worth
- * printing, so a $150 move on a $5.9M household bought four decimals —
- * `5.9002M` — and, because the answer was not monotonic in the span, the
- * axis gained and lost digits between two refreshes of the same session as
- * the day's range crossed a threshold.
- *
- * `scale` is the larger end of the domain by magnitude, because that is the
- * rule whose unit has to do the separating. The floor this leaves is worth
- * stating: a resolution of $1 at the thousands scale, $1,000 at the millions,
- * $1,000,000 at the billions. So a $5.9M household moving under about $400
- * across a session, or a $1B one moving under $4M, still reads one number on
- * all three rules.
- *
- * `1` in that case, and for a flat series. The axis names one number three
- * times, which is the honest reading of a line that has not moved at any
- * resolution it can print — the case `gridRules` has always accepted, and the
- * reason the rules are keyed by position.
- */
+/** Decimals from the span, not by trying labels until two stop matching: rounding to a unit of at
+ * most a quarter of the span guarantees two units between neighbouring rules, so distinctness
+ * falls out of the arithmetic rather than being searched for. `scale` is the domain's larger end by magnitude. */
 function tickPrecision(span: number, scale: number): number {
   const unit = 10 ** (scale * 3);
-  // Never past the dollar the amounts were rounded to before they got here.
-  // Below it the separation argument stops holding — rounding to whole
-  // dollars costs each rule up to $1, so two rules a tenth of a dollar apart
-  // on the axis are one dollar apart on the page, and land on one label. At
-  // the plain scale this is zero and the axis has nothing to spend.
+  // Never past the rounding quantum — below it, two rules a tenth of a dollar apart on the axis land on one label.
   const finest = Math.min(MAX_TICK_DP, scale * 3);
 
   for (let dp = 1; dp <= finest; dp += 1) {
@@ -161,25 +95,10 @@ function tickPrecision(span: number, scale: number): number {
 }
 
 /**
- * The horizontal rules, and the label naming each. Read off the drawn
- * domain, not the data's min and max — the two differ by the padding, and
- * labelling the box's top with the series' largest value would put every
- * tick 8% out. A quiet inaccuracy on an axis is still an inaccuracy.
- *
- * **The precision comes from the span, and is not left at one decimal.**
- * `formatCompact` sizes its suffix by how large a number is; an axis has to
- * resolve how far apart its rules are, and past a million those two stop
- * agreeing. One decimal at the millions scale buckets in 0.1M — $100,000 —
- * and a $5.9M household moving $30K across a session is an ordinary day's
- * trading that fits inside one bucket, so all three rules label `5.9M`: an
- * axis that has stopped saying anything while still looking like it is.
- *
- * Each rule keeps its own suffix. Holding all three to one reads more tidily
- * on a session, where they share a magnitude anyway, and lies on every range
- * wide enough that they do not: a $96,000 floor under a $1.6M ceiling becomes
- * `0.1M`, a figure with a fifty-thousand-dollar error bar, where `96.0K` was
- * exact. Tidiness is not worth that, and a domain that crosses a suffix at
- * all is rare enough to leave mixed.
+ * Horizontal rules, read off the drawn (padded) domain, not the data's min/max — labelling the
+ * box's top with the series' max would put every tick 8% out. Precision comes from the span, not
+ * fixed at one decimal: `formatCompact` sizes its suffix by magnitude alone, so each rule keeps
+ * its own suffix rather than forcing agreement, which would round `96.0K` into a `0.1M`.
  */
 export function gridRules(scale: Scale, masked: boolean): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
@@ -187,9 +106,7 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
     y: HEIGHT * (1 - fraction),
     amount: (floor + span * fraction).toFixed(0),
   }));
-  // Magnitude, not value: a household in net debt carries its biggest figure
-  // at the bottom of the domain, and that is the rule the span has to
-  // separate.
+  // Magnitude, not value — a household in net debt carries its biggest figure at the domain's floor.
   const dp = tickPrecision(
     span,
     Math.max(compactScale(floor.toFixed(0)), compactScale((floor + span).toFixed(0))),
@@ -197,11 +114,7 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
 
   return rules.map(({ y, amount }) => ({
     y,
-    // A masked axis keeps its rules and loses its numbers — the same dot run
-    // every masked figure uses: a second constant is how a reader learns to
-    // read one of them as a smaller number. No currency mark, because an
-    // unmasked tick has none either (`58.4K`). The ticks are already
-    // `aria-hidden`; the svg label carries the chart for anyone unsighted.
+    // Same dot run every masked figure uses, no currency mark (unmasked ticks have none either).
     label: masked ? MASKED_FIGURE : formatCompact(amount, dp),
   }));
 }
@@ -209,12 +122,6 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
 const toPolyline = (points: ChartPoint[], scale: Scale) =>
   points.map((point) => `${scale.x(point.date)},${scale.y(point.amount)}`).join(" ");
 
-/**
- * One plotted point's slice of the pointer plane (spec 0010, ADR-0004).
- * `left`/`right` are drawing-box coordinates. `manual` is provenance: a
- * hand-typed pre-app point says so in its readout, because a dashed stroke
- * is a claim identically-worded text would quietly undo (§7).
- */
 export type HitTarget = {
   left: number;
   right: number;
@@ -222,13 +129,6 @@ export type HitTarget = {
   manual: boolean;
 };
 
-/**
- * Tile the drawing box midpoint to midpoint, one target per point, the
- * first and last extending to the edges — full coverage, no dead regions or
- * overlaps, so a position always selects the nearest point. Sampling is
- * geometric (ADR-0003), so widths vary enormously; a fixed width would
- * leave most of a long range inert.
- */
 export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: Scale): HitTarget[] {
   const points = [
     ...manual.map((point) => ({ point, manual: true })),
@@ -244,12 +144,6 @@ export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: 
   }));
 }
 
-/**
- * The same run of points, closed down to the box's floor so it can be
- * filled — the floor, not the lowest point: the domain is padded, and a
- * fill stopping at the minimum would leave a strip of canvas under the
- * trough reading as a second, lower baseline.
- */
 function toArea(points: ChartPoint[], scale: Scale): string {
   const first = points[0];
   const last = points.at(-1);
@@ -264,9 +158,7 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 }
 
 function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): string {
-  // Every tick on a session's axis falls inside one trading day, so naming the
-  // day three times would spend the whole axis saying nothing. The time of day
-  // is the only part that varies, and it is the part being asked about.
+  // A session's ticks all fall in one trading day — only the time of day varies.
   if (session !== null) return marketTimeOf(new Date(ms), session.timeZone);
 
   const [year = "", month = "", day = ""] = isoDate(ms).split("-");
@@ -275,35 +167,17 @@ function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): s
   return withDay ? `${Number(day)} ${name}` : `${name} ${year}`;
 }
 
-/**
- * A readout's date always carries its year, unlike the x ticks, which drop it
- * on short spans — a tick is read in the context of two others, and a readout
- * is read alone (spec 0010).
- */
+// A readout's date always carries its year, unlike x ticks — read alone, not in context of two others (spec 0010).
 function readoutDate(date: string, session: SessionAxis | null): string {
-  // Both halves of a session's stamp read on the same clock. Slicing the ISO
-  // instant would take its *UTC* day beside the market's time, so a session
-  // crossing UTC midnight would date a point a day out from the time printed
-  // next to it — the exact thing `market-hours.ts` exists to stop, so the
-  // day comes from there too.
+  // Day comes from `market-hours.ts` too, not a UTC slice — a session crossing UTC midnight would date a point a day out.
   const stamped = session === null ? date.slice(0, 10) : marketDateOf(new Date(date), session.timeZone);
   const [year = "", month = "", day = ""] = stamped.split("-");
   const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
-  // The time joins the date rather than the amount, so masking is untouched:
-  // an instant is not an amount, and the figure beside it masks exactly as
-  // on every other range ("which moment is this" is the whole question a
-  // session's line is asked — story 9).
+  // Time joins the date, not the amount — so masking of the figure beside it is untouched.
   return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
 }
 
-/**
- * One point's caption: date, value, and — for a hand-typed point — its
- * provenance in words. The amount is full precision, identical to the
- * headline, so a range ending today agrees digit for digit; masked, the
- * same dollar sign and dot run as every masked money figure — this must not
- * be the one place a figure survives masking.
- */
 function Readout({
   target,
   masked,
@@ -332,43 +206,14 @@ export function NetWorthChart({
   session,
   id,
 }: {
-  /** Points derived from real position sets. Solid line, and the filled one. */
   computed: ChartPoint[];
-  /** Hand-typed pre-day-zero points (§7). Dashed, and never blended. */
   manual: ChartPoint[];
-  /**
-   * What the line is, for anyone who cannot see it — the descriptive half
-   * only. The ending figure and date are derived here from the last point
-   * actually plotted, so the label is true on every range (a caller once
-   * passed current net worth, and a range ending in the past announced
-   * today's number — spec 0010). Deriving also keeps money formatting out
-   * of the routes, the leak the masking boundary exists to prevent.
-   */
   label: string;
-  /**
-   * Whether this browser is masked (spec 0007). Required, no default:
-   * everything else in this feature fails closed (`useMasked` and the root
-   * loader answer *masked* when they cannot tell), and a default here could
-   * only fail the other way — drawing the figures for a caller who forgot
-   * the prop. Required makes forgetting a compile error.
-   */
+  // Required, no default — everything else in this feature fails closed to masked; a default could only fail the other way.
   masked: boolean;
-  /**
-   * The session this line plots, or null when it plots days. Required, no
-   * default, for `masked`'s reason: a caller that forgot it would label a
-   * session's instants as three copies of one date, with nothing saying a
-   * prop went missing. The chart is *told* what it draws rather than
-   * inferring it, so the axis changes only when a caller means it to.
-   */
+  // Required, no default — a forgotten session would label a session's instants as three copies of one date.
   session: SessionAxis | null;
-  /**
-   * Distinguishes this instance's gradient from any other on the page: a
-   * gradient is referenced by document id, and two charts sharing one both
-   * paint from whichever `<defs>` comes first — real the moment a screen
-   * draws two series side by side. Optional: `useId` covers the one-chart
-   * case, minus its punctuation, legal in an id but needing escapes inside
-   * a CSS `url()`.
-   */
+  // Distinguishes this chart's gradient — two sharing a document id both paint from whichever `<defs>` comes first.
   id?: string;
 }) {
   const generated = useId().replace(/[^a-zA-Z0-9]/g, "");
@@ -376,16 +221,12 @@ export function NetWorthChart({
 
   const all = [...manual, ...computed];
 
-  // Two points make a line. One makes a dot with no trend to report, and the
-  // honest thing to show for it is nothing.
   if (all.length < 2) return null;
 
   const scale = buildScale(all);
   const last = computed.at(-1) ?? manual.at(-1);
 
-  // Rule 1 of §7: the two series stay visually distinct. The dashed run is
-  // extended to meet the first computed point, so the join reads as the
-  // interpolation it is rather than as a gap in the data.
+  // §7 rule 1: dashed run extended to meet the first computed point, so the join reads as interpolation, not a gap.
   const firstComputed = computed[0];
   const manualRun = manual.length > 0 && firstComputed ? [...manual, firstComputed] : manual;
 
@@ -394,11 +235,7 @@ export function NetWorthChart({
   const targets = hitTargets(manual, computed, scale);
   const resting = targets.at(-1);
 
-  // "an amount that is hidden", not a dot run: story 6 asks for a masked
-  // figure to be announced as hidden, and an `aria-label` is nothing but the
-  // announcement. The date rides along because the visible strip is out of
-  // the accessibility tree, and hiding it must not lose information a
-  // sighted reader gets (spec 0010, story 20).
+  // "an amount that is hidden", not a dot run — the `aria-label` is the announcement itself (story 6, spec 0010).
   const ending =
     last === undefined
       ? ""
@@ -414,10 +251,7 @@ export function NetWorthChart({
 
   return (
     <>
-      {/* The readout at rest: the last plotted point, dated, full precision,
-          agreeing with the headline digit for digit on a range ending today
-          (spec 0010). Hidden from assistive technology with the strip — the
-          svg's label carries the same fact as a sentence. */}
+      {/* At rest: last plotted point, agreeing with the headline digit for digit (spec 0010). Hidden from AT — the svg's label carries it. */}
       {resting ? (
         <p className="chart-readout" aria-hidden="true">
           <Readout target={resting} masked={masked} session={session} />
@@ -426,8 +260,7 @@ export function NetWorthChart({
 
       <div className="chart">
         <div className="chart-axis" aria-hidden="true">
-          {/* Keyed by position, not by value: a portfolio that has not moved
-              makes all three ticks the same number. */}
+          {/* Keyed by position, not value — a flat portfolio makes all three ticks the same number. */}
           {rules.map((rule, index) => (
             <span key={index}>{rule.label}</span>
           ))}
@@ -458,10 +291,7 @@ export function NetWorthChart({
             />
           ))}
 
-          {/* Under the computed run only: the dashed prefix is a provenance
-              claim (§7), and a hand-typed figure carrying the same solid
-              wash would undo it. `fill` is inline because `.chart-area`
-              names a fixed id and this instance's gradient is its own. */}
+          {/* Computed run only — a hand-typed figure carrying the same solid wash would undo the dashed-prefix claim (§7). */}
           {computed.length >= 2 ? (
             <path
               className="chart-area"
@@ -488,10 +318,7 @@ export function NetWorthChart({
 
         </svg>
 
-        {/* An HTML element, not an SVG circle: the box is stretched with
-            `preserveAspectRatio="none"` (1000×300 → ~358×208 on a phone),
-            which draws a circle as a visibly flattened ellipse. Percent
-            positioning hits the same point without the distortion. */}
+        {/* HTML, not an SVG circle — `preserveAspectRatio="none"` stretches an SVG circle into a visible ellipse. */}
         {last ? (
           <span
             className="chart-marker"
@@ -502,16 +329,7 @@ export function NetWorthChart({
           />
         ) : null}
 
-        {/* The pointer plane (spec 0010, ADR-0004): one invisible
-            full-height target per plotted point, tiled midpoint to midpoint;
-            each carries its own guide and caption, and the stylesheet
-            chooses which shows. No client state. HTML in percentages, not
-            SVG: the box stretches non-uniformly — survivable for a line,
-            fatal for text (the marker's reason). Guide and caption are
-            absolute against this plane, so one class positions every
-            caption. `tabIndex={-1}`: focusable so a tap can pin a readout,
-            without becoming one of up to 180 tab stops. The whole plane is
-            `aria-hidden` — the svg's label already carries the chart. */}
+        {/* Pointer plane (spec 0010, ADR-0004) — HTML percentages, not SVG (non-uniform stretch is fatal for text). `tabIndex={-1}`: focusable to pin a readout, without becoming a tab stop. */}
         <div className="chart-hits" aria-hidden="true">
           {targets.map((target, index) => (
             <div
@@ -532,9 +350,7 @@ export function NetWorthChart({
         </div>
       </div>
 
-      {/* Under the plot, not over it: the y labels can overlay their own rules
-          because they sit in the margin the padding leaves, and the x labels
-          have no such margin to sit in. */}
+      {/* Under the plot — x labels have no padding margin to overlay, unlike the y labels. */}
       <div className="chart-ticks" aria-hidden="true">
         {ticks.map((tick, index) => (
           <span key={index}>{tick}</span>
@@ -544,30 +360,15 @@ export function NetWorthChart({
   );
 }
 
-/**
- * The one sentence about an empty chart panel that used to be spelled twice,
- * word for word, under two separately-worded comments (spec 0015): a
- * session with one observed moment is real state between the poller's first
- * attempt and its second, nothing to do with how many statements a screen
- * has, on either surface — 1D draws the same instants whichever chart is
- * asking. Guarded on there being a moment at all: with none, nothing has
- * been uploaded and no waiting for prices changes that, so `children` — the
- * caller's own fallback — is the true sentence instead. `moments` and
- * `children` do **not** converge the same way: a caller passes its own
- * `computed.length` and its own wording, because the fallback genuinely
- * differs between an instance with no chart at all and a range that is
- * merely thin, and only the account page's is reachable with none.
- */
+/** One shared sentence for an empty chart panel (spec 0015) — a session with one observed moment
+ * is real state, nothing to do with how many statements exist; with none, `children` is the true sentence instead. */
 export function ChartEmptyNote({
   session,
   moments,
   children,
 }: {
-  /** The session this chart would draw, or null when it draws days. */
   session: SessionAxis | null;
-  /** The caller's own `computed.length` — how many moments this session holds so far. */
   moments: number;
-  /** The caller's own fallback, shown everywhere the session sentence does not apply. */
   children: ReactNode;
 }) {
   if (session !== null && moments > 0) {

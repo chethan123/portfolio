@@ -1,15 +1,8 @@
 /**
- * The one copy of the symbol pattern, and the check the worker makes before
- * it builds a URL. Spec 0018 §2.1 calls this the binding one: the app's own
- * call to it saves a round trip, but compromised app code simply skips that,
- * so what protects the household's relationship with Yahoo is this function
- * running inside the worker.
- *
- * Tested directly rather than through the worker's `400`s, because there the
- * surrounding `z.string()` answers first for anything that is not a string —
- * which would leave the guard below unexercised, and it is the half that
- * matters once ticket 06 makes the app call this on values it has not
- * narrowed.
+ * The one copy of the symbol pattern, and the check the worker makes before building a URL
+ * (spec 0018 §2.1's binding one — the app's own call just saves a round trip). Tested
+ * directly rather than through the worker's 400s, since the surrounding z.string() there
+ * answers first for anything that isn't a string, leaving the guard below unexercised.
  */
 import { describe, expect, it } from "vitest";
 
@@ -29,10 +22,7 @@ describe("what the worker will build a URL from", () => {
   });
 
   it("accepts a bare .., which only climbs one path segment inside the library's own URL, same host (server/symbol-pattern.ts header)", () => {
-    // Not a hole: dots are in the character class on purpose, and a slash —
-    // the character that would let this cross a host or scheme boundary —
-    // is refused above. This states the fact rather than improving on it;
-    // see the module header for why it is safe.
+    // not a hole: dots are in the character class on purpose; a slash (which crosses a host/scheme boundary) is refused above.
     expect(isWellFormedSymbol("..")).toBe(true);
   });
 
@@ -54,16 +44,13 @@ describe("what the worker will build a URL from", () => {
   it.each([[null], [undefined], [42], [{}], [["VTI"]], [true]])(
     "refuses %s, which is not a string at all",
     (value) => {
-      // The reason the guard is not just the pattern: `RegExp.test` coerces,
-      // and `SYMBOL_PATTERN.test(null)` matches the string "null".
+      // why the guard isn't just the pattern: RegExp.test coerces, and SYMBOL_PATTERN.test(null) matches the string "null"
       expect(isWellFormedSymbol(value)).toBe(false);
     },
   );
 
   it("would have matched the coerced spelling of null without the string check", () => {
-    // States the trap the guard exists for, so a later reader does not
-    // simplify it away: the pattern alone says yes to a value that is not a
-    // symbol and cannot be fetched.
+    // states the trap the guard exists for, so a later reader doesn't simplify it away
     expect(SYMBOL_PATTERN.test(null as unknown as string)).toBe(true);
   });
 });

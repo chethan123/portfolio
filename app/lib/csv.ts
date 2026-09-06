@@ -1,43 +1,27 @@
-/**
- * Bytes to rows of strings — the half of the parser that reads what a
- * brokerage actually exported, before `statement.ts` decides what it means
- * (DESIGN.md §5.3, spec 0004). Hand-rolled: RFC 4180 quoting is the easy
- * sixty lines, and the tolerance a real export needs — preambles, footers,
- * sniffed delimiters, ragged rows — has to live in our code either way; the
- * seam is this one module, so falling back to `csv-parse` is a cheap reversal.
- *
- * Two load-bearing properties. **Never throws on content**: malformed UTF-8
- * becomes replacement characters, an unterminated quote runs to the end of
- * the file, a stray quote is kept as a character — the refusal a reader sees
- * is a sentence about their statement, never a stack trace. **Row indices are
- * stable**: blank rows are kept, because a saved mapping's `headerRow`
- * indexes these rows and dropping one would shift every mapping made after
- * it; only the phantom row a trailing newline implies is suppressed.
- */
+// Bytes to rows of strings, before statement.ts decides what they mean (DESIGN.md §5.3,
+// spec 0004). Hand-rolled for real-export tolerance (preambles, sniffed delimiters, ragged
+// rows) RFC 4180 alone doesn't give. Two invariants: never throws on content (malformed
+// UTF-8/unterminated quotes degrade gracefully, never a stack trace), and row indices stay
+// stable (blank rows kept — a saved mapping's headerRow indexes these rows by position).
 
-/** The three delimiters real exports use, and the only ones sniffed between. */
 export type Delimiter = "," | ";" | "\t";
 
 const DELIMITERS: ReadonlyArray<Delimiter> = [",", ";", "\t"];
 
-/** The file as rows of cells, and the delimiter that produced them. */
 export type CsvRead = {
   rows: string[][];
   delimiter: Delimiter;
 };
 
-/**
- * Tokenise against one known delimiter. RFC 4180 quoting: a field opening with
- * a quote may contain the delimiter, a newline and a doubled quote; a quote
- * anywhere else is an ordinary character, kept rather than refused.
- */
+// RFC 4180 quoting: a quoted field may contain the delimiter, a newline, a doubled quote;
+// a quote elsewhere is an ordinary character.
 function parseWith(text: string, delimiter: Delimiter): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
   let inQuotes = false;
-  // Whether the current row has seen any character at all — what separates a
-  // final row worth emitting from the phantom a trailing newline implies.
+  // Has the current row seen a character? Separates a real final row from a
+  // trailing newline's phantom one.
   let started = false;
 
   for (let i = 0; i < text.length; i++) {
@@ -82,11 +66,7 @@ function parseWith(text: string, delimiter: Delimiter): string[][] {
   return rows;
 }
 
-/**
- * How consistently one delimiter divides the file: the modal column count and
- * how many rows agree with it. Blank rows say nothing about the delimiter and
- * are left out of the vote.
- */
+// Modal column count and how many rows agree with it; blank rows don't vote.
 function consistency(rows: string[][]): { agreeing: number; width: number } {
   const counts = new Map<number, number>();
 
@@ -107,19 +87,12 @@ function consistency(rows: string[][]): { agreeing: number; width: number } {
   return { agreeing, width };
 }
 
-/**
- * The file's rows: leading BOM stripped, CRLF/LF/bare-CR all row breaks, the
- * delimiter sniffed when not forced. The sniff picks whichever delimiter
- * yields the most consistent column count across rows — not occurrences on
- * line one, which a preamble sentence full of commas would win. Never-splits
- * ranks below any that splits; then more agreeing rows, then more columns,
- * then comma over semicolon over tab — deterministic on a file that supports
- * two readings. The forced form exists for a saved mapping: re-reading the
- * same bytes must not depend on the sniff reaching the same verdict twice.
- */
+// Sniffs the delimiter by most consistent column count across rows (not occurrence count
+// on line one, which a prose preamble full of commas would win) — never-splits loses to
+// any that splits, then more agreeing rows, more columns, then comma > semicolon > tab.
+// `delimiter` forces the choice, for re-reading a saved mapping deterministically.
 export function readCsv(bytes: Uint8Array, delimiter?: Delimiter): CsvRead {
-  // TextDecoder removes a leading BOM and replaces malformed sequences rather
-  // than throwing — both halves of "never throws on content" for the decode.
+  // TextDecoder strips a leading BOM and replaces malformed sequences instead of throwing.
   const text = new TextDecoder("utf-8").decode(bytes);
 
   if (delimiter !== undefined) return { rows: parseWith(text, delimiter), delimiter };
@@ -142,21 +115,16 @@ export function readCsv(bytes: Uint8Array, delimiter?: Delimiter): CsvRead {
     }
   }
 
-  // Unreachable with a non-empty DELIMITERS list; the fallback keeps the
-  // signature honest without a non-null assertion.
+  // Unreachable with a non-empty DELIMITERS; fallback avoids a non-null assertion.
   return best ?? { rows: [], delimiter: "," };
 }
 
-/** Every cell blank, or no cells at all — a spacer line, not data. */
 function isBlank(cells: ReadonlyArray<string>): boolean {
   return cells.every((cell) => cell.trim() === "");
 }
 
-/**
- * Could this row be a header: at least one cell, none blank, no two alike.
- * A data row often qualifies too — plausibility is a mechanical screen, and
- * choosing among the plausible is `defaultHeaderRow`'s job or the reader's.
- */
+// At least one cell, none blank, no two alike. A data row often qualifies too;
+// choosing among candidates is defaultHeaderRow's job or the reader's.
 function isCandidate(cells: ReadonlyArray<string>): boolean {
   if (cells.length === 0 || isBlank(cells)) return false;
 
@@ -170,13 +138,8 @@ function isCandidate(cells: ReadonlyArray<string>): boolean {
   return true;
 }
 
-/**
- * The plausible header rows, as indices in file order. Never empty for a
- * non-empty file: when no row passes the screen, the fallback is every
- * non-blank row, then the first row — a degenerate file still returns
- * something for the reader to pick from; nothing would leave step 03 with no
- * control to draw.
- */
+// Never empty for a non-empty file: falls back to every non-blank row, then row 0,
+// so a degenerate file still leaves the reader something to pick from.
 export function candidateHeaderRows(rows: ReadonlyArray<ReadonlyArray<string>>): number[] {
   const candidates: number[] = [];
   const nonBlank: number[] = [];
@@ -191,15 +154,8 @@ export function candidateHeaderRows(rows: ReadonlyArray<ReadonlyArray<string>>):
   return rows.length > 0 ? [0] : [];
 }
 
-/**
- * Every row the header-row select offers: candidates first, then every other
- * non-blank row, then the row currently on screen whatever detection thinks.
- * The widening exists for a real header that fails the candidate screen —
- * plainly one with two same-named columns, which no-two-alike refuses. Such a
- * header is still the header, and a select that cannot offer it strands the
- * file; name-based mapping resolves a duplicate to its first occurrence, and
- * the fingerprint pins the exact header, so the resolution cannot move.
- */
+// Candidates first, then other non-blank rows, then the current row regardless — so a
+// real header with two same-named columns (which isCandidate refuses) is still offered.
 export function headerRowChoices(
   rows: ReadonlyArray<ReadonlyArray<string>>,
   current: number,
@@ -216,12 +172,8 @@ export function headerRowChoices(
   return all.includes(current) ? all : [current, ...all];
 }
 
-/**
- * The header row to preselect: the first candidate whose column count matches
- * the majority of the rows below it — what skips a preamble not shaped like
- * the data under it. When none matches, the first candidate stands in so the
- * screen always opens on something; `null` only for a file with no rows.
- */
+// First candidate whose column count matches the majority below it, skipping a preamble
+// shaped differently from the data. Falls back to the first candidate; null only for no rows.
 export function defaultHeaderRow(rows: ReadonlyArray<ReadonlyArray<string>>): number | null {
   const candidates = candidateHeaderRows(rows);
 

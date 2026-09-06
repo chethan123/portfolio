@@ -1,70 +1,6 @@
 /**
- * Every committed screenshot, retaken in one command. The images under
- * `docs/screenshots/` and `docs/guide/images/` are the real application
- * against the generated demo household — never a mock, never hand-edited —
- * which makes them the one thing here that can go stale silently: a screen
- * changes, its picture does not, nothing fails.
- *
- * Run from the repository root, against a throwaway database the application
- * is already serving:
- *
- *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.demo
- *   node --env-file=.env.demo ./server/migrate.ts
- *   node --env-file=.env.demo ./scripts/seed-demo.ts
- *   DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo PUBLIC_ORIGIN=http://localhost:5173 npm run dev &
- *
- *   node --env-file=.env.demo ./scripts/capture-screenshots.ts
- *
- * The guide's empty-instance shots need a second, *migrated but unseeded*
- * database, served the same way:
- *
- *   node --env-file=.env.fresh ./scripts/capture-screenshots.ts --first-run
- *
- * Three deliberate choices worth not undoing:
- *
- * **Nothing hardcoded that the seed regenerates.** Ids climb on every re-seed
- * (identity columns, plain-`delete` wipe), so accounts are looked up by
- * *kind* and the Holdings editor row by "has a cost basis" — never a number
- * read off a previous run.
- *
- * **The walkthrough statement is generated, not committed.** It must restate
- * current holdings so the review shows an unchanged majority beside one
- * added, one updated, one removed — but the demo calendar tracks the wall
- * clock, so a committed CSV would quietly turn "unchanged" rows into
- * "updated" a week later.
- *
- * **The upload flow is walked, never committed.** The mapping and review
- * shots need a live draft, which dies at commit — so the walk stops at review
- * and the drafts go to the 24-hour sweep. Committing would also change the
- * household every other shot is of.
- *
- * Since migration 0012, this script plants one passkey and mints a grant
- * against it — `seed-demo.ts` deliberately does not (its own header says
- * why: a placeholder credential would leave every developer following
- * docs/developing.md locked out with no assertion that could ever succeed).
- * This script has no such problem: nothing in a capture run ever presents a
- * real WebAuthn response, so a placeholder `credential_id` and `public_key`
- * nobody's authenticator holds the private half of is exactly as good as a
- * real one for its purposes. `ensureCapturePasskey` plants that row (once —
- * idempotent against a second capture run with no re-seed between) and
- * `mintCaptureGrant` mints one grant for the whole run against it;
- * `setGrantCookie` carries that grant onto each fresh context. Both live
- * beside `GRANT_COOKIE`, which explains why a plain `addCookies` call — the
- * masking cookie's own line below it — cannot do this one's job. The
- * `--first-run` pass mints nothing and plants no passkey: that database is
- * migrated but unseeded, and the empty-instance shots are of it honestly
- * unlocked.
- *
- * **Validate first, write second.** `main` runs the whole of this through
- * {@link prepareCapture}, which checks the `demo_seed` marker
- * ({@link requireDemoSeed}) and reads the fixture ({@link prepare}) before
- * either the passkey or the grant is inserted. Pointed at a migrated-but-
- * unseeded database, or any database that is not the one this script means,
- * both checks throw with nothing planted; minting the passkey and the grant
- * first and validating after would instead leave that database locked
- * behind a credential no authenticator owns, discovered only by the
- * exception that follows — the order {@link prepareCapture} exists to pin,
- * so `main` cannot drift back to it by rearranging three inline calls.
+ * Retakes every committed screenshot (docs/screenshots/, docs/guide/images/) against the real
+ * app + demo household — never a mock, so a screen can drift from its picture unnoticed. Run recipe: docs/developing.md.
  */
 import { randomBytes } from "node:crypto";
 
@@ -74,40 +10,22 @@ import { loadConfig } from "../server/config.ts";
 import { createPool } from "../server/db.ts";
 import type { Pool, PoolClient } from "pg";
 
-/** Where the application under capture is serving. */
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:5173";
 
-/**
- * Default is Playwright's own bundled Chromium (`npx playwright install
- * chromium`); sandboxes and CI images already carrying a browser set this
- * instead of downloading a second.
- */
+/** Playwright's own Chromium unless CI/a sandbox sets this to an existing one. */
 const EXECUTABLE = process.env.CHROMIUM_EXECUTABLE;
 
-/**
- * The README's shots. 1440 until Holdings gained a ninth column: rail (280) +
- * canvas margins (64) left the table scrolling inside `.data-table-scroll`,
- * and a full-page capture cut the last column off. This is the narrowest
- * round width at which the widest table the application draws is whole.
- */
+/** README shots. 1600 wide: narrowest width the widest table fits without `.data-table-scroll` cutting a column. */
 const DESKTOP = { width: 1600, height: 1000 } as const;
-/** A phone, and not full-page: the bottom navigation is `position: fixed`. */
+/** Phone viewport; not full-page since the bottom nav is `position: fixed`. */
 const MOBILE = { width: 390, height: 900 } as const;
 
-/** The symbol every upload walk resolves on the new-instruments step. */
+/** Symbol the upload walk resolves on the new-instruments step. */
 const FIRST_SIGHTING = "SCHD";
 
 type Theme = "light" | "dark";
 
-/**
- * Set once per run by {@link mintCaptureGrant}, read by every {@link open}
- * call — module state rather than a parameter threaded through the dozen
- * call sites `open` already has, none of which take one today. `undefined`
- * only on the `--first-run` pass — {@link captureFirstRun} never calls
- * {@link mintCaptureGrant} at all, so that database (migrated but unseeded)
- * is captured honestly unlocked. Every other pass plants its own passkey
- * (see {@link ensureCapturePasskey}) and so always has a grant to carry.
- */
+// Module state, not a parameter — `open`'s call sites take none; undefined only on --first-run.
 let captureGrant: { id: string; expiresAt: Date } | undefined;
 
 async function open(
@@ -125,13 +43,7 @@ async function open(
     colorScheme: theme,
   });
 
-  // Every shot is unmasked, and this line is what makes that true (spec
-  // 0007): the policy seeds *masked*, and a fresh Playwright context has
-  // never been toggled, so without it the whole shot list silently retakes
-  // as pictures of dots — exactly the silent staleness this script exists to
-  // prevent. `masked` is the deliberate exception (finding 2): it sets the
-  // cookie back to {@link MASKED_COOKIE} instead, for the one pair of shots
-  // that is supposed to picture dots.
+  // Fresh context seeds *masked* by policy (spec 0007) — un-masks every shot except when `masked` flips it back.
   await context.addCookies([{ ...(masked ? MASKED_COOKIE : UNMASKED_COOKIE), url: BASE_URL }]);
 
   const page = await context.newPage();
@@ -144,103 +56,31 @@ async function open(
   return page;
 }
 
-/**
- * What a browser toggled to show amounts carries. Spelled out, not imported
- * from `app/lib/masking.ts`: this script runs against a *served* app over
- * HTTP and shares no module with it — importing the client bundle for two
- * characters would be worse than a second copy. `masking.test.ts` pins the
- * vocabulary. No `path`: Playwright refuses a cookie carrying both `url` and
- * `path`, and `url` scopes it.
- */
+/** Spelled out, not imported from app/lib/masking.ts — script talks over HTTP, sharing no module.
+ * No `path`: Playwright refuses a cookie carrying both `url` and `path`. */
 const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
 
-/**
- * The masked variant of {@link UNMASKED_COOKIE}, for the one pair of shots
- * (finding 2) that must picture the dots rather than hide them: `masking.ts`'s
- * own `MASKED` value, spelled out here for the identical reason
- * `UNMASKED_COOKIE`'s own header gives for itself.
- */
+/** Masked variant, for the one pair of shots meant to show dots (finding 2). */
 const MASKED_COOKIE = { name: "masked", value: "1" } as const;
 
-/**
- * The lock's own cookie name (`app/lib/lock.server.ts`'s `LOCK_COOKIE`),
- * spelled out here rather than imported for the identical reason
- * {@link UNMASKED_COOKIE}'s own comment gives for itself: this script talks
- * to a *served* instance over HTTP, sharing no module with it.
- *
- * **Why this one cannot follow {@link UNMASKED_COOKIE}'s `addCookies` route.**
- * The real cookie is `Secure`, and Playwright's own `addCookies` refuses a
- * `Secure` cookie on an `http://` URL outright — it does not special-case
- * `localhost` the way Chromium itself does (`lock.server.ts`'s own comment
- * on `LOCK_COOKIE` records the control run establishing that Chromium
- * accepts, stores and returns this exact cookie over plain `http://
- * localhost` and `http://127.0.0.1`). {@link setGrantCookie} below reaches
- * past Playwright's guard with a raw CDP `Network.setCookie`, which talks to
- * Chromium directly and inherits its permissive-on-loopback behaviour rather
- * than Playwright's own stricter one.
- */
+/** Lock's own cookie name, spelled out like UNMASKED_COOKIE. Needs raw CDP `Network.setCookie`
+ * ({@link setGrantCookie}) — Playwright's `addCookies` refuses a `Secure` cookie on `http://`, Chromium allows it on loopback. */
 const GRANT_COOKIE = "__Host-unlock_grant";
 
-/**
- * Comfortably longer than the app's own fifteen-minute idle window
- * (`app/lib/lock.ts`'s `IDLE_WINDOW_MS`) — this mints the grant once, before
- * a single page opens, and the README pass alone drives well over thirty
- * navigations across two themes plus two upload walks. Six hours is not a
- * runtime this script has ever approached; it is a number picked to be
- * obviously past any run this script could take, the same way
- * `tests/support/fixtures.ts`'s `seedUnlockGrant` picks an hour for a single
- * test rather than restating the idle window it is deliberately not testing.
- */
+/** Comfortably past any run's real duration (30+ navigations, two themes) — not measured, just obviously safe. */
 const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Plant this run's own passkey (migration 0012) — so the lock's own chrome,
- * the "Lock now" control and the Passkeys tab's enrolled row, has something
- * to render rather than photographing forever as though the household never
- * turned the lock on — and hand back its `credential_id`. `seed-demo.ts`
- * deliberately does not write this row itself any more (finding 1: a
- * placeholder credential there would leave every developer following
- * docs/developing.md locked out with no assertion that could ever succeed);
- * this script has the licence `seed-demo.ts` no longer needs, because
- * nothing in a capture run ever presents a real WebAuthn response — nothing
- * here ever reads `credential_id` or `public_key` back through
- * `@simplewebauthn/server`, so a reader who assumed otherwise would go
- * looking for the device these decode to and find none. `backup_eligible:
- * true` — {@link syncLabel}'s own "Can sync to other devices" printed over
- * "Bound to a single device" (`app/routes/settings/passkeys.tsx`) — because
- * a platform passkey backed by a phone's own account is the common case
- * this household would actually be shown, not the exception.
- *
- * **Idempotent, reading before writing — and only ever for its own row.** A second capture run
- * against the same seeded database (no re-seed between the two) finds the first run's row
- * already in place, by this exact {@link CAPTURE_PLACEHOLDER_CREDENTIAL_ID}, and returns it
- * rather than trying to insert a second `bootstrap: true` row on top of it —
- * `passkey_bootstrap_idx` (migration 0012's one-live-bootstrap-row rule) would refuse that
- * outright. **Any other passkey already present refuses rather than being adopted** (finding 3),
- * whether it sits alone or *beside* the placeholder — {@link ensureCapturePasskey}'s own comment
- * is why this has to read the whole table before answering either question: a developer who
- * seeds the demo, enrols a real passkey while testing against it, then captures without reseeding
- * must not get their own label and rows written into the committed screenshots. `seed-demo.ts`'s
- * own `WIPE` list still clears this row on the next re-seed, so a stale placeholder never survives
- * past the household it was planted for.
+ * Placeholder passkey (migration 0012) so the lock's chrome has an enrolled row. seed-demo.ts
+ * won't plant it (would lock out real checkouts); safe here since capture never does a real WebAuthn response.
+ * Idempotent by this id; refuses if any *other* passkey exists, so a dev's own never leaks into screenshots.
  */
 export const CAPTURE_PLACEHOLDER_CREDENTIAL_ID = "demo-placeholder-credential-id";
 
-/**
- * Exported for `tests/scripts/capture-screenshots.test.ts` — the coexistence
- * case this function refuses (finding 1) is worth a database-backed test, not
- * only the comment above promising it. Nothing else in this file wants an
- * export: everywhere else calls this from within the same module.
- */
+/** Exported for tests/scripts/capture-screenshots.test.ts (finding 1's coexistence case). */
 export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<string> {
-  // The whole table, read once, classified before anything returns or writes
-  // — a query scoped to the placeholder's own id alone (the previous shape
-  // here) could find it and return early without ever looking for anything
-  // else, which is exactly how a database holding *both* the placeholder and
-  // a developer's own enrolled passkey used to slip past this function: the
-  // early return never reached the "other" check below it. Reading every row
-  // first and classifying the whole set closes that — a coexisting real
-  // passkey refuses regardless of whether the placeholder is present too.
+  // Reads + classifies the whole table before writing — scoping to just the placeholder id
+  // would miss a coexisting real passkey (finding 1).
   const { rows } = await pool.query<{ credential_id: string }>(`select credential_id from passkey`);
 
   const other = rows.find((row) => row.credential_id !== CAPTURE_PLACEHOLDER_CREDENTIAL_ID);
@@ -273,15 +113,8 @@ export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<str
 }
 
 /**
- * Mint one grant for the whole run and remember it in {@link captureGrant} —
- * once, here, never per context: every {@link open} call reuses the same
- * row, exactly as one browser's cookie would across however many tabs a
- * family member opened. Writes directly to `unlock_grant` (after
- * {@link ensureCapturePasskey} writes `passkey`) through the pool this
- * script already holds, the same licence `ARCHITECTURE.md` grants
- * `seed-demo.ts` for `price_daily` — this script is not the application
- * either, and going through a real unlock ceremony would need a credential
- * Chromium has no authenticator to produce.
+ * One grant for the whole run, reused by every {@link open} call. Writes straight to unlock_grant
+ * (same licence ARCHITECTURE.md grants seed-demo.ts) since a real unlock ceremony needs a credential Chromium can't produce.
  */
 async function mintCaptureGrant(pool: Pool | PoolClient): Promise<void> {
   const credentialId = await ensureCapturePasskey(pool);
@@ -296,17 +129,8 @@ async function mintCaptureGrant(pool: Pool | PoolClient): Promise<void> {
   captureGrant = { id, expiresAt };
 }
 
-/**
- * The workaround {@link GRANT_COOKIE}'s own comment promises: a raw
- * `Network.setCookie` over a CDP session bound to `page`, which is Chromium
- * itself deciding whether to accept a `Secure` cookie on this loopback
- * origin rather than Playwright's own `addCookies` guard doing so. `url`,
- * not `domain`, for the same reason `open`'s own `addCookies` call passes
- * `url` rather than `domain` for {@link UNMASKED_COOKIE}: a `__Host-`
- * prefixed cookie is rejected outright if it carries a `Domain` attribute at
- * all, and `url` is what tells Chromium to store this host-only rather than
- * scoped to a domain.
- */
+/** Raw CDP session, not `addCookies` (see {@link GRANT_COOKIE}) — Chromium is permissive on loopback, Playwright isn't.
+ * `url` not `domain`: a `__Host-` cookie rejects any `Domain` attribute outright. */
 async function setGrantCookie(
   context: BrowserContext,
   page: Page,
@@ -329,11 +153,7 @@ async function setGrantCookie(
   }
 }
 
-/**
- * Navigate and settle. Server-rendered with inline-SVG charts, so only the
- * document matters — but fonts land late enough to change a table's height,
- * and a mid-swap screenshot has the wrong metrics.
- */
+/** Navigate and settle: fonts land late enough to change a table's height, so wait for them before a shot. */
 async function visit(page: Page, path: string): Promise<void> {
   await page.goto(`${BASE_URL}${path}`, { waitUntil: "networkidle" });
   await page.evaluate(() => document.fonts.ready);
@@ -349,10 +169,7 @@ const NEEDED = ["brokerage", "bank", "liability"] as const;
 type Kind = (typeof NEEDED)[number];
 type Accounts = Record<Kind, number>;
 
-/**
- * Every refusal says the same thing — this is not the demo household — so it
- * says it once, naming what it went looking for.
- */
+/** One refusal shape: not the demo household, naming what's missing. */
 function refuse(what: string): never {
   throw new Error(
     `Expected ${what}, and found none.\n` +
@@ -362,18 +179,8 @@ function refuse(what: string): never {
 }
 
 /**
- * The one check that has to run before anything is written (finding 1):
- * `demo_seed` is the marker `scripts/seed-demo.ts` stamps on the database it
- * generated (that script's own `MARKER_TABLE`), so its presence is what
- * actually tells a demo household apart from a migrated-but-unseeded
- * database, or the wrong database entirely, that a mistyped `DATABASE_URL`
- * could just as easily point at. Without this, {@link mintCaptureGrant}
- * would plant a passkey no authenticator holds the private half of into
- * *any* database this points at, `prepare`'s own checks would then throw on
- * data that was never there, and the database would be left locked behind a
- * credential nothing can ever satisfy. Calling this before either write
- * means a wrong `DATABASE_URL` refuses with nothing planted, exactly like
- * every other refusal in this file.
+ * Must run before any write (finding 1): demo_seed is seed-demo.ts's marker for a real demo
+ * household. Skipping it would plant an unrecoverable passkey wherever DATABASE_URL points.
  */
 async function requireDemoSeed(pool: Pool | PoolClient): Promise<void> {
   const { rows } = await pool.query<{ present: boolean }>(
@@ -419,13 +226,8 @@ async function currentPositions(pool: Pool | PoolClient, accountId: number): Pro
 }
 
 /**
- * A brokerage statement shaped like a Fidelity export: preamble row, dollar
- * signs, thousands separators, "Average Cost Basis". The diff it produces is
- * the point — every position restated unchanged except one bumped quantity;
- * one never-held instrument added (what puts a row on the new-instruments
- * step); one left out, which a statement means as "sold". One removal of
- * seven stays under the majority-removal confirmation — a different
- * screenshot, a different lesson.
+ * Fidelity-shaped statement CSV. The diff is the point: one bumped quantity, one added
+ * (new-instruments step), one dropped ("sold") — a single removal stays under the majority-removal confirmation.
  */
 function authorStatement(positions: Position[], accountNumber: string): string {
   const priced = positions.filter((p) => p.symbol !== null);
@@ -474,23 +276,8 @@ function authorStatement(positions: Position[], accountNumber: string): string {
 }
 
 /**
- * Undo the walk's two writes — both right for the app to make, wrong for a
- * capture run to keep: each teaches the household something, and a taught
- * household is not the one these shots are of.
- *
- * **The resolved instrument.** Resolving is the flow's only early write (so
- * the alias survives an abandoned draft); the first walk teaches the
- * household `SCHD`, and every later walk then skips the step the screenshot
- * is of.
- *
- * **The saved column mapping.** Remembered against institution + header — the
- * feature — but a second run then arrives with all six selects prefilled, and
- * the guide's "before anything is mapped" caption sits under a fully mapped
- * form. Deleted by id above a pre-walk watermark, not truncated, so a mapping
- * the household legitimately has is never collateral.
- *
- * Neither row is referenced — the walk never commits — so removing both puts
- * the database back where the shots need it.
+ * Undoes the walk's two writes so the household stays untaught — else later walks would skip
+ * the new-instruments step or prefill the mapping shot. Deletes above a watermark, never truncates.
  */
 async function mappingWatermark(pool: Pool): Promise<string> {
   const { rows } = await pool.query<{ max: string }>(
@@ -504,12 +291,7 @@ async function forgetWalkWrites(pool: Pool, watermark: string): Promise<void> {
   await pool.query(`delete from column_mapping where id > $1`, [watermark]);
 }
 
-/**
- * Walk the four-step upload as far as a given step and shoot it; stops short
- * of recording (see header). Cleans up after itself: its two writes are
- * invisible from the call site, and a caller that forgot one would not fail —
- * it would quietly photograph the wrong screen on the next run.
- */
+/** Walks the four-step upload as far as a given step, stopping short of recording; cleans up its own writes. */
 async function walkUpload(
   page: Page,
   pool: Pool,
@@ -613,10 +395,7 @@ async function captureFirstRun(browser: Browser): Promise<void> {
   await phone.close();
 }
 
-/**
- * Everything both passes need, looked up once and read from the database
- * rather than written down — the seed renumbers on every run.
- */
+/** Everything both passes need — read fresh, since the seed renumbers on every run. */
 type Fixture = {
   accounts: Accounts;
   /** `?edit=` takes `<account>.<instrument>`. */
@@ -660,18 +439,8 @@ async function prepare(pool: Pool | PoolClient): Promise<Fixture> {
 }
 
 /**
- * The one sequence `main` runs before any context opens — validate this is
- * genuinely the demo household ({@link requireDemoSeed}), read its fixture
- * ({@link prepare}), only then plant this run's own passkey and grant
- * ({@link mintCaptureGrant}) — in that order, every time, because this is the
- * one function that decides the order rather than `main` inlining the three
- * calls itself. **Exported so the test can pin the order against the code
- * `main` actually runs, not a re-implementation of it**: a database with no
- * `demo_seed` marker refuses here before either write runs, and restoring
- * the old write-before-validate shape inside this function — the bug this
- * file's header already tells that story about — is exactly what a
- * still-empty `passkey` table after the rejection is checking for
- * (`tests/scripts/capture-screenshots.test.ts`).
+ * Validate → read fixture → only then plant passkey+grant — exported so this order can't drift
+ * and the test can pin it (tests/scripts/capture-screenshots.test.ts).
  */
 export async function prepareCapture(pool: Pool | PoolClient): Promise<Fixture> {
   await requireDemoSeed(pool);
@@ -680,13 +449,7 @@ export async function prepareCapture(pool: Pool | PoolClient): Promise<Fixture> 
   return fixture;
 }
 
-/**
- * Open the owner filter's disclosure before shooting: it is a `<details>`,
- * loads closed, and a capture would photograph a pill reading "Alex Rivera" —
- * true, and not what these shots are of. Opening is the reader's own first
- * action; nothing hand-edited. The click targets the summary so a markup
- * change fails this rather than silently shooting the closed state.
- */
+/** Opens the owner-filter `<details>` before shooting — it loads closed; clicks the summary so a markup change fails loudly. */
 async function openOwnerFilter(page: Page): Promise<void> {
   const summary = page.locator(".owner-filter > summary");
   await summary.click();
@@ -768,37 +531,24 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
 
-    // The masked variant of the exact same screen (finding 2): a fresh
-    // context with the masking cookie set back to *masked* rather than
-    // {@link UNMASKED_COOKIE}'s `0` — `open`'s own header has promised this
-    // exception since before this pair of shots existed to fulfill it. A
-    // separate context, not a cookie flip on `page` mid-run: every other
-    // shot in this loop runs on `page` and must stay unmasked throughout.
+    // Masked variant (finding 2) — separate context so this loop's `page` stays unmasked throughout.
     const maskedPage = await open(browser, theme, false, true);
     await visit(maskedPage, "/");
     await shoot(maskedPage, `docs/screenshots/overview-masked-${theme}.png`);
     await maskedPage.close();
 
-    // One owner, as a pair with the shot above (spec 0013): the filter is
-    // only legible as a difference — smaller headline, owners named, pre-app
-    // line withheld. At **All** deliberately: the withheld-history note only
-    // appears on a range that would have shown the hand-typed points, and the
-    // demo's are years old. A control invisible in the README is a feature
-    // nobody knows exists.
+    // Paired with the shot above (spec 0013); range=all is the only range showing the withheld-history note.
     await visit(page, `/?owner=${ownerId}&range=all`);
     await openOwnerFilter(page);
     await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
 
-    // The one range that is not a span of days (ADR-0006): the time axis,
-    // time-of-day readout and cadence granularity are invisible on any other
-    // preset.
+    // Only non-day-span preset (ADR-0006): time axis, time-of-day and cadence granularity show only here.
     await visit(page, "/?range=1d");
     await shoot(page, `docs/screenshots/overview-1d-${theme}.png`);
     await visit(page, "/holdings");
     await shoot(page, `docs/screenshots/holdings-${theme}.png`);
 
-    // The editor open on one row, cropped to the table: full-page at this
-    // width renders the two boxes too small to read.
+    // Cropped to the table: full-page at this width renders the boxes too small to read.
     await visit(page, `/holdings?account=${brokerage}&edit=${editRow}`);
     await page.locator("table").first().screenshot({
       path: `docs/screenshots/holdings-edit-${theme}.png`,
@@ -815,9 +565,7 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(page, `docs/screenshots/account-balance-${theme}.png`);
     await visit(page, "/settings/accounts");
     await shoot(page, `docs/screenshots/settings-${theme}.png`);
-    // The lock's own tab, now that this script plants one passkey and mints
-    // a live grant against it (`ensureCapturePasskey`, `captureGrant`): the
-    // enrolled row, not the empty list a never-locked household would see.
+    // Enrolled row, not the empty list a never-locked household would show — this script plants its own passkey.
     await visit(page, "/settings/passkeys");
     await shoot(page, `docs/screenshots/settings-passkeys-${theme}.png`);
     await visit(page, "/upload");
@@ -844,14 +592,9 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
     await visit(phone, "/analysis");
     await shoot(phone, `docs/screenshots/analysis-mobile-${theme}.png`, false);
-    // Holdings is the one screen that reflows from table to card stack below
-    // 768px — with no committed image, the one case "retake on change" cannot
-    // catch. Grouped, because the group heading, subtotal strip and grand
-    // total are what the reflow must get right, and only visible grouped.
+    // Only screen reflowing to a card stack below 768px — group heading, subtotal strip, grand total must reflow right.
     await visit(phone, "/holdings?group=assetClass");
-    // Scrolled to a subtotal: a phone shot is one viewport and the cards
-    // start below the fold — unscrolled photographs everything except the
-    // thing it is captioned as showing.
+    // Cards start below the fold on a phone viewport — scroll to the subtotal before shooting.
     await phone.evaluate(() => {
       document.querySelector(".row-subtotal")?.scrollIntoView({ block: "center" });
     });
@@ -949,8 +692,7 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
 
   await visit(page, "/holdings");
   await shoot(page, "docs/guide/images/holdings.png");
-  // Grouped and unnarrowed: the guide describes grouping here, and adding a
-  // filter would leave the reader working out which control did which.
+  // Grouped, unfiltered: guide describes grouping here; a filter would blur which control did what.
   await visit(page, "/holdings?group=assetClass");
   await shoot(page, "docs/guide/images/holdings-grouped.png");
   await visit(page, `/holdings?owner=${ownerId}`);
@@ -1075,9 +817,7 @@ async function main(): Promise<void> {
     const { DATABASE_URL } = loadConfig(process.env);
     const pool = createPool(DATABASE_URL);
     try {
-      // Validate before writing anything, then plant this run's own passkey
-      // and grant (finding 1) — {@link prepareCapture}'s own header has the
-      // reasoning and is what the test pins the order against.
+      // Validate before writing (finding 1) — prepareCapture pins the order.
       const fixture = await prepareCapture(pool);
       await captureReadme(browser, pool, fixture);
       await captureGuide(browser, pool, fixture);
@@ -1090,13 +830,7 @@ async function main(): Promise<void> {
   console.log("\nDone.");
 }
 
-// Guarded, not a bare `await main()`: `tests/scripts/capture-screenshots.test.ts`
-// imports `ensureCapturePasskey` from this same module, and every module this
-// process loads runs its top level — an unguarded call would launch a real
-// browser and demand a served instance on every test run, for a script the
-// test has no reason to run at all. `import.meta.main` is true only for the
-// module Node was actually invoked on, never for one merely imported by
-// another, which is exactly the distinction this needs.
+// Guarded: tests import ensureCapturePasskey from this module; an unguarded call would launch a browser on every test run.
 if (import.meta.main) {
   await main();
 }

@@ -1,12 +1,5 @@
-/**
- * Settings → Display (spec 0007, ADR-0002): the route's own contribution —
- * the header it sends back. Saving the policy must clear the browser's
- * state cookie, and nothing about the write itself would reveal that it
- * does not: the row updates, the form re-renders, and the screen goes on
- * obeying the cookie it already had — the setting appearing to do nothing
- * on the one browser whose owner just changed it (story 25), the stale
- * cookie keeping the old policy's lifetime.
- */
+// Settings → Display (spec 0007, ADR-0002): the route's headers. Saving must clear the state cookie — otherwise the row
+// updates but this browser keeps obeying its old cookie, looking like the setting did nothing (story 25).
 import { afterAll, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -38,11 +31,7 @@ describe("saving a masking policy", () => {
   it(
     "answers a redirect, so a browser running no script actually repaints",
     withDatabase(async () => {
-      // Story 25 wants the change to visibly take effect on the browser that
-      // made it. A bare 204 satisfies every other assertion in this file and
-      // leaves a no-JavaScript browser sitting on the page it submitted, with
-      // the old screen still in front of it. Post/redirect/get is what makes
-      // the repaint happen in both browsers.
+      // A bare 204 would satisfy every other assertion here but leave a no-JS browser on the stale page (story 25) — needs post/redirect/get.
       const outcome = await action(args(post("/settings/display", { maskingPolicy: "unmasked" })));
 
       expect(outcome).toBeInstanceOf(Response);
@@ -62,9 +51,7 @@ describe("saving a masking policy", () => {
       const cookie = cookieOf(outcome);
 
       expect(cookie).toContain(`${MASKING_COOKIE}=`);
-      // Expired rather than merely rewritten: the new policy decides what this
-      // browser opens in, and it can only decide that for a browser with
-      // nothing left to say.
+      // Expired, not merely rewritten — the stored policy alone decides what this browser opens in.
       expect(cookie).toMatch(/max-age=0/i);
     }),
   );
@@ -76,8 +63,6 @@ describe("saving a masking policy", () => {
 
       const outcome = await action(args(post("/settings/display", { maskingPolicy: "sometimes" })));
 
-      // A refusal is an ordinary outcome of a form submission: data back for
-      // the form to re-render with, never a 500.
       expect(outcome).toHaveProperty("errors");
       expect(await readMaskingPolicy(db)).toBe("unmasked");
     }),
@@ -86,9 +71,6 @@ describe("saving a masking policy", () => {
   it(
     "does not clear the cookie when it refused the write",
     withDatabase(async () => {
-      // Otherwise a typo in a form would silently reset the reader's screen to
-      // whatever the unchanged policy says — a state change with no cause the
-      // reader could see.
       const outcome = await action(args(post("/settings/display", { maskingPolicy: "" })));
 
       expect(cookieOf(outcome)).toBeNull();

@@ -1,15 +1,5 @@
-/**
- * The price-worker process: a real `node:http` server on a temporary unix
- * socket, a fake Yahoo client, and raw HTTP over the socket — no database,
- * no compose. This file pins the protocol (spec 0018 §3.2, §3.5), so it
- * speaks HTTP directly rather than through the app's own client.
- *
- * A house trap worth stating once: a raw `net.Socket` with no `'data'`
- * listener stays *paused* and never notices the peer closing the
- * connection — every socket below that isn't otherwise read calls
- * `.resume()` right after connecting, or it would falsely look like the
- * server never closed it.
- */
+// real node:http server on a temp unix socket, raw HTTP — pins the protocol (spec 0018 §3.2, §3.5)
+// trap: a raw net.Socket with no 'data' listener stays paused and never notices the peer closing
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -26,23 +16,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCTION_TIMEOUTS, startWorker, type WorkerTimeouts } from "../server/price-worker.ts";
 import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
 
-/**
- * The entry point as a real child process — the only way to watch a signal
- * land and an exit code come back. The `SIGTERM` handler itself is
- * `startWorker`'s, registered before it listens; the entry adds only the
- * `.catch` that logs a failed start.
- */
 const WORKER_ENTRY = fileURLToPath(new URL("../server/price-worker.ts", import.meta.url));
 
-/**
- * The one seam this file controls: `startWorker`'s own `await
- * chmod(socketPath, 0o660)`. `undefined` means the real one, so every case
- * runs against the actual filesystem — `unlink` and the rest included, since
- * only `chmod` is ever indirected — until a case sets `impl`, and `afterEach`
- * puts it back whether that case passed, failed or timed out. Two cases need
- * it: one holds the gap between `listen` and `chmod` open, the other makes the
- * `chmod` fail. The shape is `tests/routes/lock-now.test.ts:28-49`'s.
- */
+// the one seam this file controls: startWorker's own chmod call
 const chmodOverride = vi.hoisted(() => ({
   impl: undefined as ((path: string, mode: number) => Promise<void>) | undefined,
 }));
@@ -56,7 +32,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-/** Wait until the worker has created its socket, or give up loudly. */
 async function waitForSocket(path: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (existsSync(path)) return;
@@ -65,13 +40,8 @@ async function waitForSocket(path: string): Promise<void> {
   throw new Error(`the worker never created ${path}`);
 }
 
-/**
- * Accumulates a readable stream's text until `predicate` is satisfied, or
- * gives up loudly with whatever arrived. `waitForSocket` above is the wrong
- * tool for pinning a log line: the socket file lands (`server.listen`)
- * before `startWorker`'s own `console.log`, so a case racing the file
- * instead of the stream could pass on a build that never logs at all.
- */
+// waitForSocket is the wrong tool here: the socket file lands before the log line, so racing
+// the file instead of the stream could pass on a build that never logs at all
 async function waitForStdout(
   stream: NodeJS.ReadableStream,
   predicate: (text: string) => boolean,
@@ -92,12 +62,12 @@ async function waitForStdout(
   });
 }
 
-/** Short on purpose: a unix socket path is 107 usable bytes on Linux. */
+// short on purpose: a unix socket path is 107 usable bytes on Linux
 function freshSocketPath(): string {
   return join(tmpdir(), `pw-${randomBytes(4).toString("hex")}.sock`);
 }
 
-/** Tens of milliseconds, per the ticket — `connectionsCheckingInterval` 50 ms is research §8.9's own probe. */
+// tens of milliseconds per the ticket — connectionsCheckingInterval 50ms is research §8.9's own probe
 const TEST_TIMEOUTS: WorkerTimeouts = {
   timeout: 200,
   headersTimeout: 150,
@@ -116,16 +86,9 @@ let currentServer: http.Server | undefined;
 let currentSocketPath: string;
 const originalFetch = globalThis.fetch;
 
-/**
- * `mkdtemp` dirs the entry-point cases below create, so a socket path can
- * live somewhere `rm(currentSocketPath, ...)` above never reaches — removed
- * here rather than per-case, since a case that fails before its own cleanup
- * would otherwise leak the directory, as this file's own history did (117
- * empty `/tmp/pw-term-*` left behind).
- */
+// cleaned centrally, not per-case — a case failing before its own cleanup once left 117 empty /tmp/pw-term-* dirs
 const entryPointTempDirs: string[] = [];
 
-/** A fresh `mkdtemp` dir for an entry-point case, tracked above, and a socket path inside it. */
 async function freshEntryPointSocket(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   entryPointTempDirs.push(dir);
@@ -159,16 +122,8 @@ async function start(
 
 type JsonResponse = { status: number; headers: http.IncomingHttpHeaders; json: unknown; text: string };
 
-/**
- * `agent: false`: this file's own sockets must not be kept alive into the
- * next case. A `content-length` is added for any `body` the caller does not
- * already frame itself: Node's client only adds `Transfer-Encoding: chunked`
- * on its own for a method conventionally carrying a body — a `GET` with an
- * unframed `.write()` sends the bytes on the wire with nothing telling the
- * server's parser they belong to this message, so they land as garbage after
- * the terminating blank line rather than in `req`'s body stream, and the
- * worker sees an empty body regardless of what was written.
- */
+// agent:false — no keepalive across cases. Node auto-frames a body only for methods that
+// conventionally carry one, so an unframed GET body lands as garbage.
 function rawRequest(
   socketPath: string,
   method: string,
@@ -223,13 +178,7 @@ function connectSocket(socketPath: string): Promise<net.Socket> {
   });
 }
 
-/**
- * Accumulates raw bytes off a socket Node itself answers on (a `clientError`
- * refusal is a hand-written response line, not JSON through `sendJson`) and
- * resolves with everything received once the peer closes — which every
- * `clientError` refusal does, `Connection: close` or not, since the handler
- * always destroys the socket after (module header's own `onClientError`).
- */
+// resolves on socket close — every clientError refusal destroys the socket after answering
 function readRawUntilClose(socket: net.Socket): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
@@ -362,11 +311,7 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("answers 400 for a /history symbol that would escape into the URL path, the fake's chart never called", async () => {
-    // On /quotes the library puts symbols in a query parameter that
-    // URLSearchParams escapes anyway; on /history it concatenates the symbol
-    // into the URL *path*
-    // (node_modules/yahoo-finance2/esm/src/modules/chart.js), so an
-    // unchecked symbol here reaches a different endpoint entirely.
+    // /quotes escapes via a query param; /history concatenates into the URL path (yahoo-finance2's chart.js)
     const chart = vi.fn(async () => ({}));
     await start(fakeYahoo({ chart }));
 
@@ -397,9 +342,7 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("answers 400 for a /history from with a valid date only at the end of a longer string", async () => {
-    // Pins the regex's leading `^`: without it, `.test()` only needs a match
-    // anywhere, and `2024-06-01` occurring at the very end still satisfies
-    // the trailing `$`.
+    // pins the regex's leading ^ — without it, a match anywhere satisfies the trailing $
     const chart = vi.fn(async () => ({}));
     await start(fakeYahoo({ chart }));
 
@@ -413,7 +356,6 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("answers 400 for a /history from with a valid date only at the start of a longer string", async () => {
-    // The mirror case, pinning the trailing `$`.
     const chart = vi.fn(async () => ({}));
     await start(fakeYahoo({ chart }));
 
@@ -435,10 +377,6 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("answers 400 for a method /quotes does not take, with a body that would otherwise parse", async () => {
-    // `GET /quotes` above answers 400 either way — an empty body is not JSON —
-    // so it cannot tell the method guard from the schema. `rawRequest` now
-    // frames this body with a real `content-length`, so it genuinely would
-    // parse if the method guard let it through.
     const quote = vi.fn(async () => []);
     await start(fakeYahoo({ quote }));
 
@@ -464,8 +402,6 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("answers 400 for a path that merely starts with /quotes, matching the table and nothing else", async () => {
-    // Spec §3.2 is the table and nothing else — a query string or extra
-    // path text must not fall through to the /quotes handler.
     const quote = vi.fn(async () => []);
     await start(fakeYahoo({ quote }));
 
@@ -489,9 +425,6 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 
   it("cuts an unknown route's text rather than echoing the whole URL", async () => {
-    // The one refusal with no rate cap above it, and a URL can carry up to
-    // Node's whole header allowance. Echoed whole it is a free way to fill
-    // the log the operator reads.
     await start(fakeYahoo());
 
     const res = await rawRequest(currentSocketPath, "POST", `/${"x".repeat(8 * 1024)}`);
@@ -524,10 +457,7 @@ describe("400: a body or route the worker refuses before any library call", () =
 });
 
 describe("refusals Node answers itself, before the request callback ever runs", () => {
-  // Node's own `clientError` default (node:http's `socketOnError`) writes
-  // these three statuses itself and logs nothing — attaching any listener
-  // (module header's own `onClientError`) takes over both jobs at once, for
-  // every parser error, not only these three.
+  // Node's default clientError writes these statuses itself, silently; attaching a listener takes over logging for every parser error too
   it("still answers 400 for a malformed request line, and now logs it", async () => {
     const calls: unknown[][] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
@@ -558,7 +488,7 @@ describe("refusals Node answers itself, before the request callback ever runs", 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
     const rawResponse = readRawUntilClose(socket);
-    // Comfortably past Node's own default 16 KB header cap.
+    // comfortably past Node's own default 16 KB header cap
     socket.write(`GET /healthz HTTP/1.1\r\nHost: x\r\nX-Big: ${"x".repeat(20 * 1024)}\r\n\r\n`);
     const raw = await rawResponse;
     spy.mockRestore();
@@ -578,10 +508,7 @@ describe("refusals Node answers itself, before the request callback ever runs", 
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       calls.push(args);
     });
-    // `server.timeout` pinned far out of reach — otherwise, at TEST_TIMEOUTS'
-    // own default (200 ms, only 50 ms past headersTimeout), the two race
-    // under load and a socket.timeout win destroys the connection with no
-    // response at all, exactly like the analogous case below.
+    // server.timeout pinned far out of reach — else it could race headersTimeout under load
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000 });
 
     const socket = await connectSocket(currentSocketPath);
@@ -602,11 +529,7 @@ describe("refusals Node answers itself, before the request callback ever runs", 
   });
 
   it("stays silent for a bare connection reset — nothing was ever received to refuse", async () => {
-    // A genuine mid-parse ECONNRESET is not reproducible over a unix socket
-    // from a Node client (no `resetAndDestroy` for this handle type), so
-    // this drives the real listener the server registered with a synthetic
-    // event — exactly the shape node:http's own `socketOnError` passes: an
-    // error and the raw socket, not a status to answer with.
+    // a real ECONNRESET isn't reproducible over a unix socket — drives the real listener with a synthetic event instead
     const calls: unknown[][] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       calls.push(args);
@@ -632,13 +555,7 @@ describe("the 16 KB body cap", () => {
     "destroys the socket past the cap, with no status and no library call",
     async () => {
       const quote = vi.fn(async () => []);
-      // headersTimeout, requestTimeout and server.timeout all pinned far out
-      // of reach (30 s, per the ticket): the body below completes framing
-      // (a real content-length, fully sent) before the cap trips, so none of
-      // the three timeout mechanisms is even in a position to fire — only
-      // `readBody`'s own `req.destroy()` can end this connection. The test's
-      // own timeout (third argument) is bounded well under 30 s so a build
-      // missing that `destroy()` fails fast instead of hanging to it.
+      // all timeouts pinned far out of reach — only readBody's own destroy() should end this connection
       await start(fakeYahoo({ quote }), {
         headersTimeout: 30_000,
         requestTimeout: 30_000,
@@ -675,10 +592,7 @@ describe("the 16 KB body cap", () => {
   );
 
   it("answers 200 for the largest honest request — 100 symbols of 15 characters, about 1.9 KB", async () => {
-    // Spec §3.5's own ceiling: 100 symbols, each at `SYMBOL_PATTERN`'s own
-    // 15-character maximum. No existing case sends anything near the cap,
-    // so `16 * 1024` shrinking to a much smaller floor (e.g. `1024`) would
-    // survive every other test while rejecting a perfectly honest request.
+    // spec §3.5 ceiling: 100 symbols at 15 chars each — a much smaller MAX_BODY_BYTES would still pass every other test
     const symbols = Array.from({ length: 100 }, () => "A".repeat(15));
     const quote = vi.fn(async () => []);
     await start(fakeYahoo({ quote }));
@@ -690,11 +604,7 @@ describe("the 16 KB body cap", () => {
   });
 
   it("answers 200 for a body of exactly 16384 bytes, the cap's own edge", async () => {
-    // 16384 is `MAX_BODY_BYTES` (16 * 1024) in server/price-worker.ts.
-    // `readBody` destroys the socket only once `total` exceeds the limit —
-    // a body landing exactly on it must still be answered. `> limit`
-    // becoming `>= limit` survives every other case here, none of which
-    // sends a body of this exact size.
+    // 16384 = MAX_BODY_BYTES; `> limit` becoming `>= limit` would silently pass every other case here
     const prefix = '{"symbols":["VTI"],"padding":"';
     const suffix = '"}';
     const padLength = 16 * 1024 - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
@@ -746,7 +656,6 @@ describe("the 16 KB body cap", () => {
         req.end();
       });
 
-      // A moment for a (wrongly logged) unhandled-request stack to land.
       await new Promise((resolve) => setTimeout(resolve, 100));
       spy.mockRestore();
 
@@ -767,14 +676,12 @@ describe("a client that hangs up before its declared body arrives", () => {
 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
-    // A content-length the client never fulfils, then the client itself
-    // hangs up mid-body — `readBody`'s `for await` sees the peer gone.
+    // readBody's for-await sees the peer gone once it hangs up mid-declared-body
     socket.write("POST /quotes HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n");
     socket.write("partial-body");
     await new Promise((resolve) => setTimeout(resolve, 30));
     socket.destroy();
 
-    // Give the server a moment to observe the abort and log it.
     await new Promise((resolve) => setTimeout(resolve, 150));
     spy.mockRestore();
 
@@ -787,12 +694,8 @@ describe("a client that hangs up before its declared body arrives", () => {
   });
 
   it("still logs the unhandled-bug line for a genuine bug, rather than mistaking it for a disconnect", async () => {
-    // A bug unrelated to the peer at all: `readBody`'s own final
-    // `Buffer.concat`, on a body that arrived in full, throwing for a
-    // reason that has nothing to do with the connection.
-    // `isAbandonedRead`'s exact match on `"aborted"` + `ECONNRESET`
-    // (module header) is what tells this apart from a real disconnect —
-    // an error shaped like this one must never satisfy it.
+    // readBody's Buffer.concat throwing here is unrelated to the peer — isAbandonedRead's exact
+    // match on "aborted"+ECONNRESET must not conflate it with a real disconnect
     const calls: unknown[][] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       calls.push(args);
@@ -820,9 +723,6 @@ describe("a client that hangs up before its declared body arrives", () => {
 
 describe("per-endpoint rate caps, a sliding sixty-second window", () => {
   it("does not spend the rate budget on a refused (400) request", async () => {
-    // More refused calls than the ten-call cap, each one refused by the
-    // schema before `admit()` ever runs — a confused app spamming invalid
-    // bodies must not starve the honest refresh that follows.
     const quote = vi.fn(async () => []);
     await start(fakeYahoo({ quote }));
 
@@ -879,13 +779,7 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
   });
 
   it("admits an eleventh quotes call once the window has slid a minute past the first", async () => {
-    // Only `performance` is faked — `setTimeout`/`setInterval` stay real, so
-    // the socket round trips below still complete on their own (verified
-    // empirically on vitest 4.1.11: `toFake: ["performance"]` alone leaves a
-    // real `setTimeout` firing on wall-clock time). The limiter reads only
-    // `performance.now()` (server/price-worker.ts's `makeRateLimiter`),
-    // which this patches; `AbortSignal.timeout` is the one fake timers do
-    // not reach, and this path never touches it.
+    // only performance is faked; setTimeout stays real (verified vitest 4.1.11: toFake:["performance"] alone doesn't stop a real setTimeout)
     vi.useFakeTimers({ toFake: ["performance"] });
     try {
       const quote = vi.fn(async () => []);
@@ -898,9 +792,7 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
       const eleventh = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
       expect(eleventh.status).toBe(429);
 
-      // 60_000 is `RATE_LIMIT_WINDOW_MS` in server/price-worker.ts — past the
-      // window the first of the ten calls above was recorded in, so without
-      // eviction the cap spent above is never given back.
+      // 60_000 = RATE_LIMIT_WINDOW_MS — without eviction the cap spent above is never given back
       vi.advanceTimersByTime(60_000);
 
       const afterWindow = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
@@ -913,14 +805,7 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
   });
 
   it("keeps sliding the window when the wall clock steps backward — a restored snapshot, an NTP correction", async () => {
-    // Both faked: `Date` to drive the backward step itself, `performance`
-    // because that is what the limiter now reads
-    // (server/price-worker.ts's `makeRateLimiter`) and what this proves
-    // stays unaffected by the `Date` manipulation below — a `Date.now()`
-    // limiter would see every recorded call land in the future relative to
-    // a `now` that just moved behind them, so `now - calls[0]` goes
-    // negative and nothing is ever evicted until wall time claws back past
-    // the old timestamp plus the whole window.
+    // both faked: a Date.now()-based limiter would never evict, since every recorded call would look like it's in the future
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
       const quote = vi.fn(async () => []);
@@ -933,13 +818,9 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
       const eleventh = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
       expect(eleventh.status).toBe(429);
 
-      // The wall clock steps backward by an hour, `Date.now()` alone —
-      // `performance.now()` is untouched by this call.
       vi.setSystemTime(new Date(Date.now() - 60 * 60_000));
 
-      // 60_000 is RATE_LIMIT_WINDOW_MS in server/price-worker.ts — elapsed
-      // monotonic time past the window the first of the ten calls above was
-      // recorded in, despite the wall clock now reading an hour earlier.
+      // 60_000 = RATE_LIMIT_WINDOW_MS — elapsed monotonic time, despite the wall clock reading an hour earlier
       vi.advanceTimersByTime(60_000);
 
       const afterWindow = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
@@ -954,22 +835,13 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
 
 describe("mapping a provider failure to a status", () => {
   it("answers 504 with the TimeoutError text once the client's own fixed deadline expires", async () => {
-    // The signal-honouring fetch fake yahoo-client.test.ts uses: rejects only
-    // when its signal aborts, with the signal's own reason.
     globalThis.fetch = ((_url: string | URL, init: RequestInit) =>
       new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
       })) as typeof fetch;
 
     const realClient = createYahooClient({ timeoutMs: 50 });
-    // A generous `timeout` here, exactly as the `maxConnections` case does:
-    // this case is about the CLIENT's 50 ms deadline, not the socket-
-    // inactivity watchdog, and the handler must complete a cold
-    // `import("yahoo-finance2")` plus that 50 ms before answering — on a
-    // cold run under vitest's transform that import alone can approach
-    // `server.timeout`'s default 200 ms test value, closing the idle socket
-    // before the handler ever gets to reply. `server.timeout` is noise in
-    // this case; do not shorten the 50 ms client deadline to compensate.
+    // generous timeout: a cold import("yahoo-finance2") plus the 50ms client deadline can approach server.timeout's test default otherwise
     await start(
       { quote: async () => [], chart: realClient.chart },
       { ...TEST_TIMEOUTS, timeout: 2000 },
@@ -1009,15 +881,8 @@ describe("mapping a provider failure to a status", () => {
   });
 
   it("keeps the TLS wording when the proxy tears a tunnel down after answering it", async () => {
-    // The third signature the operator guide quotes, and the only one whose
-    // cause is an ordinary `ECONNRESET`. Measured against a real `fetch`
-    // behind `NODE_USE_ENV_PROXY` through a proxy that answers `200` and then
-    // destroys the socket — which is exactly what `server/egress-proxy.ts`
-    // does when the ClientHello's server name does not match the host the
-    // tunnel was opened to, the `200` being already written by then. Taking
-    // `.code` here would log `fetch failed: ECONNRESET`, which reads like any
-    // dropped connection and loses the one word — TLS — that says the fence
-    // fired rather than the network wobbling.
+    // measured against a real proxy destroying the socket after answering 200 on a TLS server-name
+    // mismatch — taking .code alone would lose the one word (TLS) that says the fence fired, not the network
     const quote = vi.fn(async () => {
       const cause = new Error(
         "Client network socket disconnected before secure TLS connection was established",
@@ -1036,11 +901,8 @@ describe("mapping a provider failure to a status", () => {
   });
 
   it("prefers a cause's own message over its bare code, so a DNS failure keeps the hostname", async () => {
-    // Measured against a real `fetch` behind `NODE_USE_ENV_PROXY` resolving a
-    // bad hostname: `cause` is a genuine `Error`, `cause.code` is the string
-    // "ENOTFOUND" and `cause.message` already carries the code *and* the
-    // host. Picking `.code` here (ticket 08's bug) answers `fetch failed:
-    // ENOTFOUND` — true, and useless once more than one host is in play.
+    // measured against a real DNS failure: cause.message carries the code and the host; picking
+    // .code alone (ticket 08's bug) loses the host once more than one is in play
     const quote = vi.fn(async () => {
       const cause = new Error("getaddrinfo ENOTFOUND egress-proxy") as NodeJS.ErrnoException;
       cause.code = "ENOTFOUND";
@@ -1055,11 +917,7 @@ describe("mapping a provider failure to a status", () => {
   });
 
   it("walks one level into a nested cause for the text an unhelpful outer message hides", async () => {
-    // Measured against a real `fetch` through a local CONNECT proxy that
-    // refuses the tunnel: `cause` is a `DOMException` whose own `message`
-    // ("Request was cancelled.") names nothing and whose `code` is the
-    // *number* `0` — {@link detailFor} takes neither. The informative text
-    // sits one level deeper, at `cause.cause.message`.
+    // measured against a real CONNECT-proxy refusal: cause's own message/code tell nothing — the informative text sits one level deeper, at cause.cause.message
     const quote = vi.fn(async () => {
       const nested = new Error("Proxy response (502) !== 200 when HTTP Tunneling") as NodeJS.ErrnoException;
       nested.code = "UND_ERR_ABORTED";
@@ -1079,7 +937,7 @@ describe("mapping a provider failure to a status", () => {
   });
 
   it("caps a causeless provider error's text at 1000 characters", async () => {
-    // 1000 is `ERROR_TEXT_LIMIT` in server/price-worker.ts.
+    // 1000 = ERROR_TEXT_LIMIT
     const longMessage = "x".repeat(2000);
     const quote = vi.fn(async () => {
       throw new Error(longMessage);
@@ -1110,12 +968,7 @@ describe("mapping a provider failure to a status", () => {
   });
 
   it("logs a provider error's CR/LF as one physical line, a forged log-line prefix rendered inert", async () => {
-    // Yahoo answers a non-JSON HTTP error with the response body used
-    // verbatim as the thrown error's message (yahoo-finance2) — an upstream
-    // failure a compromised or misbehaving provider controls entirely. This
-    // one embeds a line that would otherwise open with the module's own log
-    // stem, `Price worker: quotes 200 forged-ok`, as if a healthy 200 had
-    // been logged (module header: a 200 never is).
+    // Yahoo's response body becomes the thrown message verbatim — a misbehaving provider fully controls it, forged log lines included
     const forgedLine = "Price worker: quotes 200 forged-ok";
     const quote = vi.fn(async () => {
       throw new Error(`bad upstream body\r\n${forgedLine}\nmore\rtabs\there`);
@@ -1130,20 +983,15 @@ describe("mapping a provider failure to a status", () => {
     spy.mockRestore();
 
     expect(res.status).toBe(502);
-    // The response body is untouched: JSON.stringify already escapes CR/LF,
-    // so the real newlines/carriage returns/tab below are the literal
-    // two-character escapes, not physical breaks, in the bytes on the wire.
+    // JSON.stringify already escapes CR/LF — these are literal two-char escapes on the wire, not physical breaks
     expect(res.text).toBe(
       `{"error":"bad upstream body\\r\\n${forgedLine}\\nmore\\rtabs\\there"}`,
     );
 
     expect(calls).toHaveLength(1);
     const [line] = calls[0]!.map(String);
-    // One physical line: no bare CR or LF survives into what actually
-    // reaches the terminal/file — a real split on either would be > 1.
     expect(line!.split(/\r\n|\r|\n/)).toHaveLength(1);
-    // The forged line no longer starts a line of its own — it is buried
-    // mid-line behind the real stem, exactly the injection this fix closes.
+    // forged line no longer starts its own line — the injection this fix closes
     expect(line!.startsWith(forgedLine)).toBe(false);
     expect(line).toBe(`Price worker: quotes 502 bad upstream body  ${forgedLine} more tabs here`);
   });
@@ -1151,9 +999,6 @@ describe("mapping a provider failure to a status", () => {
 
 describe("production's own timeout numbers, the deployed denial-of-service bounds", () => {
   it("pins the four PRODUCTION_TIMEOUTS values, three read back off the server startWorker returns with no timeouts option given", async () => {
-    // Every other case in this file injects TEST_TIMEOUTS (directly, or via
-    // `start`'s own default) — the module header's own numbers otherwise
-    // reach no case at all.
     expect(PRODUCTION_TIMEOUTS).toEqual({
       timeout: 35_000,
       headersTimeout: 5_000,
@@ -1161,12 +1006,7 @@ describe("production's own timeout numbers, the deployed denial-of-service bound
       connectionsCheckingInterval: 1_000,
     });
 
-    // No `timeouts` option: startWorker's own default is PRODUCTION_TIMEOUTS.
-    // Reading three of the four back off the instance pins that the object
-    // above is actually wired in, not merely a constant nothing consumes.
-    // `connectionsCheckingInterval` is a constructor-only option (not one of
-    // the `Server` instance's own properties, module header), so the
-    // `PRODUCTION_TIMEOUTS` assertion above is what covers that one.
+    // connectionsCheckingInterval is constructor-only, not a Server instance property — the assertion above is what covers it
     currentServer = await startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo() });
 
     expect(currentServer.timeout).toBe(35_000);
@@ -1194,8 +1034,6 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("exits 1, naming EISDIR and the path, when the entry point's own listen fails", async () => {
-    // The entry point, not `startWorker`: the `.catch` that logs and calls
-    // `process.exit(1)` is the entry's own, below `import.meta.main`.
     const socketPath = await freshEntryPointSocket("pw-eisdir-");
     mkdirSync(socketPath);
 
@@ -1240,9 +1078,7 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("accepts and closes a ninth connection while eight are held open", async () => {
-    // A generous `timeout` here: this test is about `maxConnections`, not
-    // the socket-inactivity watchdog, and establishing nine connections
-    // must not race the held ones' own idle timers.
+    // generous timeout — must not race the held connections' own idle timers while establishing the ninth
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 2000 });
 
     const held: net.Socket[] = [];
@@ -1261,16 +1097,11 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a silent connection within the injected timeout", async () => {
-    // headersTimeout/requestTimeout pinned far above the wait below: on this
-    // platform a byte-less connection is *also* within `checkConnections`'s
-    // reach (contrary to the general rule for a connection that has sent
-    // something — research §8.9), so a small headersTimeout here would let
-    // that mechanism close the connection and leave `server.timeout` itself
-    // unexercised, which is what this case is pinning.
+    // on this platform a byte-less connection is also within checkConnections's reach (research §8.9) — a small headersTimeout would leave server.timeout itself unexercised
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, headersTimeout: 10_000, requestTimeout: 10_000 });
 
     const socket = await connectSocket(currentSocketPath);
-    socket.resume(); // a paused socket never notices the peer closing (module header)
+    socket.resume();
 
     const startedAt = Date.now();
     await new Promise<void>((resolve) => socket.once("close", resolve));
@@ -1279,11 +1110,7 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose headers never complete within headersTimeout plus one checking interval", async () => {
-    // `server.timeout` pinned far out of reach, and `requestTimeout`
-    // disabled (0) rather than merely left alone: for a connection that has
-    // sent no complete request, both header deadlines are in Node's reach at
-    // once (verified on Node 24.12.0), so leaving requestTimeout at its
-    // normal value would let it — not headersTimeout — be what closes this.
+    // requestTimeout disabled (0) so it can't also close this — both deadlines are reachable at once here (verified Node 24.12.0)
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, requestTimeout: 0 });
 
     const socket = await connectSocket(currentSocketPath);
@@ -1299,17 +1126,12 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose body never completes within requestTimeout plus one checking interval", async () => {
-    // The mirror case, pinning `requestTimeout` alone. `headersTimeout` must
-    // be disabled with 0 rather than pinned far out of reach: Node throws
-    // ERR_OUT_OF_RANGE at server construction when a *nonzero* headersTimeout
-    // exceeds requestTimeout (verified on Node 24.12.0), so 0 — which Node
-    // exempts from that check — is the only way to hold it out of reach here.
+    // headersTimeout must be 0, not just far away: Node throws ERR_OUT_OF_RANGE when a nonzero
+    // headersTimeout exceeds requestTimeout (verified Node 24.12.0); 0 is exempt
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, headersTimeout: 0 });
 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
-    // Headers complete (the terminating blank line is sent); the declared
-    // body never arrives.
     socket.write("POST /quotes HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n");
     socket.write("partial-body");
 
@@ -1322,21 +1144,13 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("installs its SIGTERM handler before the socket is connectable", async () => {
-    // The unit-level counterpart to the entry-point case below: that one
-    // proves the handler works end to end, this one proves it is there in the
-    // instant that matters. `listen` makes the socket connectable through the
-    // kernel's backlog while `chmod` is still an await away, and that gap is
-    // under two milliseconds wide, so it is gated here rather than raced —
-    // `chmod` waits on a promise this case holds open, widening the gap to
-    // exactly as long as the assertion needs.
+    // listen makes the socket connectable via the kernel backlog while chmod is still pending —
+    // that gap is under 2ms, so it's gated here (chmod held open) rather than raced
     const before = process.listeners("SIGTERM");
     let releaseChmod = (): void => {};
     const chmodGate = new Promise<void>((resolve) => {
       releaseChmod = resolve;
     });
-    // The real `chmod` is not needed once the gate has done its job: this case
-    // asserts on a listener, never on the mode, and `afterEach` removes the
-    // socket either way.
     chmodOverride.impl = async () => {
       await chmodGate;
     };
@@ -1350,24 +1164,15 @@ describe("the socket file and its lifecycle", () => {
     try {
       await waitForSocket(currentSocketPath);
 
-      // The listener it added, not merely a bigger count: this file's cases
-      // each start a server, so the number alone would not say whose.
       const added = process.listeners("SIGTERM").filter((fn) => !before.includes(fn));
       expect(added).toHaveLength(1);
     } finally {
       releaseChmod();
-      // Through the shared `currentServer`, so `afterEach` closes it and the
-      // `close` handler takes the listener back off — which is the removal
-      // `startWorker` relies on to keep one listener per live server rather
-      // than one per case.
       currentServer = await starting;
     }
   });
 
   it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
-    // The one failure path with a live server behind it: `listen` has already
-    // succeeded, so unlike a failed `listen` there is something still bound to
-    // the path, answering on a socket the caller was told it never got.
     const before = process.listeners("SIGTERM");
     chmodOverride.impl = () =>
       Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
@@ -1377,21 +1182,14 @@ describe("the socket file and its lifecycle", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(process.listeners("SIGTERM").filter((fn) => !before.includes(fn))).toHaveLength(0);
-    // `close()` unlinks the path, so the socket is not merely refusing —
-    // it is gone, and `ENOENT` is what says the teardown ran rather than the
-    // server simply having stopped accepting.
+    // ENOENT (not merely refused) proves close() actually unlinked the path
     await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
 
   it("takes its SIGTERM handler back off when listen throws rather than emits", async () => {
-    // `listen` reports most failures by emitting `error`, and the reject path
-    // above takes the listener off for those. It does not report all of them
-    // that way: Node reads a `socketPath` that parses as a number as a TCP
-    // port, and an out-of-range one throws `ERR_SOCKET_BAD_PORT` synchronously
-    // — out of the promise executor, past the `error` listener entirely. That
-    // is the same shape of miss as the `chmod` path above, one call earlier.
+    // Node reads a numeric socketPath as a TCP port; an out-of-range one throws ERR_SOCKET_BAD_PORT synchronously, past the error listener entirely
     const before = process.listeners("SIGTERM");
 
     await expect(
@@ -1402,12 +1200,8 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
-    // Spawned rather than called, because an exit code is the assertion and
-    // only a child process has one.
-    // A stop has to finish inside Docker's ten-second grace, and `close()`
-    // waits for every connection: a socket that has sent nothing is not
-    // *idle* in Node's sense, so closing only the idle ones leaves exactly
-    // the eight a compromised app would hold and the stop becomes a SIGKILL.
+    // close() waits for every connection; a socket that's sent nothing isn't "idle" in Node's
+    // sense — closing only idle ones would leave the eight a compromised app holds, forcing a SIGKILL
     const socketPath = await freshEntryPointSocket("pw-term-");
     const child = spawn(process.execPath, [WORKER_ENTRY], {
       env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
@@ -1446,8 +1240,7 @@ describe("the socket file and its lifecycle", () => {
     socket.on("data", (chunk: Buffer) => chunks.push(chunk));
 
     socket.write("GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
-    // Node answers the excess pipelined request itself (a 503, past
-    // `maxRequestsPerSocket`) — this only asserts on the first answer.
+    // Node answers the excess pipelined request itself (503, maxRequestsPerSocket) — only the first is asserted here
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const raw = Buffer.concat(chunks).toString("utf8");

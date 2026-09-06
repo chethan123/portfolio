@@ -1,17 +1,6 @@
-/**
- * The account drill-down's guards (DESIGN.md §13). Every figure comes out
- * of modules already tested; what is only here is what the route does with
- * the *URL* — the id in the path and the two receipt parameters, each
- * reachable by hand, stale bookmark or crawler, each failing without a mark
- * on the screen. The gate first: `accountTotal` answers null for no such
- * account, a non-id, and a closed account — all three must 404, since a
- * closed account is excluded from `holding_valued` and would render a
- * header of blanks. Then the receipts: `?uploaded=`/`?recorded=` say
- * *which* set or date was written and nothing about what is in it, and the
- * confirmation is read back out of the database — a receipt that believed
- * its own URL would confirm a statement nobody recorded, on the one screen
- * whose job is to confirm, leaving no trace to find later.
- */
+// Account drill-down's guards (DESIGN.md §13) — what the route does with the URL, not the already-tested modules
+// beneath it: the id (404 for no-such-account, non-id, or closed) and the receipt params (?uploaded=/?recorded=
+// name which set or date was written; the confirmation is read back from the database, never trusted from the URL).
 import { afterAll, describe, expect, it } from "vitest";
 
 import Account, { action, loader, middleware } from "../../app/routes/account.tsx";
@@ -24,13 +13,7 @@ import { args, get, post, redirectTo, responseOf, servedThrough } from "../suppo
 
 import type { TestContext } from "../support/database.ts";
 
-/**
- * Set before any loader runs: `account.tsx` reads `MARKET_TIMEZONE` through
- * `getConfig()` to tell the chart which clock a session's instants are read on,
- * and `getConfig()` validates the whole environment when it is first asked.
- * `MARKET_TIMEZONE` itself defaults; the database URL is the one variable with
- * no default, and it is the same one the harness already connects with.
- */
+// getConfig() validates the whole environment on first read (account.tsx reads MARKET_TIMEZONE through it) — set before any loader runs.
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 afterAll(closeTestDatabase);
@@ -44,11 +27,7 @@ const today = (): string => new Date().toISOString().slice(0, 10);
 const daysAgo = (days: number): string =>
   new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
 
-/**
- * An account with two statements behind it — a January one and the February
- * one that superseded it, so "the set the account is reading" is a fact with a
- * wrong answer available.
- */
+// An account with two statements — January and the superseding February — so "the set this account reads" has a wrong answer available.
 async function seedTwoStatements(
   ctx: Pick<
     TestContext,
@@ -86,16 +65,8 @@ describe("the 404 gate", () => {
   it(
     "answers 404 for an account id that names no row and for one that is not an id at all",
     withDatabase(async () => {
-      // The first is a bookmark to an instance that was reset; the second is
-      // what a crawler or a truncated link produces. Neither may reach a query
-      // that casts to `bigint`, where `'lookup'::bigint` is a driver error and
-      // reaches the reader as a 500 rather than as "no such account".
-      //
-      // The third is all digits and so passed the guard on shape, then
-      // overflowed `bigint` inside Postgres — the same 500 by a longer route.
-      // The magnitude bound in `couldBeId` is what turns it back into "no such
-      // account", and the fourth pins the boundary itself: one past the largest
-      // `bigint` is refused here rather than by the driver.
+      // Neither of the first two may reach a query casting to bigint ('lookup'::bigint is a driver error, 500 not
+      // 404). Third overflows bigint past the shape guard; fourth pins that boundary (one past the largest bigint).
       for (const accountId of [
         "999999999",
         "lookup",
@@ -114,10 +85,7 @@ describe("the 404 gate", () => {
   it(
     "still resolves an account whose id is written with leading zeros",
     withDatabase(async (ctx) => {
-      // The other half of the same bound. `0000000000000000001` is nineteen
-      // characters and is account 1: a guard counting characters rather than
-      // reading the value would 404 a row that exists, which is the opposite
-      // failure and the harder one to notice.
+      // A guard counting characters rather than reading the value would 404 a row that exists — the opposite failure, harder to notice.
       const { account } = await seedTwoStatements(ctx);
       const padded = account.id.padStart(19, "0");
 
@@ -132,12 +100,7 @@ describe("the date control's boundaries", () => {
   it(
     "hands the picker the same two dates the validator refuses by",
     withDatabase(async (ctx) => {
-      // The picker's `min`/`max` and the refusal behind them are one rule stated
-      // once, so a control that silently disagreed with the validator — offering
-      // a date the write then rejects, or hiding one it would accept — cannot
-      // happen. Read from the validator here for the same reason the loader
-      // reads it rather than hard-coding: a literal in this test would be a
-      // second copy free to drift.
+      // Read from the validator, not hard-coded, so this can't drift from the picker's own min/max.
       const { account } = await seedTwoStatements(ctx);
       const data = await loader(
         args(get(`/accounts/${account.id}`), { accountId: account.id }),
@@ -145,9 +108,7 @@ describe("the date control's boundaries", () => {
 
       expect(data.earliestAsOf).toBe(earliestRecordableDate());
       expect(data.latestAsOf).toBe(latestRecordableDate());
-      // Not a tautology: pin the floor's actual value, which is load-bearing —
-      // it is the date `0001_initial_schema.sql` seeds USD a close on.
-      expect(data.earliestAsOf).toBe("1970-01-01");
+      expect(data.earliestAsOf).toBe("1970-01-01"); // load-bearing: the date 0001_initial_schema.sql seeds USD a close on
       expect(data.earliestAsOf < data.latestAsOf).toBe(true);
     }),
   );
@@ -161,9 +122,6 @@ describe("the receipts", () => {
       const at = (search: string) =>
         loader(args(get(`/accounts/${account.id}${search}`), { accountId: account.id }));
 
-      // The parameter the upload flow really redirects with. Every figure in
-      // the sentence is counted off the stored rows, so it describes the
-      // holdings printed beneath it or it does not appear.
       const real = await at(`?uploaded=${february.id}`);
       expect(real.receipt).toMatchObject({
         setId: february.id,
@@ -172,11 +130,7 @@ describe("the receipts", () => {
         holdingCount: 2,
       });
 
-      // Hand-typed: a set this account really owns, but not the one it is
-      // reading. A receipt taken from the URL would announce that January's
-      // statement had just been recorded while the page beneath it prints
-      // February's — and would do the same for a set belonging to somebody
-      // else's account entirely.
+      // A set this account really owns, but not the one it's reading — a URL-trusted receipt would announce January while the page prints February.
       expect((await at(`?uploaded=${january.id}`)).receipt).toBeNull();
       expect((await at("?uploaded=999999999")).receipt).toBeNull();
       expect((await at("?uploaded=%20or%201=1")).receipt).toBeNull();
@@ -190,14 +144,9 @@ describe("the receipts", () => {
       const at = (search: string) =>
         loader(args(get(`/accounts/${account.id}${search}`), { accountId: account.id }));
 
-      // The redirect after `setBalance` says which date it wrote, and the
-      // loader checks that against what the account now reads rather than
-      // trusting it.
       expect((await at(`?recorded=${february.asOf}`)).justRecorded).toBe(true);
 
-      // January is a date this account genuinely carries — it is simply not
-      // the current one. Nothing was recorded for it just now, so nothing
-      // confirms it; the same goes for a date invented outright.
+      // January is a real date for this account, just not the current one — nothing was recorded for it just now.
       expect((await at("?recorded=2026-01-31")).justRecorded).toBe(false);
       expect((await at("?recorded=2026-07-04")).justRecorded).toBe(false);
       expect((await at("?recorded=whenever")).justRecorded).toBe(false);
@@ -209,19 +158,12 @@ describe("the way into the upload flow", () => {
   it(
     "links the action row and the empty state's sentence to the upload screen naming this account",
     withDatabase(async (ctx) => {
-      // A statement-kind account with nothing recorded yet: the one state that
-      // renders both ways in at once. The action row is unconditional, and an
-      // empty non-balance account is exactly who the empty state tells to
-      // upload.
       const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
 
       const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
       const markup = renderRoute(Account, `/accounts/${account.id}`, data);
 
-      // Destination and label are the contract; the icon inside the button
-      // and the sentence around the phrase are free to change. The address is
-      // named without the owner filter: the upload flow has no owner concept,
-      // so unlike the breadcrumb there is nothing to hand it.
+      // Destination/label are the contract; icon and surrounding prose are free to change. No owner filter — upload has no owner concept.
       const upload = `href="/upload?account=${account.id}"`;
       expect(markup.split(upload).length - 1).toBe(2);
       expect(markup).toContain("Upload statement</a>");
@@ -247,18 +189,13 @@ describe("the chart's range", () => {
       const at = (search: string) =>
         loader(args(get(`/accounts/${account.id}${search}`), { accountId: account.id }));
 
-      // The window is a day count that becomes twenty-five `toISOString` calls.
-      // A range key the table does not hold must resolve to a real one before
-      // it gets there: an undefined day count makes every sample an invalid
-      // date, which is a 500 on the whole page rather than a chart with an odd
-      // span.
+      // An unrecognized range key must resolve to a real one before sampling — an undefined day count is a 500, not an odd span.
       const guessed = await at("?range=6m");
       const defaulted = await at("");
 
       expect(guessed.range).toBe("1y");
       expect(guessed.computed).toEqual(defaulted.computed);
-      // And the fallback really draws: a window that silently collapsed would
-      // pass a `range` assertion while leaving the reader an empty panel.
+      // The fallback really draws — a silently collapsed window would pass the range assertion while leaving an empty panel.
       expect(guessed.computed.at(-1)).toEqual({ date: today(), amount: "12500.0000" });
     }),
   );
@@ -267,10 +204,7 @@ describe("the chart's range", () => {
     "does not mistake %s for a range, however much it looks like a key",
     (inherited) =>
       withDatabase(async (ctx) => {
-        // The gate was `requested in RANGES`, and `in` walks the prototype
-        // chain — so each of these passed it, `RANGES[requested].days` read
-        // `undefined`, and `sampleDates` reached `isoDate(NaN)` and threw.
-        // A 500 on the account page from a query string alone.
+        // `in` walks the prototype chain — each of these passed `requested in RANGES`, read undefined days, and threw isoDate(NaN): a 500 from a query string alone.
         const { account } = await seedTwoStatements(ctx);
 
         const data = await loader(
@@ -397,9 +331,7 @@ describe("a custom range", () => {
   it(
     "gives the custom form this account's own earliest date as its minimum, never the household's",
     withDatabase(async (ctx) => {
-      // The household's earliest statement (an older, unrelated account)
-      // predates this account's own — the account-scoped query, not
-      // `firstRecordedDate`, must decide the minimum spec 0008 adds.
+      // Household's earliest statement (an older, unrelated account) predates this one — the account-scoped query, not firstRecordedDate, must decide the minimum.
       const owner = await ctx.seedPerson();
       const older = await ctx.seedAccount({ name: "Older", owner });
       await ctx.seedPositionSet({ account: older, asOf: daysAgo(900), holdings: [] });
@@ -410,8 +342,7 @@ describe("a custom range", () => {
       expect(data.customMin).toBe(daysAgo(200));
       expect(data.customMax).toBe(daysAgo(0));
 
-      // Not just the loader's own field — the two date inputs the reader
-      // actually sees have to carry the same bounds.
+      // Not just the loader's field — the two date inputs the reader actually sees must carry the same bounds.
       const markup = renderRoute(Account, `/accounts/${account.id}`, data);
       expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="start"`);
       expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="end"`);
@@ -436,15 +367,7 @@ describe("a custom range", () => {
   );
 });
 
-/**
- * Where the segmented control's `key` preset actually points — the resolved
- * href a reader would follow, with the ampersands a multi-param query needs
- * decoded back out of the markup.
- *
- * Found by parsing each candidate's query rather than by matching the string,
- * so the assertion below is about which range the link names and not about
- * where in the query it happens to sit.
- */
+/** Resolved href for the range preset `key`, found by parsing each candidate's query (not string-matching) so this is about which range it names, not where in the query. */
 function presetHref(markup: string, key: string): string {
   const href = [...markup.matchAll(/href="([^"]*)"/g)]
     .map(([, candidate]) => (candidate ?? "").replaceAll("&amp;", "&"))
@@ -465,15 +388,11 @@ describe("the range links and the rest of the query", () => {
       const path = `/accounts/${account.id}?uploaded=${february.id}`;
       const markup = renderRoute(Account, path, await at(path));
 
-      // The bug: `to="?range=1m"` is a *whole* query string, and React Router
-      // resolves it as one. Upload a statement, read the confirmation, click
-      // 1M, and the sentence you were reading is gone — with nothing on screen
-      // to say it ever existed.
+      // The bug: to="?range=1m" is a whole query string, resolved as one by React Router — click 1M and the receipt vanishes.
       const href = presetHref(markup, "1m");
       expect(href).toBe(`/accounts/${account.id}?uploaded=${february.id}&range=1m`);
 
-      // Followed, not merely asserted on: the receipt has to survive the click
-      // itself, which is the thing a reader actually does.
+      // Followed, not merely asserted on — the receipt must survive the actual click.
       const clicked = await at(href);
       expect(clicked.range).toBe("1m");
       expect(clicked.receipt).toMatchObject({ setId: february.id, filename: "February.csv" });
@@ -484,8 +403,7 @@ describe("the range links and the rest of the query", () => {
   it(
     "keeps the balance receipt too, and carries it through the custom form's hidden fields",
     withDatabase(async (ctx) => {
-      // Read once: five `daysAgo(400)` calls could straddle UTC midnight, and
-      // the failure would be a flake nobody could reproduce.
+      // Read once — five separate daysAgo(400) calls could straddle UTC midnight into an unreproducible flake.
       const recorded = daysAgo(400);
       const account = await seedAccountDayZero(ctx, recorded);
       const at = (path: string) => loader(args(get(path), { accountId: account.id }));
@@ -499,8 +417,7 @@ describe("the range links and the rest of the query", () => {
       expect(href).toBe(`/accounts/${account.id}?recorded=${recorded}&range=1m`);
       expect((await at(href)).justRecorded).toBe(true);
 
-      // A GET form submits its own fields and nothing else, so Custom drops
-      // whatever the address held unless it re-emits it as a hidden field.
+      // A GET form submits only its own fields — Custom must re-emit this as a hidden field or drop it.
       expect(markup).toContain(`type="hidden" name="recorded" value="${recorded}"`);
     }),
   );
@@ -514,9 +431,7 @@ describe("the range links and the rest of the query", () => {
       const data = await loader(args(get(path), { accountId: account.id }));
       const markup = renderRoute(Account, path, data);
 
-      // `range`, `start` and `end` are the control's own vocabulary: a preset
-      // rewrites them rather than carrying them, or the address advertises a
-      // span nothing draws.
+      // range/start/end are the control's own vocabulary — a preset must rewrite them, not carry them, or the address advertises a span nothing draws.
       expect(presetHref(markup, "1m")).toBe(`/accounts/${account.id}?range=1m`);
     }),
   );
@@ -529,8 +444,7 @@ describe("the range links and the rest of the query", () => {
       const markup = renderRoute(Account, path, await loader(args(get(path), { accountId: account.id })));
 
       expect(presetHref(markup, "1m")).toBe(`${path}?range=1m`);
-      // Including the default preset, which links to its own key rather than
-      // to `.` so an explicit choice beats the persistence cookie.
+      // Default preset links to its own key, not ".", so an explicit choice beats the persistence cookie.
       expect(presetHref(markup, "1y")).toBe(`${path}?range=1y`);
     }),
   );
@@ -540,10 +454,7 @@ describe("a preset before this account's own earliest data", () => {
   it(
     "renders disabled, with no working link, using the account-scoped earliest date rather than the household's",
     withDatabase(async (ctx) => {
-      // The household has older data (a different account); this account is
-      // eight months old. Before spec 0008's account-scoped query, "All" and
-      // the disabled rule both fell back to the household-wide earliest date
-      // and would have missed this.
+      // Before spec 0008's account-scoped query, "All" and the disabled rule both fell back to the household-wide earliest date and would have missed this.
       const owner = await ctx.seedPerson();
       const older = await ctx.seedAccount({ name: "Older", owner });
       await ctx.seedPositionSet({ account: older, asOf: daysAgo(900), holdings: [] });
@@ -554,9 +465,7 @@ describe("a preset before this account's own earliest data", () => {
       expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
 
       const markup = renderRoute(Account, `/accounts/${account.id}`, data);
-      // On the resolved href, not on the relative `to`: a `<Link>` renders
-      // the address it resolves to, so the old assertion against `href="?…"`
-      // could never have failed whether the preset linked or not.
+      // On the resolved href, not the relative `to` — a <Link> renders the resolved address, so href="?…" could never fail either way.
       expect(markup).not.toContain("range=5y");
       expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>5Y</);
     }),
@@ -597,10 +506,7 @@ describe("the 1D range on an account", () => {
         args(get(`/accounts/${account.id}?range=1d`), { accountId: account.id }),
       );
 
-      // Story 10: this account holds cash and nothing else, so nothing the feed
-      // reported all session touches it. Its answer is that it did not move —
-      // drawn, at the same moments the household's line is drawn at, rather
-      // than left blank.
+      // Story 10: cash-only account, nothing the feed reported touches it — answer is "it didn't move", drawn at the same instants, not left blank.
       expect(data.range).toBe("1d");
       expect(data.session).toEqual({ timeZone: "America/New_York" });
       expect(data.computed.map((point) => [point.date, point.amount])).toEqual([
@@ -620,8 +526,7 @@ describe("the 1D range on an account", () => {
       );
 
       expect(data.rangeOptions.find((option) => option.key === "1d")?.disabled).toBe(true);
-      // And asking for it anyway falls back to the default preset rather than
-      // captioning a chart 1D over a session that never existed.
+      // Asking anyway falls back to the default preset rather than captioning a chart 1D over a session that never existed.
       const asked = await loader(
         args(get(`/accounts/${account.id}?range=1d`), { accountId: account.id }),
       );
@@ -637,11 +542,7 @@ describe("the receipt a balance write redirects to", () => {
     withDatabase(async (ctx) => {
       const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
 
-      // `chartRangeMiddleware` writes no cookie onto a redirect, so a target
-      // that dropped `range` would leave the followed GET with nothing explicit
-      // to read — and send it to whatever the cookie last held, which another
-      // tab may have moved. The receipt names the range, which is what makes
-      // the middleware's rule safe.
+      // chartRangeMiddleware writes no cookie on a redirect — a target dropping range would fall back to whatever another tab's cookie last held.
       const to = await redirectTo(() =>
         action(
           args(
@@ -652,7 +553,6 @@ describe("the receipt a balance write redirects to", () => {
       );
 
       expect(to).toContain("range=1m");
-      // And the owner filter, so a write does not end a reading either.
       expect(to).toContain("owner=7");
       expect(to).toContain("recorded=");
     }),

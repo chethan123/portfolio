@@ -1,41 +1,21 @@
 /**
- * `requestRegistration`'s own error mapping (`~/lib/unlock-ceremony`), driven
- * for real rather than through a mock of itself.
- *
- * Its own file because of what it has to mock. `@simplewebauthn/browser` is
- * reached through a dynamic `import()` inside the function body — the whole
- * point of that module's shape — so the only way to make the browser half
- * throw is to mock the package, and doing that inside
- * `tests/routes/settings-passkeys.test.ts` would replace it for every test
- * there. Nothing else in the suite drives this function: that file and
- * `tests/routes/unlock.test.ts` both mock `requestAssertion` and
- * `supportsPasskeys` over `importOriginal` and leave `requestRegistration`
- * real but uncalled, and `tests/unlock-ceremony-boundary.test.ts` only greps
- * the built output for where the package is named.
- *
- * The thrown error is shaped the way the library shapes it, not the way the
- * platform does: `identifyRegistrationError.js`'s `InvalidStateError` branch
- * wraps the DOMException in a `WebAuthnError` with
- * `code: "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED"`, and
- * `webAuthnError.js`'s constructor sets `this.name = name ?? cause.name` with
- * no override on that branch — so `.name` survives as the platform's own
- * `"InvalidStateError"`, which is what the mapping matches on.
+ * requestRegistration's own error mapping, driven for real rather than through a mock of itself.
+ * Its own file because @simplewebauthn/browser is reached through a dynamic import() inside the
+ * function body, so mocking it here would otherwise replace it for every test in
+ * settings-passkeys.test.ts. The thrown error is shaped the way the library shapes it: its
+ * InvalidStateError branch wraps the DOMException but leaves `.name` as the platform's own.
  */
 import { describe, expect, it, vi } from "vitest";
 
 const startRegistration = vi.hoisted(() => vi.fn());
 
-// Deliberately partial: this file drives one function, and the package's
-// other two exports (`browserSupportsWebAuthn`, `startAuthentication`) are
-// destructured inside `try` blocks, so a future test here calling
-// `supportsPasskeys` or `requestAssertion` would get a quiet `false` or
-// `{status: "failed"}` rather than a loud failure. Add them here before
-// adding such a test.
+// deliberately partial: the package's other two exports are destructured inside try blocks, so a
+// future test calling supportsPasskeys/requestAssertion would get a quiet false/failed — add them here first
 vi.mock("@simplewebauthn/browser", () => ({ startRegistration }));
 
 const { requestRegistration } = await import("~/lib/unlock-ceremony");
 
-/** A `PublicKeyCredentialCreationOptionsJSON` only in the shape this function forwards. */
+// a PublicKeyCredentialCreationOptionsJSON only in the shape this function forwards
 const OPTIONS = {
   challenge: "Y2hhbGxlbmdl",
   rp: { name: "Portfolio Tracker", id: "portfolio.local" },
@@ -58,8 +38,7 @@ describe("what a registration ceremony's failures map to", () => {
     const outcome = await requestRegistration(OPTIONS);
 
     expect(outcome.status).toBe("alreadyRegistered");
-    // No message: this outcome carries none, so the panel cannot print the
-    // library's wording by accident.
+    // no message — this outcome carries none, so the panel can't print the library's wording by accident
     expect(outcome).toEqual({ status: "alreadyRegistered" });
   });
 

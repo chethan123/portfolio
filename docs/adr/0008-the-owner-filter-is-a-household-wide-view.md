@@ -40,7 +40,7 @@ and the number it silently redefines is the Overview headline. Two things keep t
 **The URL is the whole of the state.** There is no cookie and nothing stored. The filter travels
 between screens because the navigation links carry **the owner param** — not the whole query string,
 which would drag one screen's sort or half-typed correction onto another. `NAVIGATION` in
-`app/root.tsx:116-121` is bare paths today, and bare paths are why a `NavLink` drops the query. So
+`app/root.tsx:222-227` is bare paths today, and bare paths are why a `NavLink` drops the query. So
 the filter lasts exactly as long as the URL does: close the tab and the household is back, not
 because a cookie lifetime was chosen well but because there is nothing left to remember it. A link
 pasted to another family member carries the same view, which a cookie could never do.

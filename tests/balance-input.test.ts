@@ -1,15 +1,5 @@
-/**
- * The two field shapes the set-balance form is built from (DESIGN.md §4.1, §5.2).
- *
- * Pure — no Postgres — because the rules being checked are about text. What
- * makes them worth their own file is that both exist to stop something silent:
- * a money value that reached a float and came back rounded, and an as-of date
- * that outranks every future statement because a digit was mistyped.
- *
- * Every assertion on an amount is an exact string. `toBe("14500.00")` is the
- * whole point — a test that accepted `14500` or `14500.000000001` would be
- * testing the thing this module exists to prevent.
- */
+// Field shapes the set-balance form is built from (DESIGN.md §4.1, §5.2). Pure — text only.
+// Amount assertions are exact strings: `toBe("14500.00")` is the point, not `14500`.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -41,10 +31,8 @@ describe("moneyMagnitude", () => {
   });
 
   it("refuses a lone point rather than reading it as an empty account", () => {
-    // ".50" and "50." are completed rather than refused, and for a while the
-    // two rules composed: "." became "0." became "0", so a stray keystroke was
-    // a well-formed balance of nothing. On a checking account that is the whole
-    // balance, recorded as gone, with no refusal anywhere to say so.
+    // Regression: "." completed via "."→"0."→"0" composition, recording a stray
+    // keystroke as a real zero balance with no refusal.
     let message: string | undefined;
     try {
       parseInput(amount, { amount: "." });
@@ -71,16 +59,13 @@ describe("moneyMagnitude", () => {
   });
 
   it("does not round, pad or otherwise tidy the scale it was given", () => {
-    // Neither "1250" nor "0.5" acquires cents on the way through: the column
-    // decides the stored scale, and inventing one here would be arithmetic.
+    // Column decides stored scale — inventing one here (padding cents) would be arithmetic.
     expect(parseInput(amount, { amount: "1250" }).amount).toBe("1250");
     expect(parseInput(amount, { amount: "0.5" }).amount).toBe("0.5");
   });
 
   it("keeps a trailing zero a float round trip would destroy", () => {
-    // `Number("14500.10").toString()` is "14500.1". The value is unchanged and
-    // the *scale* is gone, which is how a balance recorded to the cent starts
-    // reporting to the dime. Text has no such failure mode.
+    // Number("14500.10").toString() is "14500.1" — scale lost though the value's unchanged.
     expect(parseInput(amount, { amount: "14500.10" }).amount).toBe("14500.10");
     expect(String(Number("14500.10"))).not.toBe("14500.10");
   });
@@ -90,8 +75,8 @@ describe("moneyMagnitude", () => {
   });
 
   it("refuses a minus sign rather than honouring it", () => {
-    // The sign is the account's kind, not the typist's (§2). Accepting one here
-    // would give a liability two sources of truth about which way it points.
+    // Sign is the account's kind, not the typist's (§2) — else a liability gets two
+    // sources of truth about which way it points.
     expect(refusal(amount, { amount: "-14500" }, "amount")).toMatch(/without a minus sign/);
     expect(refusal(amount, { amount: "−14500" }, "amount")).toMatch(/without a minus sign/);
   });
@@ -135,9 +120,8 @@ describe("recordedDate", () => {
   });
 
   it("refuses the future, which is the refusal that matters", () => {
-    // `latest_position_set` orders on as_of_date, so a year typed as 2126 does
-    // not record a wrong date — it pins the account to that row and no later
-    // statement can outrank it for a century.
+    // latest_position_set orders on as_of_date — 2126 wouldn't just be wrong, it'd
+    // outrank every statement for a century.
     expect(refusal(date, { asOf: "2126-08-16" }, "asOf")).toMatch(/in the future/);
   });
 
@@ -150,23 +134,19 @@ describe("recordedDate", () => {
   });
 
   it("refuses a mistyped millennium, which the future check never saw", () => {
-    // The reproducing case. `1026` is one keystroke from `2026`, and it is not
-    // in the future, so the ceiling let it through. The set it wrote could not
-    // be corrected by recording the right date: it stayed a thousand years back
-    // and flattened the "All" net-worth chart to a single spike at the far left.
+    // Reproducing case: "1026" (one keystroke from 2026) isn't in the future, so the
+    // ceiling let it through and flattened the "All" chart to a spike at the far left.
     expect(refusal(date, { asOf: "1026-08-24" }, "asOf")).toMatch(/first day this application can price/);
   });
 
   it("refuses year zero, which the calendar check accepts and Postgres does not", () => {
-    // JavaScript has a year zero and round-trips this string unchanged, so it
-    // reached the driver and surfaced as a 500 rather than a sentence.
+    // JS has a year zero and round-trips it unchanged — reached the driver as a 500, not a sentence.
     expect(new Date("0000-01-01T00:00:00Z").toISOString().slice(0, 10)).toBe("0000-01-01");
     expect(refusal(date, { asOf: "0000-01-01" }, "asOf")).toMatch(/first day this application can price/);
   });
 
   it("accepts the floor itself, which is the day USD has a close", () => {
-    // Not an off-by-one: `0001_initial_schema.sql` seeds USD `1.00` on exactly
-    // this date, so it is the earliest date on which cash can be valued.
+    // Not an off-by-one: 0001_initial_schema.sql seeds USD 1.00 on exactly this date.
     expect(parseInput(date, { asOf: earliestRecordableDate() }).asOf).toBe("1970-01-01");
     expect(earliestRecordableDate()).toBe("1970-01-01");
   });

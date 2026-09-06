@@ -88,7 +88,7 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
 - **Holes as a trigger.** Rejected: an outage hole is one date carry-forward already answers, the
   original reasoning stands, and a trigger on any absent trading day would need a calendar to say
   which absences are holes — the calendar no write path may consult
-  (`app/lib/market-hours.ts:1-13`, DESIGN.md §10). Holes are filled as a side effect whenever the
+  (`app/lib/market-hours.ts:1-5`, DESIGN.md §10). Holes are filled as a side effect whenever the
   instrument is fetched for its head gap, and only then.
 
 ## Consequences

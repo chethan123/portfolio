@@ -1,16 +1,6 @@
-/**
- * The chrome's explicit "Lock now" control, and the reentry guard's own
- * automatic post — both target this one action (ticket 06, docs/adr/0012).
- *
- * Driven exactly as `masking.test.ts` drives `/masking`'s action: a
- * `Request` in, the returned `Response` out. What only a route test can show
- * is that a subsequent request is genuinely refused afterwards — not merely
- * redirected past — which is why this file also runs the real lock
- * middleware, the way `root.test.ts` does.
- *
- * The environment is configured before the import for `root.test.ts`'s
- * reason — `getConfig()` memoises its first read.
- */
+// "Lock now" (chrome control) and the reentry guard's auto-post both target this action (ticket 06, ADR-0012). Also runs
+// the real lock middleware (as root.test.ts does) to show a subsequent request is genuinely refused, not merely redirected past.
+// DATABASE_URL set before the import — getConfig() memoises its first read.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -18,13 +8,8 @@ import { args, get, post, responseOf, servedThrough } from "../support/routes.ts
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-/**
- * A seam onto `deleteGrant`, mocked so one test can make the delete itself
- * reject — a database down, say — independently of every other test's real
- * delete. `root.test.ts`'s own pattern for `touchGrant`: `undefined` (every
- * test but one) defers to the real function; the one test that sets `impl`
- * restores it afterward.
- */
+// Seam onto deleteGrant so one test can make it reject (DB down) independently of the rest — root.test.ts's touchGrant pattern:
+// undefined defers to the real function, the one test that overrides restores it after.
 const deleteGrantOverride = vi.hoisted(() => ({
   impl: undefined as ((id: string, db?: unknown) => Promise<void>) | undefined,
 }));
@@ -115,8 +100,7 @@ describe("the lock-now action", () => {
         action(args(post("/lock-now", {}, `${LOCK_COOKIE}=${grant.id}`))),
       );
 
-      // The reader is locked out of this browser either way — the point of
-      // the fix — even though the row itself never actually got deleted.
+      // Locked out either way, even though the row itself was never deleted.
       expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
       expect(response.headers.get("Location")).toBe("/unlock");
       expect(logged).toHaveBeenCalled();
@@ -133,10 +117,7 @@ describe("the lock-now action", () => {
 
       await responseOf(() => action(args(post("/lock-now", {}, `${LOCK_COOKIE}=${grant.id}`))));
 
-      // The grant row is gone, not merely a cookie the middleware would
-      // still have honoured — proven the same way `root.test.ts` proves
-      // every other refusal: on `next()` never being invoked, never on
-      // inspecting a response a refusal never produced.
+      // Proven on next() never being invoked, as root.test.ts proves every other refusal — never by inspecting a response a refusal never produced.
       let called = false;
       await responseOf(() =>
         servedThrough(middleware, get("/holdings", `${LOCK_COOKIE}=${grant.id}`), {}, () => {

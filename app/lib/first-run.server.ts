@@ -1,28 +1,12 @@
-/**
- * What a fresh install still needs before it can hold anything. DESIGN.md
- * §8.4: first run shows empty dashboards and one prompt pointing at
- * Settings → People, then Accounts — not a preference: an account has a
- * `not null` owner, so there is genuinely nothing else to do first. One
- * question with three answers rather than two booleans, so the prompt cannot
- * render both steps at once or neither when both apply. Every exported query
- * takes an optional `db`; tests pass a rolled-back transaction.
- */
+// First-run prompt: people then accounts. DESIGN.md §8.4.
 import { getDb, type Database } from "./db.server.ts";
 
 import type { Kysely } from "kysely";
 
-/**
- * The next thing to do, or null once set up — meaning one person and one
- * account. Not one upload: an instance with accounts and no statements is
- * correctly configured and waiting, and nagging about it would make the
- * prompt permanent for anyone who set up on a Sunday.
- */
+// null once 1 person + 1 account exist; no upload needed to close the prompt.
 export type FirstRunStep = "people" | "accounts" | null;
 
-/**
- * One round trip. `exists` rather than `count`: the answer is a boolean, the
- * tables can grow, and this runs on every page render.
- */
+// exists not count: boolean answer, runs every render, tables grow unbounded.
 export async function firstRunStep(db: Kysely<Database> = getDb()): Promise<FirstRunStep> {
   const row = await db
     .selectNoFrom((eb) => [

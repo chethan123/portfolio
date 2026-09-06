@@ -1,19 +1,7 @@
-/**
- * The one loader, and — since ticket 03 — the one middleware, that runs on
- * every page render. The loader's first-run read is a hint, not data, and
- * nothing but this test enforces that: `firstRunStep()` throws when Postgres
- * is unreachable, and propagated from *this* loader that is an error
- * boundary on every route — a database merely restarting would answer every
- * screen with an error page while `/healthz` reported the real cause to
- * nobody. One `try` is the difference, and a `try` is the easiest thing in a
- * file to tidy away. The environment is configured before the import
- * because `getConfig()` memoises its first read.
- *
- * The middleware describe block below is the boundary's own test: every
- * refusal is proven on `next()` never being invoked (`servedThrough`'s
- * `onNext` parameter), never on inspecting a response a refusal never
- * produced — the vacuous shape ticket 03 is written to forbid.
- */
+// The one loader and (ticket 03) one middleware that run on every page render. firstRunStep() throws when Postgres
+// is unreachable and this loader is an error boundary on every route, so a database merely restarting would
+// error-page every screen. Every middleware refusal below is proven on next() never being invoked (servedThrough's
+// onNext), never on inspecting a response a refusal never produced.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -22,14 +10,8 @@ import { saveMaskingPolicy } from "~/lib/settings.server";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-/**
- * A seam onto `touchGrant`, mocked so one test can make the *grant* check
- * itself fail independently of the *lock* check (`isLocked`) — the two
- * database reads this middleware makes, which a single unreachable-database
- * URL cannot fail one at a time, since the first one reached (`isLocked`)
- * would already refuse. `undefined` (every test but one) defers to the real
- * function; the one test that sets `impl` restores it in a `finally`.
- */
+// Seam onto touchGrant so one test can fail the grant check independently of isLocked (which would refuse first
+// on a genuinely unreachable DB). undefined defers to the real function.
 const touchGrantOverride = vi.hoisted(() => ({
   impl: undefined as ((id: string, db?: unknown) => Promise<unknown>) | undefined,
 }));
@@ -51,13 +33,8 @@ const { stopPricePoller } = await import("~/lib/price-poller.server");
 /** Refused immediately, which is how "the database is down" arrives here. */
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-/**
- * This loader also starts the refresh loop (§6.2), because it is the one
- * server-side path every page render passes through — so calling it here
- * creates a real fifteen-minute interval holding the live Yahoo provider. It is
- * `unref`'d, so it cannot hold vitest open, but it would outlive this file for
- * the rest of the run. Stopped after every test rather than left to that.
- */
+// This loader also starts the refresh loop (§6.2) — a real 15-minute interval, unref'd but otherwise outliving this
+// file. Stopped after every test.
 afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
@@ -69,21 +46,9 @@ describe("the shell's loader", () => {
     try {
       const data = await withDb(unreachable, () => loader(args(get("/"))));
 
-      // Null, which the shell renders as "no prompt" — not a thrown Response,
-      // and not an error page over every screen in the application.
-      expect(data.firstRun).toBeNull();
-
-      // The masking read is down the same well and has the same duty, with one
-      // extra: of the two ways to be wrong while the database is unreachable,
-      // this is the one that cannot put a household's balances on a screen
-      // (spec 0007).
-      expect(data.masked).toBe(true);
-
-      // The lock-now control's own read (ticket 06) has a different duty:
-      // failing this shut costs a family member one control on the chrome,
-      // never a figure, so the fail-safe answer here is "no control" rather
-      // than "show one that clears a grant which may not exist".
-      expect(data.hasPasskey).toBe(false);
+      expect(data.firstRun).toBeNull(); // "no prompt", not a thrown Response or an error page
+      expect(data.masked).toBe(true); // fail-safe: cannot put balances on screen while unreachable (spec 0007)
+      expect(data.hasPasskey).toBe(false); // fail-safe: no control, rather than one clearing a grant that may not exist
     } finally {
       await unreachable.destroy();
     }
@@ -92,8 +57,6 @@ describe("the shell's loader", () => {
   it(
     "reports the step the instance is actually on when the database answers",
     withDatabase(async ({ seedPerson }) => {
-      // The counterpart, and what keeps the test above from passing on a
-      // loader that had stopped asking the question at all.
       await seedPerson();
 
       expect((await loader(args(get("/")))).firstRun).toBe("accounts");
@@ -118,23 +81,12 @@ describe("the shell's loader", () => {
 });
 
 describe("the shell's loader on /unlock — the household's setup state must not reach the hydration payload", () => {
-  /**
-   * React Router serialises whatever this function returns, whatever
-   * `Layout` goes on to render with it — so the object this asserts against
-   * *is* the payload, not a proxy for it. A markup assertion would pass
-   * whether or not this fix existed, since `Layout` never prints any of
-   * these fields for `/unlock` either way (this file's own header on
-   * `isUnlockPath`) — which is exactly the gap the finding this test pins
-   * named: hiding the chrome hid the consumers, not the data.
-   */
+  // Asserted on the loader's returned object, not markup — Layout never prints these fields for /unlock either way,
+  // so a markup assertion would pass whether or not this fix existed (hiding the chrome hid the consumers, not the data).
   it(
     "answers gated, firstRun, masked, maskingPolicy and hasPasskey with fixed neutral values, never the household's real ones",
     withDatabase(async ({ db, seedPasskey, seedPerson }) => {
-      // Real state that would answer differently for every field below, had
-      // this loader read any of it for `/unlock`: a person with no account
-      // yet answers "accounts" for `/`, AUTH_GATE defaults to "none" in this
-      // suite (vitest.config.ts), which answers `gated: false` for `/`, and a
-      // seeded passkey answers `hasPasskey: true` for `/`.
+      // Real state that would answer differently below for /unlock, had this loader read any of it there.
       await seedPerson();
       await seedPasskey({ publicKey: new Uint8Array([2, 2, 2]) });
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
@@ -181,13 +133,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
   it(
     "still starts the price poller on a request to /unlock — the one route every render passes through before anyone has unlocked anything",
     withDatabase(async () => {
-      // `SLOT` is a `Symbol.for` registry key (`price-poller.server.ts`'s own
-      // header on why), so it names the identical global from here without
-      // importing anything internal, and without ever forcing a real tick —
-      // `requestRefresh()` would reach the live Yahoo provider by default,
-      // which a test must not do. Undefined until something starts the
-      // poller; `afterEach(stopPricePoller)` above deletes it again after
-      // every test in this file, this one included.
+      // Symbol.for registry key (price-poller.server.ts) names the identical global without importing anything internal or forcing a real tick.
       const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
       const host = globalThis as unknown as Record<symbol, unknown>;
       expect(host[POLLER_SLOT]).toBeUndefined();
@@ -226,9 +172,6 @@ describe("the lock middleware", () => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
       let called = false;
 
-      // The assertion that bites: not that the response carries no figure —
-      // a refusal renders nothing, so that would pass whatever the
-      // middleware did — but that `next` was never invoked at all.
       await responseOf(() =>
         servedThrough(middleware, get("/holdings"), {}, () => {
           called = true;
@@ -250,10 +193,7 @@ describe("the lock middleware", () => {
 
       const target = new URL(location, "http://portfolio.local");
       expect(target.pathname).toBe("/unlock");
-      // Exactly one parameter, and no literal `&` anywhere in the address —
-      // the whole point: the gate's own sign-in redirect truncates a target
-      // at the first ampersand (ADR-0012, docs/specs/0019-the-lock.md), and
-      // an owner filter beside a chart range is exactly such a target.
+      // The whole point: the sign-in redirect truncates a target at the first & (ADR-0012, docs/specs/0019-the-lock.md).
       expect([...target.searchParams.keys()]).toEqual(["redirectTo"]);
       expect(target.searchParams.get("redirectTo")).toBe("/holdings?owner=2&range=5y");
       expect(location).not.toContain("&");
@@ -265,9 +205,7 @@ describe("the lock middleware", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
 
-      // `/masking` exports an action only — exactly the route this rule
-      // exists for: a return address built from its pathname would send an
-      // unlocked reader to `GET /masking`, a 400.
+      // /masking exports an action only — a return address built from its pathname would send GET /masking, a 400.
       const location = await redirectTo(() => servedThrough(middleware, post("/masking", {})));
 
       expect(location).toBe("/unlock");
@@ -287,15 +225,11 @@ describe("the lock middleware", () => {
         ),
       );
 
-      // Refused exactly like an ordinary "no grant" case — a redirect to the
-      // unlock screen — and never treated as "no passkey enrolled", which is
-      // a different answer this middleware must not collapse it into.
+      // Refused exactly like an ordinary "no grant" — never collapsed into "no passkey enrolled", a different answer.
       expect(called).toBe(false);
       expect(response.status).toBeGreaterThanOrEqual(300);
       expect(response.status).toBeLessThan(400);
-      // A read that merely failed to answer is not proof the cookie's grant
-      // is gone, so nothing here is cleared.
-      expect(response.headers.get("Set-Cookie")).toBeNull();
+      expect(response.headers.get("Set-Cookie")).toBeNull(); // a failed read is not proof the cookie's grant is gone
     } finally {
       await unreachable.destroy();
     }
@@ -304,12 +238,8 @@ describe("the lock middleware", () => {
   it(
     "refuses rather than continues when the grant check itself cannot reach the database",
     withDatabase(async ({ seedPasskey }) => {
-      // Distinct from the previous test: `isLocked` answers normally here (a
-      // real, seeded passkey against the real test database) and only the
-      // *second* read — the grant check `touchGrant` used to split across
-      // `readGrant` then `extendGrant`, now one call — fails. A single
-      // unreachable database cannot isolate this: `isLocked` is the first
-      // read this middleware makes, and it would refuse first.
+      // Distinct from above: isLocked answers normally (real seeded passkey) and only the second read (touchGrant) fails —
+      // a single unreachable DB can't isolate this since isLocked would refuse first.
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
       let called = false;
       touchGrantOverride.impl = async () => {
@@ -326,8 +256,6 @@ describe("the lock middleware", () => {
         expect(called).toBe(false);
         expect(response.status).toBeGreaterThanOrEqual(300);
         expect(response.status).toBeLessThan(400);
-        // A read that merely failed to answer is not proof the cookie's
-        // grant is gone, so nothing here is cleared.
         expect(response.headers.get("Set-Cookie")).toBeNull();
       } finally {
         touchGrantOverride.impl = undefined;
@@ -338,19 +266,8 @@ describe("the lock middleware", () => {
   it(
     "clears the grant cookie on a refusal that is itself a POST to /lock-now carrying that browser's own grant, since an outage must not strand a grant the reader asked to end",
     async () => {
-      // Finding 3: `/lock-now`'s own action already clears the cookie on
-      // every path through it (`lock-now.test.ts`'s own coverage), but an
-      // outage in `isLocked` refuses *here*, before that action ever runs —
-      // the exact case this middleware used to leave the cookie alone for,
-      // on the reasoning (right everywhere else) that a mere read failure
-      // is not proof the grant is gone. A reader who pressed "Lock now"
-      // during the outage, from a browser that still carries its own grant
-      // cookie, has already asked to end this browser's grant; once the
-      // database recovers, an uncleared cookie would admit them again —
-      // precisely the outcome pressing the control was supposed to rule
-      // out. The cookie is seeded here (finding 4) — a genuine same-origin
-      // "Lock now" press always carries it — so this test stays distinct
-      // from the cross-site shape just below, which never does.
+      // Finding 3: an outage in isLocked refuses before /lock-now's own action (which clears the cookie) ever runs —
+      // pressing "Lock now" during the outage must still end the grant, or the cookie survives to readmit later.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -376,16 +293,8 @@ describe("the lock middleware", () => {
   it(
     "leaves the grant cookie alone on a refusal that is a POST to /lock-now during an outage, when the request carries no grant cookie at all — the cross-site forgery shape (finding 4, P1)",
     async () => {
-      // `SameSite=Lax` withholds `LOCK_COOKIE` from a cross-site form
-      // POST — the browser never sends it — so a request that reaches here
-      // with no cookie at all is exactly what an attacker's page
-      // auto-submitting a form to this instance's own `/lock-now` produces,
-      // indistinguishable by path and method alone from a real "Lock now"
-      // press made during an outage. Treating path-and-method as proof
-      // (the bug) cleared a cookie this request never named; requiring the
-      // cookie closes it without inventing a second CSRF mechanism beside
-      // the framework's own `Origin` check and this app's existing
-      // `SameSite=Lax` posture (ADR-0005).
+      // SameSite=Lax withholds LOCK_COOKIE from a cross-site form POST, so a cookie-less request is exactly what a
+      // forged auto-submit produces. Requiring the cookie fixes this without a second CSRF mechanism (ADR-0005).
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -411,11 +320,7 @@ describe("the lock middleware", () => {
   it(
     "leaves the grant cookie alone on a refusal that is a POST to /lock-now with no grant cookie, even while the household is locked and the database is perfectly reachable — the ordinary-operation cross-site shape (finding 4, P1)",
     withDatabase(async ({ seedPasskey }) => {
-      // The same forgery, without needing an outage to reach it at all: a
-      // locked household refuses any request carrying no grant cookie
-      // regardless of path, and a forged `POST /lock-now` is exactly such a
-      // request. This is the more common shape in practice — no outage
-      // required — and the one a P1 severity actually describes.
+      // The same forgery without needing an outage — no outage required, the more common shape in practice.
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
       let called = false;
 
@@ -435,12 +340,7 @@ describe("the lock middleware", () => {
   it(
     "leaves the grant cookie alone on a refusal from a GET to /lock-now, since a crawler or a pasted link never asked to end anyone's session",
     async () => {
-      // The method is as much a part of the exception above as the path:
-      // `/lock-now` is action-only, so nothing a reader did produces a `GET`
-      // there — this is a crawler, a pasted URL, or a stray retry. Treating
-      // it as the reader's own request to end their session would expire a
-      // perfectly live grant on a request nobody meant, the moment a
-      // transient outage happened to coincide with one.
+      // /lock-now is action-only, so nothing a reader did produces a GET there — a crawler, pasted URL, or stray retry, never an intent to end the session.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -456,9 +356,6 @@ describe("the lock middleware", () => {
         expect(called).toBe(false);
         expect(response.status).toBeGreaterThanOrEqual(300);
         expect(response.status).toBeLessThan(400);
-        // The one difference from the POST case just above: a read that
-        // merely failed to answer is not proof this grant is gone, and
-        // nothing about a stray GET says otherwise either.
         expect(response.headers.get("Set-Cookie")).toBeNull();
       } finally {
         await unreachable.destroy();
@@ -469,18 +366,8 @@ describe("the lock middleware", () => {
   it(
     "clears the grant cookie on a refusal from a POST to a percent-encoded spelling of /lock-now, since the router would match it the same way",
     async () => {
-      // Finding D: react-router decodes each pathname segment before
-      // matching any route (`decodePath`, react-router 7.18.2), so
-      // `POST /lock%2Dnow` reaches this same action exactly as
-      // `POST /lock-now` does. The middleware's own outage carve-out used to
-      // compare the raw, undecoded pathname, read this as an ordinary path,
-      // and leave the cookie alone — reverting `normalizedPathname` back to
-      // comparing `pathname.toLowerCase()` without decoding first fails this
-      // test the same way it failed the plain-`/lock-now` test above before
-      // finding 3's fix, since `/lock%2dnow` never equals `/lock-now`. The
-      // cookie is seeded here (finding 4) for the same reason it is on that
-      // plain-spelling test: this exercises the encoded-path decoding, not
-      // the cookie requirement, which has its own dedicated tests above.
+      // Finding D: react-router decodes each pathname segment before matching (7.18.2), so POST /lock%2Dnow reaches
+      // the same action as /lock-now — comparing the raw undecoded pathname would fail this.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -506,13 +393,8 @@ describe("the lock middleware", () => {
   it(
     "refuses without throwing, and leaves the cookie alone, on a path carrying a malformed percent escape",
     async () => {
-      // Finding D's other half: `decodeURIComponent` throws on a dangling
-      // `%`, and a path predicate the middleware calls on every request must
-      // never propagate that — `decodedPathname`'s own `catch` falls back to
-      // the raw value, matching `decodePath` itself. The raw value here is
-      // `/lock-now%`, which is not `/lock-now` either way, so this is an
-      // ordinary refusal: not treated as `/lock-now` (cookie untouched), and
-      // not a 500 from an uncaught `URIError`.
+      // Finding D's other half: decodeURIComponent throws on a dangling % — decodedPathname's catch falls back to the
+      // raw value (matching decodePath), so this is an ordinary refusal, not a 500 from an uncaught URIError.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -551,15 +433,9 @@ describe("the lock middleware", () => {
         },
       );
 
-      // The assertion that actually proves something: not that the response
-      // carries the stand-in body (`servedThrough` would produce that
-      // whatever the middleware did with `next`), but that `next` itself ran.
-      expect(called).toBe(true);
+      expect(called).toBe(true); // that next itself ran, not just that the stand-in body came back
       expect(await response.text()).toBe("the page");
-      // The case this header actually matters for: a back-forward-cache
-      // restore of a page that *was* protected never asks the server at all,
-      // so deleting the grant alone would not stop it from reappearing.
-      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(response.headers.get("Cache-Control")).toBe("no-store"); // a bfcache restore never asks the server, so deleting the grant alone wouldn't stop it reappearing
     }),
   );
 
@@ -618,10 +494,7 @@ describe("the lock middleware", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
 
-      // `compilePath` (react-router 7.18.2) matches case-insensitively and
-      // tolerates any number of trailing slashes — `Array.includes` alone
-      // does neither, so every one of these reached the health route while
-      // silently missing this exemption before it was normalised.
+      // compilePath (react-router 7.18.2) matches case-insensitively and tolerates trailing slashes — Array.includes alone does neither.
       for (const path of ["/HEALTHZ", "/healthz/", "/healthz//", "/Unlock", "/unlock/"]) {
         let called = false;
         await servedThrough(middleware, get(path), {}, () => {
@@ -637,10 +510,7 @@ describe("the lock middleware", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
 
-      // Guards the matching rule's shape, not only its data: rewriting the
-      // comparison as `LOCK_EXEMPT_PATHS.some((p) => pathname.startsWith(p))`
-      // would wrongly wave both of these through, and the array-contents
-      // test above cannot catch that — it never runs the comparison.
+      // Guards the comparison's shape, not just its data — a startsWith rewrite would wrongly wave both through, uncaught by the array-contents test above.
       for (const path of ["/unlockables", "/healthz-debug"]) {
         let called = false;
         await responseOf(() =>
@@ -664,29 +534,18 @@ describe("the lock middleware", () => {
   it(
     "carries Cache-Control: no-store on a response the exempt branch lets through too",
     withDatabase(async () => {
-      // `/healthz` sets its own `no-store` today, which is exactly why this
-      // branch's own header was invisible to removing `withNoStore` from it
-      // alone — the moment `/unlock` exists, that screen becomes cacheable
-      // instead, the bfcache hole the ADR names.
+      // /healthz sets its own no-store today, masking a removed withNoStore here — /unlock has no such fallback, the bfcache hole the ADR names.
       const response = await servedThrough(middleware, get("/unlock"));
       expect(response.headers.get("Cache-Control")).toBe("no-store");
     }),
   );
 });
 
-/**
- * The middleware listed before the lock: who may *ask*, which the framework
- * answers for document and single-fetch mutations and never for a resource
- * route (`crossOriginMutationMiddleware`'s own header cites where each runs).
- * Every test here runs the whole exported array, as the lock's own tests do,
- * so a refusal has to survive both middlewares rather than one in isolation.
- */
+// Listed before the lock: who may ask, answered for document/single-fetch mutations, never a resource route
+// (crossOriginMutationMiddleware's header cites where each runs). Runs the whole exported array, as the lock's tests do.
 describe("the cross-origin mutation refusal", () => {
   it("refuses a mutation whose Origin is not this instance, before any database call is made", async () => {
-    // Against an unreachable database, deliberately: the lock's own first act
-    // is `isLocked()`, which would throw here and answer with a redirect. A
-    // 400 is therefore proof the refusal happened ahead of it, which is what
-    // "listed before the lock" has to mean to be worth anything.
+    // Unreachable DB deliberately — isLocked() would throw and redirect, so a 400 proves this refusal ran ahead of it.
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
     let called = false;
 
@@ -702,9 +561,7 @@ describe("the cross-origin mutation refusal", () => {
       expect(response.status).toBe(400);
       expect(called).toBe(false);
       expect(response.headers.get("Set-Cookie")).toBeNull();
-      // No body: a refusal on this path tells a forger nothing about the
-      // instance, not even which rule turned them away.
-      expect(await response.text()).toBe("");
+      expect(await response.text()).toBe(""); // no body — tells a forger nothing, not even which rule turned them away
     } finally {
       await unreachable.destroy();
     }
@@ -715,8 +572,7 @@ describe("the cross-origin mutation refusal", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
 
-      // The lock refuses it, which is the point: the refusal is the lock's
-      // redirect and not this middleware's 400, so the request passed.
+      // The lock refuses it (a redirect, not this middleware's 400) — proof the request passed through here.
       const location = await redirectTo(() =>
         servedThrough(middleware, post("/lock-now", {}, undefined, { Origin: "http://portfolio.local" })),
       );

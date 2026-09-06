@@ -1,8 +1,4 @@
-/**
- * Startup gate: the entrypoint runs this before the server, so a misconfigured
- * instance fails at start rather than hours later on the first request that
- * needs the bad setting. Runs under Node's type stripping (DESIGN.md §9).
- */
+/** Startup gate: runs before the server so bad config fails at start, not on first request (DESIGN.md §9). */
 import { ConfigError, loadConfig } from "./config.ts";
 
 try {

@@ -1,13 +1,4 @@
-/**
- * The icon set, inline — replacing the Stitch screens' CDN Material Symbols
- * for the reasons the fonts are self-hosted (DESIGN.md §13.7): an
- * offline-capable PWA cannot need a network round trip to render its own
- * navigation, and a household finance app should not announce each visit to
- * a third party. Every icon inherits `currentColor` on a 24px grid, 1.75px
- * stroke, round caps (§13.1 — mitred corners read as a different drawing).
- * Decorative throughout: each is `aria-hidden` and sits beside a real text
- * label rather than standing in for one.
- */
+// Icon set, inline — no CDN font, no network round trip (DESIGN.md §13.7). 24px grid, 1.75px stroke, round caps (§13.1). Decorative: `aria-hidden`, always beside a text label.
 
 type IconProps = { className?: string };
 
@@ -29,8 +20,6 @@ function Icon({ className, children }: IconProps & { children: React.ReactNode }
   );
 }
 
-/** Refresh: two arcs chasing each other — the shape every browser already
- * uses for "fetch this again". */
 export function RefreshIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -42,7 +31,6 @@ export function RefreshIcon(props: IconProps) {
   );
 }
 
-/** Overview. Four panes — the dashboard itself. */
 export function DashboardIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -54,7 +42,6 @@ export function DashboardIcon(props: IconProps) {
   );
 }
 
-/** Holdings. Bars against an axis. */
 export function HoldingsIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -66,7 +53,6 @@ export function HoldingsIcon(props: IconProps) {
   );
 }
 
-/** Analysis. The mock's `analytics` — a ring with a slice taken out. */
 export function AnalysisIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -76,7 +62,6 @@ export function AnalysisIcon(props: IconProps) {
   );
 }
 
-/** Income. A coin with a rising mark. */
 export function IncomeIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -87,7 +72,6 @@ export function IncomeIcon(props: IconProps) {
   );
 }
 
-/** Upload. A statement going in. */
 export function UploadIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -117,7 +101,6 @@ export function SettingsIcon(props: IconProps) {
   );
 }
 
-/** A brokerage or investment account — the mock's `account_balance`. */
 export function AccountBalanceIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -129,7 +112,6 @@ export function AccountBalanceIcon(props: IconProps) {
   );
 }
 
-/** A cash or bank account — the mock's `savings`. */
 export function SavingsIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -140,7 +122,6 @@ export function SavingsIcon(props: IconProps) {
   );
 }
 
-/** A retirement account — the mock's `business_center`. */
 export function RetirementIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -151,7 +132,6 @@ export function RetirementIcon(props: IconProps) {
   );
 }
 
-/** A liability. A card with a downward mark — debt, not a holding. */
 export function LiabilityIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -180,8 +160,7 @@ export function TrendingDownIcon(props: IconProps) {
   );
 }
 
-/** No movement. The mock's `horizontal_rule`, kept so a flat row still carries
- * a mark rather than reading as a missing one. */
+// Kept so a flat row still carries a mark rather than reading as a missing one.
 export function TrendingFlatIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -225,13 +204,7 @@ export function EditIcon(props: IconProps) {
   );
 }
 
-/**
- * An unmasked screen, the eye that can see (spec 0007). Named for the
- * glossary term: CONTEXT.md avoids *hidden* for masking, and `VisibleIcon`
- * is how that vocabulary drifts back one identifier at a time. Beside a
- * text label like every icon here, never instead of one — story 5: a reader
- * inferring state from a glyph is one click from revealing their balances.
- */
+// Named for the glossary term, not `VisibleIcon` — CONTEXT.md avoids "hidden" for masking.
 export function UnmaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -241,7 +214,6 @@ export function UnmaskedIcon(props: IconProps) {
   );
 }
 
-/** A masked screen. The same eye, struck through. */
 export function MaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -253,10 +225,7 @@ export function MaskedIcon(props: IconProps) {
   );
 }
 
-/** The busy mark: one open arc, drawn to be turned by `refresh-spin`
- * (app.css). Deliberately not `RefreshIcon` with its arrowheads — those say
- * "fetch this again", which is a thing the reader asked for, where this says
- * only "this control is working", which is a thing they are waiting on. */
+// Not `RefreshIcon` — that says "fetch this again", this says "working" (turned by `refresh-spin`, app.css).
 export function SpinnerIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -265,17 +234,11 @@ export function SpinnerIcon(props: IconProps) {
   );
 }
 
-/** "Lock now" (ticket 06): a closed padlock, its shackle drawn shut rather
- * than open — the one direction this control ever offers. */
 export function LockIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <rect x="4.5" y="11" width="15" height="9.5" rx="2" />
-      {/* Named so one caller can draw it open: the unlock screen lifts this
-          path off the body while an assertion is being verified
-          (`.lock-shackle`, app.css). Every rule that names it is scoped to
-          that card's own mark, so nothing matches this path here and "Lock
-          now" keeps a shut padlock. */}
+      {/* Named so the unlock screen alone can lift this shackle open while an assertion verifies (`.lock-shackle`, app.css). */}
       <path className="lock-shackle" d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Icon>
   );

@@ -50,24 +50,17 @@ import { asOfView } from "../lib/prices.server.ts";
 import type { Route } from "./+types/account";
 
 /**
- * Account details — one account's identity, its own line, and what it holds
- * (Stitch "Account Details", DESIGN.md §13). §8.1 had ruled this page out as
- * "a filtered Holdings table already is one"; §13.1 reverses that — the
- * screen carries the account's own header and valuation series, and the
- * queries are the dashboard's with one predicate added (§8.2). Nothing here
- * reads the view directly or does money arithmetic: every figure leaves
- * `valuation.server.ts` as a decimal string and enters `format.ts` as one,
- * which keeps this page's total identical to the overview's row — one
- * `sum(value)` over one view, not two. Two mock figures are deliberately not
- * drawn (the change chip, the "Today's Change" column), each argued where it
- * would have gone: §13.7 leaves out what cannot be computed honestly.
+ * One account's identity, its own line, and what it holds (DESIGN.md §13.1).
+ * Queries are the dashboard's plus one predicate (§8.2) — same total as
+ * Overview's row. Two mock figures (change chip, "Today's Change" column)
+ * are left out where nothing can compute them honestly (§13.7).
  */
 
 export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.total.accountName ?? "Account"} · Portfolio` }];
 }
 
-/** Stamps the range cookie here too (spec 0008) — see {@link chartRangeMiddleware} for why. */
+/** Stamps the range cookie here too (spec 0008) — see {@link chartRangeMiddleware}. */
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -75,14 +68,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const scope: ChartScope = { surface: "account", accountId: params.accountId };
 
   const [total, reach] = await Promise.all([
-    // The gate: `accountTotal` answers null for no such account, a non-id,
-    // and a closed account alike — all three are a 404 rather than a page of
-    // blanks. A closed account is excluded from `holding_valued` (§8.2), so
-    // rendering it would give a header of empty figures with no explanation.
+    // Null for no such account, a non-id, and a closed account alike — all three a 404.
     accountTotal(params.accountId),
-    // The account's own reach — its own earliest statement (spec 0008), never
-    // the household's, and the observation log's latest session; see
-    // `chartReach`'s own docstring for why.
     chartReach(scope),
   ]);
 
@@ -98,34 +85,25 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     timeZone: getConfig().MARKET_TIMEZONE,
   });
 
-  // Starts here, not in the first wave, so a 404 from the gate never strands
-  // this promise with no handler — Node 24 still drops the process on an
-  // unhandled rejection, so a 404 racing a database error would take the app down.
+  // Started here, not the first wave, so a 404 from the gate above never
+  // strands this promise unhandled (Node drops the process on that).
   const recordedPromise = lastRecorded(params.accountId);
 
-  // The upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5).
-  // Every figure is read back from the database, never the URL: the
-  // parameter names *which* set was written, so an invalid or stale value
-  // yields null and no sentence — the `?recorded=` receipt's contract too.
+  // Upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5) — read
+  // back from the database, never the URL, so a stale value yields null.
   const uploadedParam = new URL(request.url).searchParams.get("uploaded");
   const receiptPromise =
     uploadedParam === null
       ? null
       : recordedPromise.then((recorded) => uploadReceipt(params.accountId, uploadedParam, recorded));
 
-  // Created here and dropped into the `Promise.all` below, for the same
-  // reason as the Overview's loader — see its own comment there.
   const points = chartSeries(scope, resolved);
 
   const [account, holdings, computed, recorded, freshness, receipt] = await Promise.all([
-    // Read for one field, the tax treatment: `AccountTotal` carries what a
-    // figure is computed from and no more (§4.5). Safe after the gate —
-    // nothing in this application deletes an account.
+    // Only the tax treatment — safe after the gate; nothing here deletes an account.
     getAccount(params.accountId),
     accountHoldings(params.accountId),
     points,
-    // What the current figure was read from, so the set-balance panel can say
-    // which day it is superseding rather than asking for a correction blind.
     recordedPromise,
     asOfView(getConfig().MARKET_TIMEZONE),
     receiptPromise,
@@ -133,13 +111,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   return {
     freshness,
-    /**
-     * The owner filter as a search string, purely for the breadcrumb to hand
-     * back out (spec 0013). **Nothing on this page applies it**: an account
-     * has exactly one owner, so every reader here is account-scoped and
-     * takes no filter (ADR-0008). A return address, not a narrowing — hence
-     * a string, read by nothing below.
-     */
+    // Breadcrumb round trip only (spec 0013) — an account has one owner, so
+    // nothing else here reads this filter (ADR-0008).
     owners: ownerSearch(readOwnerFilter(new URL(request.url).searchParams)),
     ...controls,
     total,
@@ -148,56 +121,31 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     computed,
     recorded,
     receipt,
-    // Whose balance is one typed number rather than a statement (§5.2),
-    // decided in the shared kind vocabulary — a route that knew which kinds
-    // take a typed balance would be a second answer to a question
-    // `account-options.ts` answers exhaustively. Kind alone, deliberately,
-    // though `setBalance` no longer trusts kind alone: an account can hold
-    // securities under a `bank` label (`createDraft` in `uploads.server.ts`
-    // checks only closure, reads `kind` nowhere), and hiding the panel then
-    // would leave the page no write control and nothing saying why. Mounted,
-    // it earns a refusal naming exactly what is held.
+    // Kind alone decides, via `account-options.ts` — though `setBalance`
+    // checks only closure, so a bank-labeled account can still hold
+    // securities and refuse with its own message.
     takesBalance: acceptsSetBalance(total.accountKind),
     owed: isOwed(total.accountKind),
-    // Today in UTC, from the server, so the box does not open on a date the
-    // reader's clock invented and the app then refuses (§4.1).
     today,
-    // The date control's two boundaries, read from the validator rather than
-    // guessed, so the picker and the refusal cannot drift apart.
     earliestAsOf: earliestRecordableDate(),
     latestAsOf: latestRecordableDate(),
-    // The redirect after a write says which date it wrote; this confirms it
-    // against the set the account is actually reading, so a hand-typed
-    // `?recorded=` cannot produce a confirmation for a balance nobody
-    // recorded — the message can only describe what is stored (§13.7).
+    // Confirmed against the actually-recorded set, so a hand-typed
+    // `?recorded=` can't produce a confirmation nobody wrote (§13.7).
     justRecorded:
       recorded !== null && new URL(request.url).searchParams.get("recorded") === recorded.asOf,
   };
 }
 
-/**
- * Record a balance. Everything this does is in `balances.server.ts`; the
- * route reads the form, hands it over, and turns the outcomes into a
- * message. A refusal comes back as fields to re-render — never a 500 — so
- * the boxes keep what was typed while the message appears beside the wrong
- * one.
- */
+/** Records a balance; `balances.server.ts` owns the rule (§5.2). */
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
 
   try {
     const written = await setBalance(params.accountId, values);
 
-    // Redirect rather than render: a reload cannot re-submit the write, the
-    // boxes come back empty (a fresh GET), and — the reason — the
-    // confirmation is forced to describe what the database says rather than
-    // what the submission claimed. The receipt keeps whatever the submitting
-    // page was reading — range and owner filter: `chartRangeMiddleware`
-    // writes no cookie onto a redirect, so a target dropping `range` would
-    // send the followed GET to whatever the cookie last held, which another
-    // tab may have moved.
+    // Redirect, not render — reload can't resubmit; confirmation reads the
+    // database. Range/owner filter preserved so a stale cookie doesn't win.
     const receipt = new URLSearchParams(new URL(request.url).searchParams);
-    // The previous receipt, if submitted from one — two would stack.
     receipt.delete("recorded");
     receipt.delete("uploaded");
     receipt.set("recorded", written.asOf);
@@ -212,13 +160,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 }
 
-/**
- * Which tile an account wears — the overview's mapping repeated, so an
- * account wears the same mark in the list and on its own page (the two
- * belong in `icons.tsx` the day a third screen needs them). Exhaustive over
- * `AccountKind`, so adding a kind fails the typecheck here. The icon never
- * stands alone — the kind is written out in the meta line below it.
- */
+// Overview's tile mapping repeated — exhaustive over `AccountKind`, adding a kind fails the typecheck here.
 const TILES = {
   brokerage: AccountBalanceIcon,
   "401k": AccountBalanceIcon,
@@ -227,13 +169,8 @@ const TILES = {
   liability: LiabilityIcon,
 } satisfies Record<AccountKind, typeof AccountBalanceIcon>;
 
-/**
- * A form's option label, minus the explanation after its dash:
- * `TAX_TREATMENTS` spells out what each treatment does to a figure, but a
- * header states what the account *is* — the explaining sentence belongs
- * where the choice is made. Cutting the tail off the shared label keeps one
- * list; a second, shorter list here is a list free to drift.
- */
+// Option label minus the explanation after its dash — the header states
+// what the account is, not what the treatment does; keeps one list.
 function shortLabel(label: string): string {
   const [head = label] = label.split("—");
   return head.trim();
@@ -268,39 +205,24 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
   const Tile = TILES[total.accountKind];
   const { known, total: counted } = total.coverage;
 
-  // The chart takes the state as a prop rather than asking for itself: its axis
-  // ticks and its accessible label are strings, not components (spec 0007).
   const masked = useMasked();
 
-  // §8.4's rule for one account: a zero and an absence must not look alike.
-  // `accountTotal` returns 0.0000 for holding nothing and for every holding
-  // unpriced, and neither is a valuation — so the figure is withheld and the
-  // reason written out. A $0.00 on a finance page is a claim.
+  // §8.4: zero and absence must not look alike — `accountTotal` returns
+  // 0.0000 for both, so the figure is withheld and the reason written out.
   const valued = known > 0;
 
   const last = computed.at(-1);
 
   return (
     <section className="page">
-      {/* Overview, not Settings → Accounts: this page is the drill-down from
-          the overview's list; the settings page is the form that edits, and
-          the header's Edit action is the way across. The breadcrumb carries
-          the owner filter back — the one thing here that reads the parameter
-          (spec 0013's round trip): everything else ignores it, an account
-          having exactly one owner, but landing on the whole household's
-          Overview from a row clicked on a narrowed one is how the reading
-          gets lost without anybody choosing to end it. */}
+      {/* Breadcrumb carries the owner filter back (spec 0013) — the one
+          place here that reads it; an account has one owner. */}
       <nav className="breadcrumb" aria-label="Breadcrumb">
         <Link to={{ pathname: "/", search: owners }}>Overview</Link>
         <span aria-hidden="true">/</span>
         <span aria-current="page">{total.accountName}</span>
       </nav>
 
-      {/* The upload flow's receipt, in the place the thing happened. Every
-          figure is the loader's — recomputed against the set the account is
-          actually reading — so a hand-typed ?uploaded= can only describe
-          what is stored, or nothing. No toast, no green flash: a sentence,
-          until the next navigation. */}
       {receipt !== null ? (
         <p role="status">
           Recorded <b>{receipt.filename ?? "the statement"}</b>:{" "}
@@ -316,9 +238,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             </>
           )}
           , as of <b className="u-data">{receipt.asOf}</b>.{" "}
-          {/* The closing clause (brief §6.5): the count is the recorded
-              set's own rows, read back like every figure here — never the
-              URL's claim. */}
           {total.accountName} now holds{" "}
           <b className="u-data">{receipt.holdingCount}</b>{" "}
           {receipt.holdingCount === 1 ? "position" : "positions"}.
@@ -334,8 +253,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             <div>
               <h1 className="detail-title">{total.accountName}</h1>
 
-              {/* The colon lives in the `dt`, which is the mock's typesetting
-                  and the reason a pair stays readable when the row wraps. */}
               <dl className="detail-meta">
                 <div>
                   <dt>Owner:</dt>
@@ -343,8 +260,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
                 </div>
                 <div>
                   <dt>Institution:</dt>
-                  {/* Optional on the form, so a blank is a real state and not a
-                      missing read (`accounts.server.ts`). */}
                   <dd>{total.institution || "—"}</dd>
                 </div>
                 <div>
@@ -364,11 +279,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
 
             <PriceFreshness freshness={freshness} />
 
-            {/* No delta chip, though the mock has one: the honest version is
-                a subtraction of two decimal strings, and the query layer has
-                no per-account `netWorthChange` yet. Money arithmetic does not
-                move into a route to get a chip (§8.2, §4.1) — the panel below
-                draws the same movement as a line. */}
             {valued ? (
               <>
                 <p className="detail-figure u-data">
@@ -390,17 +300,11 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             )}
 
             <div className="detail-actions">
-              {/* Without the owner filter, deliberately: the upload flow has no
-                  owner concept, so there is nothing there to hand it to. */}
               <Link className="button button--quiet" to={`/upload?account=${total.accountId}`}>
                 <UploadIcon />
                 Upload statement
               </Link>
 
-              {/* An anchor, not a second copy of the form: §11 makes this the
-                  one write a phone is offered and it should not take a scroll
-                  to reach — but two forms writing one balance is two places
-                  to fix a bug. The panel stays in order; this jumps to it. */}
               {takesBalance ? (
                 <a className="button button--quiet" href="#set-balance">
                   <EditIcon />
@@ -421,9 +325,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         <header className="panel-header">
           <h2 className="panel-title">Performance</h2>
 
-          {/* The range is a URL, so the control needs no JavaScript and a
-              chosen range survives a reload — the overview's contract, key
-              for key. */}
           <ChartRangeControl
             range={range}
             custom={custom}
@@ -436,13 +337,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         <div className="panel-body">
           {computed.length >= 2 && last ? (
             <NetWorthChart
-              // Its own gradient id: two charts sharing one would both paint
-              // from whichever `<defs>` the document holds first.
               id={`account-${total.accountId}`}
               computed={computed}
-              // Empty, and not an oversight: the hand-typed prefix is the
-              // household's net worth before day zero (§7), and attributing it
-              // to one account would be inventing that account's history.
+              // Empty deliberately — the hand-typed prefix is the household's, attributing it here would invent history.
               manual={[]}
               label={`${total.accountName} ${rangeDescription(range, custom)},`}
               masked={masked}
@@ -485,13 +382,8 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             </span>
           </header>
 
-          {/* Four columns, not the mock's five: "Today's Change" needs each
-              instrument's previous close, which the row shape does not carry
-              — `quote` is overwritten in place (§6.2) and `holding_valued`
-              exposes today's price with nothing to compare against.
-              Producing it would mean a hand-rolled query (§8.2's weak point)
-              or subtracting decimal strings in a route. §13.7: a figure the
-              schema cannot produce is left out, not invented. */}
+          {/* Four columns, not the mock's five — "Today's Change" needs a
+              previous close the row shape doesn't carry (§8.2, §13.7). */}
           <div className="data-table-scroll">
             <table className="data-table">
               <thead>
@@ -510,14 +402,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               </thead>
               <tbody>
                 {holdings.map((holding) => (
-                  // Unique by construction: a position set holds one row per
-                  // instrument (`holding_one_row_per_instrument`).
                   <tr key={holding.instrumentId}>
                     <td>
                       <div className="cell-stack">
-                        {/* No badge for an instrument with no public ticker — a
-                            401k trust or a hand-entered fund. A placeholder in a
-                            ticker-shaped chip reads as a ticker. */}
                         {holding.symbol ? <span className="badge">{holding.symbol}</span> : null}
                         <div>
                           {holding.instrumentName}
@@ -528,9 +415,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
                     <td className="is-numeric">
                       <Amount value={holding.quantity} shape="quantity" />
                     </td>
-                    {/* Null price and null value are the same holding: never
-                        quoted. A dash says so; a zero would understate the
-                        account by the whole position and look deliberate. */}
                     <td className="is-numeric">
                       <Amount value={holding.price} />
                     </td>
@@ -545,11 +429,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         </section>
       )}
 
-      {/* Outside the panel, because the panel is not always here: a refusal
-          rendered only inside `SetBalance` reaches nobody on an account
-          whose kind takes no typed balance — exactly the account `setBalance`
-          refuses, so the reader got a 200 and no word of why (report SET-5).
-          Not a second copy: the only place `errors.form` is drawn. */}
       {actionData?.errors?.form ? (
         <p className="form-error" role="alert">
           {actionData.errors.form}
@@ -576,14 +455,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
 }
 
 /**
- * The one write this page offers, for the kinds whose whole position is a
- * number (§5.2). A form, not the mock's "Deposit"/"Transfer" buttons — this
- * app moves no money; a family reads a figure off a banking app and copies
- * it in, and the honest control is a box holding the figure and its date.
- * The amount opens **empty**, never pre-filled: a pre-filled box turns
- * "record today's balance" into one click on a stale number, and a balance
- * silently re-asserted on a new date is indistinguishable from one that was
- * checked. The figure it replaces is stated beside the box instead.
+ * The one write this page offers, for kinds whose whole position is a
+ * number (§5.2). Amount opens empty, never pre-filled — a pre-filled box
+ * turns "record today's balance" into one click on a stale number.
  */
 function SetBalance({
   accountName,
@@ -599,25 +473,18 @@ function SetBalance({
   valued,
 }: {
   accountName: string;
-  /** Whether what is typed becomes a negative quantity (§2). */
   owed: boolean;
   recorded: LastRecorded | null;
   today: string;
-  /** The earliest date the validator accepts. */
   earliestAsOf: string;
-  /** The furthest-ahead date the validator accepts. */
   latestAsOf: string;
   errors?: Readonly<Record<string, string>>;
   values?: Record<string, string>;
-  /** A write on this page's own last request, confirmed against the database. */
   justRecorded: boolean;
-  /** The account's total, from the loader — the figure the confirmation quotes. */
   amount: string;
-  /** False when nothing is priced, in which case there is no figure to quote. */
   valued: boolean;
 }) {
-  // What was typed wins over the default, so a refusal never costs the entry.
-  // Empty after a successful write, because that arrives as a fresh GET.
+  // Typed value wins over the default, so a refusal never costs the entry.
   const typedAmount = values?.amount ?? "";
   const asOf = values?.asOf ?? today;
 
@@ -637,9 +504,6 @@ function SetBalance({
           ) : (
             <>What {accountName} holds, as of the day it held it.</>
           )}{" "}
-          {/* Said before the click: appending rather than editing is why undo
-              is free (§5.2), and a reader expecting this box to overwrite one
-              number would not expect the old figure to keep standing. */}
           Recording a balance never overwrites an earlier one: each is kept on its own date, and
           the most recent is the one every figure is computed from.
         </p>
@@ -660,11 +524,8 @@ function SetBalance({
         ) : null}
       </div>
 
-      {/* Keyed on the position set the page is reading — changes on every
-          write, on no refusal. That empties the boxes after a balance lands
-          (a client-side redirect does not remount the route, so an
-          uncontrolled input would offer the just-saved figure for a second,
-          stale submission) while leaving them untouched on a refusal. */}
+      {/* Keyed on the read position set — changes on every write, none on a
+          refusal, so a client-side redirect doesn't leave a stale, uncontrolled input. */}
       <Form method="post" className="panel-form" key={recorded?.id ?? "none"}>
         <div>
           <label htmlFor="set-balance-amount">
@@ -673,10 +534,7 @@ function SetBalance({
               id="set-balance-amount"
               name="amount"
               defaultValue={typedAmount}
-              // `text`, not `number`: a number input silently drops what it
-              // cannot parse, so a pasted "$14,500.00" arrives empty and the
-              // family is told a balance is required. Exact parsing lives in
-              // `input.server`.
+              // `text`, not `number` — a number input silently drops unparseable paste ("$14,500.00").
               type="text"
               inputMode="decimal"
               placeholder="14,500.00"

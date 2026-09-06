@@ -1,20 +1,6 @@
-/**
- * Analysis read as an owner (spec 0013, ticket 05).
- *
- * This screen had no route test at all until now — its loader was exercised
- * only through `tests/invariants/aggregates-agree.test.ts`, which asks whether
- * the slices reconstruct the total and nothing about who the total is for. The
- * filter makes that a question with a wrong answer available, so the file
- * exists.
- *
- * The rule worth stating: every panel narrows, including the one grouped by
- * owner. One owner selected leaves that panel with a single slice at 100%,
- * which is honest and useless — and is deliberately not special-cased, because
- * two owners selected is exactly the split a reader wants beside a combined
- * total (ADR-0008). The capital-gains rate is the household's and does not
- * narrow; the potential-tax figures move only because the gains they apply to
- * do.
- */
+// Analysis read as an owner (spec 0013, ticket 05). Every panel narrows, including by-owner: one owner selected leaves a
+// single 100% slice, deliberately not special-cased, since two owners is the split a reader wants beside a combined total
+// (ADR-0008). Capital-gains rate is the household's and doesn't narrow; potential-tax figures move only because gains do.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Analysis, { loader } from "../../app/routes/analysis.tsx";
@@ -27,14 +13,9 @@ import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/**
- * Two owners with different gains, so a narrowed unrealized figure is a
- * different number rather than the same one twice.
- *
- * Alice: 100 VTI at 250.0000, bought at 180.0000 — 25,000.0000 worth, 7,000
- * unrealized. Bob: 40 BND at 70.0000, bought at 65.0000 — 2,800.0000 worth,
- * 200 unrealized.
- */
+// Two owners with different gains, so a narrowed unrealized figure differs from the same one twice:
+// Alice — 100 VTI @250.0000, cost 180.0000 → 25,000.0000 worth, 7,000 unrealized.
+// Bob — 40 BND @70.0000, cost 65.0000 → 2,800.0000 worth, 200 unrealized.
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -85,9 +66,6 @@ describe("every panel narrows", () => {
       const { alice } = await seedTwoOwners(ctx);
       const data = await loader(args(get(`/analysis?owner=${alice.id}`)));
 
-      // Honest and useless with one owner selected, and deliberately not
-      // special-cased: two owners selected is the split a reader wants beside
-      // a combined total.
       expect(data.byPerson.map((slice) => [slice.label, slice.amount])).toEqual([
         ["Alice", "25000.0000"],
       ]);
@@ -107,7 +85,6 @@ describe("every panel narrows", () => {
       const hers = await loader(args(get(`/analysis?owner=${alice.id}`)));
 
       expect(hers.capitalGainsRate).toBe(household.capitalGainsRate);
-      // The tax figure moves only because the gains it applies to do.
       expect(hers.gains.total?.unrealized).not.toBe(household.gains.total?.unrealized);
       expect(hers.gains.total?.unrealized).toBe("7000.0000");
     }),
@@ -120,12 +97,9 @@ describe("every panel narrows", () => {
       const data = await loader(args(get("/analysis")));
       const markup = renderRoute(Analysis, "/analysis", data);
 
-      // An owner is the role; a person is the record. This was the one place
-      // the pre-glossary wording survived in the UI.
+      // Owner is the role, person the record — the one place pre-glossary wording survived in the UI.
       expect(markup).toContain("Net worth by owner");
       expect(markup).not.toContain("Net worth by person");
-      // The column heading and the count say it too, and both were mutations
-      // the title assertion alone let through.
       expect(markup).toContain(">Owner</th>");
       expect(markup).toContain("2 owners");
       expect(markup).not.toContain("2 people");
@@ -171,8 +145,7 @@ describe("the classification panel", () => {
 
       const data = await loader(args(get("/analysis")));
 
-      // Two instruments under one label are one row, and the label is the
-      // household's own words — there is no lookup table to translate them.
+      // One row per label, worded as the household typed it — no lookup table translates it.
       expect(data.byClassification.map((slice) => [slice.label, slice.amount, slice.share])).toEqual(
         [
           ["Total market fund", "1250.0000", "0.925926"],
@@ -200,11 +173,7 @@ describe("the filter's own plumbing", () => {
       );
       expect(await redirectTo(() => loader(args(get("/analysis?owner="))))).toBe("/analysis");
 
-      // Alice and Bob are the whole seeded household, so ticking every box is
-      // the household under another name — the collapse is the second bounce
-      // this loader owes the address, not only the respelling above. Spelled
-      // already-canonical here on purpose, so this is the collapse bounce in
-      // isolation rather than the respelling bounce landing first.
+      // Alice+Bob = the whole household, ticking every box collapses to it — a second bounce, distinct from the respelling above (hence already-canonical here).
       expect(await redirectTo(() => loader(args(get(`/analysis?${ownerParam(...ids)}`))))).toBe(
         "/analysis",
       );
@@ -238,9 +207,7 @@ describe("the filter's own plumbing", () => {
       const { alice } = await seedTwoOwners(ctx);
       const data = await loader(args(get(`/analysis?owner=${alice.id}`)));
 
-      // ADR-0008 attaches this to the filter surviving navigation: a reader who
-      // set it two screens ago would otherwise read a household figure that
-      // quietly means something else.
+      // ADR-0008: filter survives navigation, so a household figure never quietly means something else two screens later.
       expect(renderRoute(Analysis, "/analysis", data)).toContain("Showing <b>Alice</b> only.");
     }),
   );
@@ -252,12 +219,9 @@ describe("the filter's own plumbing", () => {
       const data = await loader(args(get(`/analysis?owner=${alice.id}`)));
       const markup = renderRoute(Analysis, "/analysis", data);
 
-      // The box the reader ticked stays ticked, so Apply cannot silently widen
-      // the screen back to the household — a GET form submits what its boxes
-      // say, and an unticked one contributes nothing at all.
+      // Ticked box stays ticked — Apply can't quietly widen back to the household.
       expect(markup).toContain(`id="owner-${alice.id}" type="checkbox" name="owner" checked=""`);
-      // And Show everyone is the one control that drops it.
-      expect(markup).toContain('href="/analysis"');
+      expect(markup).toContain('href="/analysis"'); // "Show everyone" is the one control that drops it.
     }),
   );
 });
@@ -278,9 +242,7 @@ describe("the three empty states", () => {
   it(
     "still says it on an empty instance that is being read as somebody",
     withDatabase(async (ctx) => {
-      // Two people, two accounts, nothing uploaded. The roster has two names so
-      // the control draws, and ticking one used to answer "Alice holds nothing
-      // — everything else is still there" on an instance where nothing is.
+      // Ticking one used to wrongly answer "Alice holds nothing, everything else is" on an empty instance.
       const alice = await ctx.seedPerson({ name: "Alice" });
       const bob = await ctx.seedPerson({ name: "Bob" });
       await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });
@@ -306,8 +268,7 @@ describe("the three empty states", () => {
       expect(unknownMarkup).toContain("no longer be read as");
       expect(unknownMarkup).toContain('aria-label="Filter by owner"');
 
-      // Alice keeps an open account and holds nothing in it: still in the
-      // roster, so this is not an error and must not read as one.
+      // Alice still has an open (empty) account, so this is not an error and must not read as one.
       const empty = await ctx.seedAccount({ name: "Alice Cash", owner: alice, kind: "bank" });
       await ctx.seedPositionSet({ account: empty, asOf: "2026-02-28", holdings: [] });
       await ctx.db

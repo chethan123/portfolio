@@ -1,16 +1,7 @@
-/**
- * A balance typed by hand, got wrong, and corrected. `set-balance.test.ts`
- * holds the write to account and `routes/account.test.ts` the receipt;
- * neither can see the seam between them — three parts, no owner: the write
- * decides what was stored, the action what to put in the redirect, the page
- * whether to confirm. Each passes its own test while carrying the wrong
- * thing across (an action redirecting with the date *submitted* rather than
- * *stored*, a loader comparing against a set no longer read), producing a
- * page that confirms nothing after a real write or confirms one that never
- * happened. Nothing but a round trip notices — so nothing is seeded past
- * the household: every balance is posted to the real `action`, every page
- * reached by following the redirect it actually chose.
- */
+// A balance typed by hand, got wrong, and corrected — the seam between set-balance.test.ts (the write) and
+// routes/account.test.ts (the receipt) that neither can see: each passes its own test while disagreeing across the
+// seam (e.g. redirecting with the date submitted rather than stored). Only a round trip catches that, so nothing
+// here is seeded past the household — every page is reached by following its real redirect.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { action as recordBalance, loader as accountPage } from "../../app/routes/account.tsx";
@@ -39,8 +30,7 @@ async function aHouseholdWithASavingsAccount(
   ctx: Pick<TestContext, "seedPerson" | "seedAccount">,
 ) {
   const owner = await ctx.seedPerson({ name: "Alice" });
-  // `bank`, because `SINGLE_POSITION` admits only this kind and `liability`: a
-  // brokerage is refused outright, so a journey through this form cannot use one.
+  // bank: SINGLE_POSITION admits only this kind and liability — a brokerage is refused outright.
   return ctx.seedAccount({
     name: "Ally Online Savings",
     institution: "Ally",
@@ -55,9 +45,7 @@ describe("a balance recorded by hand", () => {
     withDatabase(async (ctx) => {
       const account = await aHouseholdWithASavingsAccount(ctx);
 
-      // --- Record: the form as the panel posts it --------------------------
-      // Typed the way it is read off a statement, currency mark and all — this
-      // is the one journey where what a person types reaches storage directly.
+      // Typed as read off a statement, currency mark and all — the one journey where what's typed reaches storage directly.
       const landing = await redirectTo(() =>
         recordBalance(
           args(post(`/accounts/${account.id}`, { amount: "$1,100.00", asOf: ` ${AUGUST} ` }), {
@@ -67,46 +55,30 @@ describe("a balance recorded by hand", () => {
       );
       const receipt = receiptFrom(landing);
       expect(receipt.accountId).toBe(account.id);
-      // The redirect carries the date as *stored*, not as posted. They differ
-      // by the validation in between — `recordedDate` trims — and the URL is
-      // then compared against the database on the page below, so a redirect
-      // built from the raw field would carry a date that matches nothing and
-      // silently confirm nothing after a write that really happened.
+      // Redirect carries the date as *stored* (recordedDate trims), not as posted — a raw-field redirect would match nothing on the page below.
       expect(receipt.asOf).toBe(AUGUST);
 
-      // --- The page the reader actually lands on ---------------------------
       const page = await accountPage(
         args(get(landing), { accountId: receipt.accountId }),
       );
 
-      // The confirmation stands only because the date in the URL matches the
-      // set this account is now reading — and that set is the one the write
-      // just appended, resolved through `latest_position_set` rather than
-      // remembered by the action.
+      // Confirmation holds only because the URL's date matches the set this account now reads, via latest_position_set — not remembered by the action.
       expect(page.justRecorded).toBe(true);
       expect(page.recorded).toMatchObject({ asOf: AUGUST, source: "manual" });
 
-      // --- Read it back ----------------------------------------------------
-      // Both scales, because they are different columns: the account's own line
-      // at `numeric(20, 4)` and the USD row beneath it at `numeric(20, 8)`.
-      // Strings throughout — a float here is the bug the whole schema avoids.
+      // Two scales, two columns: account's own line at numeric(20,4), USD row beneath at numeric(20,8). Strings throughout.
       expect(page.total.amount).toBe("1100.0000");
       expect(page.holdings.map((holding) => [holding.symbol, holding.quantity])).toEqual([
         ["USD", "1100.00000000"],
       ]);
 
-      // --- A hand-typed receipt confirms nothing ---------------------------
-      // A real date, a plausible one, and one this account has never carried.
-      // The parameter says only *which* day was written and nothing about what
-      // is in it, so a page that believed it would announce a balance nobody
-      // recorded on the one screen whose job is to confirm.
+      // A plausible date this account never carried — the param says only which day was written, nothing about what's in it.
       const invented = await accountPage(
         args(get(`/accounts/${account.id}?recorded=2026-08-15`), { accountId: account.id }),
       );
 
       expect(invented.justRecorded).toBe(false);
-      // And the figures beneath the absent sentence are still the stored ones,
-      // which is what makes the absence honest rather than a blank page.
+      // Figures beneath stay the stored ones — the absence is honest, not a blank page.
       expect(invented.total.amount).toBe("1100.0000");
     }),
   );
@@ -124,9 +96,7 @@ describe("a balance recorded by hand", () => {
           ),
         );
 
-      // The figure as first typed, and the same day's figure typed again after
-      // the reader noticed the transposition. Same as-of date deliberately:
-      // this is a correction, not a second day.
+      // Same as-of date deliberately — this is a correction, not a second day.
       await submit("1,100.00");
       const landing = await submit("1,010.00");
 
@@ -134,14 +104,11 @@ describe("a balance recorded by hand", () => {
         args(get(landing), { accountId: receiptFrom(landing).accountId }),
       );
 
-      // `latest_position_set` breaks the tie on `created_at` then `id`, so the
-      // later submission is what the account reads. A correction that had to
-      // win by editing would read the same here and fail the count below.
+      // latest_position_set breaks the tie on created_at then id, so the later submission wins.
       expect(page.total.amount).toBe("1010.0000");
       expect(page.justRecorded).toBe(true);
 
-      // The immutable spine (DESIGN.md §5.2): the correction appended, so both
-      // submissions survive and the account simply reads the newer one.
+      // Immutable spine (DESIGN.md §5.2): the correction appended, both submissions survive.
       expect(await positionSetCount(ctx, account.id)).toBe(2);
     }),
   );
@@ -158,9 +125,7 @@ describe("a balance recorded by hand", () => {
         ),
       );
 
-      // A correction with a slipped keystroke. The refusal has to come back as
-      // data — a thrown redirect would empty the boxes, and a 500 would lose
-      // what was typed — because the panel re-renders around it.
+      // Refusal must come back as data, not a thrown redirect or 500 — the panel re-renders around it, keeping what was typed.
       const refused = await outcomeOf(() =>
         recordBalance(
           args(post(`/accounts/${account.id}`, { amount: "1,O10.00", asOf: AUGUST }), {
@@ -175,8 +140,7 @@ describe("a balance recorded by hand", () => {
       expect(Object.keys(refused.errors)).toEqual(["amount"]);
       expect(refused.values).toMatchObject({ amount: "1,O10.00" });
 
-      // And the balance that was already good is untouched: a refusal is not a
-      // half-write, so the account still reads what it read before.
+      // A refusal is not a half-write — the account still reads what it read before.
       const page = await accountPage(
         args(get(`/accounts/${account.id}`), { accountId: account.id }),
       );

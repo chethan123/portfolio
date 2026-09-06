@@ -1,20 +1,7 @@
-/**
- * The two ends of the toggle that only a request can show (spec 0007).
- *
- * `masking.test.ts` pins the precedence rule and the cookie's shape as pure
- * functions. What is left is what only happens when a request goes through a
- * route: that the shell's loader actually asks the resolver rather than
- * defaulting on its own, and that the action's `Set-Cookie` carries the
- * lifetime the *stored policy* dictates — which is the half of the mechanism
- * that makes "on start" mean anything, and the half no pure test can reach
- * because the policy comes out of the database.
- *
- * Driven exactly as the existing route tests drive loaders and actions: a
- * `Request` in, the returned data or the thrown `Response` out.
- *
- * The environment is configured before the import for `root.test.ts`'s reason —
- * `getConfig()` memoises its first read.
- */
+// The two ends of the masking toggle (spec 0007) that only a request can show — masking.test.ts pins the precedence rule and
+// cookie shape as pure functions; this covers the shell's loader actually asking the resolver, and Set-Cookie's lifetime coming
+// from the *stored* policy (the database-backed half no pure test can reach).
+// getConfig() memoises its first read — DATABASE_URL is set before the import below, as in root.test.ts.
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -42,9 +29,6 @@ describe("what the shell publishes to every screen", () => {
     withDatabase(async ({ db }) => {
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
 
-      // The policy says open unmasked and this browser has been toggled. If the
-      // loader took the policy's answer here the control would appear broken on
-      // the one browser whose owner set the policy.
       const data = await rootLoader(args(get("/", carrying(MASKED))));
 
       expect(data.masked).toBe(true);
@@ -76,8 +60,7 @@ describe("what the shell publishes to every screen", () => {
   it(
     "opens a browser that has never been toggled masked, under the seeded policy",
     withDatabase(async () => {
-      // Nothing saved: this is a fresh instance meeting a fresh browser, which
-      // is the case ADR-0002 calls the one place safety beat convenience.
+      // Fresh instance, fresh browser — the one case ADR-0002 has safety beat convenience.
       expect((await rootLoader(args(get("/")))).masked).toBe(true);
     }),
   );
@@ -98,10 +81,7 @@ describe("the toggle's no-JavaScript path", () => {
   it(
     "gives the cookie a lifetime that outlives the session only under as-last-left",
     withDatabase(async ({ db }) => {
-      // The rule itself is `maskingCookie`'s and is pinned there. What only a
-      // route can show is that the action reads the *stored* policy to decide
-      // it — an action that hard-coded either lifetime would pass every pure
-      // test and would break "on start" in exactly one of the three settings.
+      // maskingCookie's rule is pinned elsewhere; this shows the action reads the *stored* policy to pick a lifetime.
       await saveMaskingPolicy({ maskingPolicy: "as_last_left" }, db);
       const remembered = await responseOf(() =>
         toggle(args(post("/masking", { masked: UNMASKED, redirectTo: "/" }))),
@@ -121,9 +101,7 @@ describe("the toggle's no-JavaScript path", () => {
   it(
     "returns the reader to the screen they toggled from",
     withDatabase(async () => {
-      // With JavaScript off the click is a navigation, so the response has to
-      // put them back. Landing on the overview after hiding the amounts on
-      // Holdings would lose their place — story 8's complaint, one screen up.
+      // No JS: the click is a navigation, so the response must put them back (story 8's complaint).
       const response = await responseOf(() =>
         toggle(args(post("/masking", { masked: MASKED, redirectTo: "/holdings?sort=value" }))),
       );
@@ -135,10 +113,7 @@ describe("the toggle's no-JavaScript path", () => {
   it(
     "refuses to be pointed anywhere but back into this application",
     withDatabase(async () => {
-      // The field comes off a form and a form can be edited. An absolute URL
-      // here would make the toggle an open redirect — small, but it is one
-      // line to close and the line is cheaper than the argument about whether
-      // anyone would bother.
+      // redirectTo comes off an editable form field — an absolute URL here would make this an open redirect.
       const response = await responseOf(() =>
         toggle(args(post("/masking", { masked: MASKED, redirectTo: "https://elsewhere.test/" }))),
       );
@@ -150,9 +125,7 @@ describe("the toggle's no-JavaScript path", () => {
   it(
     "refuses a state it does not recognise rather than writing it",
     withDatabase(async () => {
-      // An unrecognised cookie resolves to the policy's answer, so a junk value
-      // written here would not expose anything — it would just make the toggle
-      // stop working, silently, until the cookie was cleared.
+      // An unrecognised cookie falls back to the stored policy, so writing junk here would silently break the toggle, not expose anything.
       const response = await responseOf(() =>
         toggle(args(post("/masking", { masked: "perhaps", redirectTo: "/" }))),
       );

@@ -1,13 +1,5 @@
-/**
- * The adaptive picker label (`account-label.ts`): quiet until two rows would
- * read the same, then one tier of facts at a time — number tail always,
- * institution · type for twins, tax treatment for twins that survive that,
- * and an honest stop when every stored attribute matches.
- *
- * Every assertion is the exact full label string. The rule under test is
- * "which parts appear when", and a substring match would pass while the
- * composition drifted.
- */
+// account-label.ts: quiet until two rows read the same, then one tier at a time.
+// Assertions are full label strings — a substring match would pass while composition drifted.
 import { describe, expect, it } from "vitest";
 
 import { accountPickerGroups, numberTail, numberTailCharacters } from "../app/lib/account-label.ts";
@@ -156,8 +148,6 @@ describe("numberTail", () => {
   });
 
   it("hands an announcement the bare characters, on the tail's own blank rule", () => {
-    // What "ending in 3910" reads out — the same characters minus the mask
-    // glyphs, null exactly when the tail is.
     expect(numberTailCharacters("X47-283910")).toBe("3910");
     expect(numberTailCharacters("   ")).toBeNull();
   });
