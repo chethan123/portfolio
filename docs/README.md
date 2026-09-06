@@ -38,6 +38,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`../CONTEXT.md`](../CONTEXT.md) | anyone naming a domain concept | the glossary: the word this project uses for each concept, and the ones it avoids | implementation detail, decisions, anything that is not a definition |
 | [`adr/`](adr/) | someone about to undo a decision | one record per decision that is hard to reverse, surprising without its context, and the result of a real trade-off | decisions that are none of those three — they belong in the code or the design record |
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task, and files the guide hands out to do it (the example statement CSV) | rationale, operations, anything needing a terminal |
+| [`security.md`](security.md) | someone deciding whether to trust this instance with their money, before and after installing it | the threat model made visual: what the segmentation, the egress allowlist and the lock each defend, what the supply chain does and does not do, and the standing list of what is not defended | the knobs an operator turns, which are `operating.md`'s; the control table and the seams, which are `ARCHITECTURE.md`'s |
 | [`operating.md`](operating.md) | whoever self-hosts the instance | how the deployment is put together and how to run it: installing, configuration, TLS, security posture, monitoring, backups, upgrades, growth | how to read a screen; what to do at 2am, which is the runbook's |
 | [`runbook.md`](runbook.md) | the same person, mid-incident | symptoms, in the words someone would use, with the commands that confirm and fix each | explanation — every entry links to `operating.md` for the why |
 | [`google-sign-in.md`](google-sign-in.md) | the self-hoster, once, before the first `docker compose up` | the walkthrough of standing the gate up: the Google Cloud project, the consent screen and publishing it, the OAuth client and its redirect URI, the gate's settings, the allowlist, and proving a sign-in and a refusal both work | how the gate is built and what it enforces, which is `ARCHITECTURE.md`'s and `operating.md`'s; why it is a forward-auth gate at all, which is the ADR's |
@@ -106,6 +107,17 @@ one resolved term and one hard decision at a time, which is the intended pace.
   observability, security and the installed shell. Those sections hold the mechanism, for a
   contributor; `operating.md` holds the decisions an operator has to make, and links rather than
   restating.
+- **[`security.md`](security.md) retells the security story a third time, for a third reader.**
+  `ARCHITECTURE.md` §7.6 holds the control table for a contributor and `operating.md` holds the
+  decisions an operator makes; `security.md` is for someone still deciding whether to run this at
+  all, and so states the threat model, draws the segmentation, and carries the standing list of what
+  is *not* defended. It overlaps `ARCHITECTURE.md` §2's trust boundaries and §3.1's privilege
+  posture, `operating.md`'s "One thing that leaves the house" and "The lock",
+  [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md), [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md)
+  and [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md). **`compose.yaml` is the
+  one to believe** for anything about networks, published ports or container privilege — it enforces
+  them — and the audit under [`research/`](research/) is the one to believe for which weaknesses are
+  still open. `security.md` links for every reason rather than carrying a second copy of the argument.
 - **[`developing.md`](developing.md) sits between `AGENTS.md` and `ARCHITECTURE.md`** and must not
   become either. `AGENTS.md` says what good work looks like here; `ARCHITECTURE.md` says how the code
   is arranged and why. `developing.md` says how to get a checkout working and what to run — it links
