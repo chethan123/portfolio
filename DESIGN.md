@@ -419,6 +419,11 @@ interface PriceProvider {
 }
 ```
 
+Two implementations answer to this interface today, and only one of them imports the library at
+all: inside the separate `worker` container (§10.1), reached through `server/yahoo-client.ts`. The
+app's own implementation dials the worker's unix socket instead and never touches `yahoo-finance2`
+directly — the split spec 0018 made, argued in §10.1 and [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
+
 Chosen after comparing alternatives against the requirement that actually discriminates them —
 **mutual fund NAV coverage**, since 401k and IRA accounts are overwhelmingly mutual funds:
 
@@ -474,6 +479,16 @@ it anything may compute from. A sibling `price_poll` records each refresh attemp
 the log can be told apart from a server that was not running. The storage that buys — roughly half a
 gigabyte a year at a hundred instruments and the seeded fifteen-minute cadence — is stated at
 Settings → Prices, where the dial is.
+
+**Every one of those three writes now begins life on the other side of a socket.** The refresh that
+fills them reaches `yahoo-finance2` through a unix socket in a volume the app and a separate `worker`
+container share (§10.1, [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)):
+the app sends a request, the worker sends back exactly what the library returned, and neither side
+keeps anything of it once the answer has crossed — no queue, no job row, nothing the socket itself
+remembers between one call and the next. The worker holds no rule about what to fetch or what a
+price means: the currency guard above, and every check that decides whether a fetched number is
+trustworthy enough to write, run here, in the app, after the answer is already back across the wire
+— never in the process that went and fetched it.
 
 An intraday refresh can never corrupt history, and a missed day is a visible gap rather than a wrong
 close — a gap the next backfill of that instrument fills as a side effect, since a hole is never a
@@ -825,7 +840,7 @@ routing here, so it is not needed.
 | **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removed the blocker the PWA slice (§11) faced — the instance installs at `PUBLIC_ORIGIN` and nowhere else. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
 | **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
 | **Lock** | **A second boundary, inside the app.** Once the household enrols a passkey, the app's own root middleware refuses every screen to a browser holding no live grant until a WebAuthn assertion checks out (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`). Distinct from Auth above it: the gate decides which *person* may reach this instance; the lock decides which *browser* may read it once admitted. |
-| **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
+| **Job scheduler** | In-process, inside the app container — the timer and cadence, not the fetch. One process to deploy, one place to read logs; a restart mid-session misses a poll until the next tick, acceptable at 15-minute granularity. The *fetch* itself now runs in a separate `worker` container reached over a unix socket (§10.1): the trade flipped because security was never an input when this row was first decided, and once it was the deciding one, the process resolving Yahoo's hostname could no longer be the same process holding every account, holding and position (spec 0018 §2.4). |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
 | **Timezone** | UTC everywhere in the database. `America/New_York` for market-hours logic, and for any timestamp naming a market instant — the "as of" caption renders in market time with its abbreviation, because these pages are server-rendered and have no browser clock to ask (spec `pricing/06`, which supersedes §6's story 8). Browser-local for everything else. |
 | **Backups** | Documented `pg_dump` procedure. Not built in — self-hosters have their own, and a half-built backup feature is worse than none. |
@@ -885,12 +900,43 @@ db      postgres:17-alpine
         · healthcheck: pg_isready
         · not published to the host — the app reaches it on the compose network
 
+dump    postgres:17-alpine — the same image db uses, because pg_dump must
+        match the server it dumps
+        · runs scripts/dump-loop.sh, never the app image
+        · nightly pg_dump into ./volumes/dumps, pruned and verified end to
+          end before it is left there (ADR-0009)
+        · not published to the host, and no egress of its own
+        · restart: on-failure
+        · healthcheck: the age of the newest dump file
+
 app     ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
         · pulled on every up; no build stanza in the deployment file
         · depends_on: db (condition: service_healthy)
         · not published to the host — caddy reaches it on the compose network
+        · mounts price-worker-sock read-only, to dial the worker's socket —
+          the only volume besides db-store this deployment names
         · restart: unless-stopped
         · healthcheck: GET /healthz
+
+worker  ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1} — the same image
+        as app, its CMD replaced
+        · entrypoint: node ./server/price-worker.ts
+        · no depends_on — nothing to wait for but the socket volume itself
+        · mounts price-worker-sock read-write, where it creates the socket
+          file app dials
+        · no ports — no TCP listener; the socket is the whole interface
+        · restart: unless-stopped
+        · healthcheck: GET /healthz over the socket, run as the container's
+          own uid
+
+egress-proxy  ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1} — the same
+        image again, CMD replaced a third way
+        · entrypoint: node ./server/egress-proxy.ts
+        · worker's only route to the internet — a CONNECT-only forward proxy
+          admitting the five Yahoo hosts the price library calls
+        · not published to the host; reachable only from worker
+        · restart: unless-stopped
+        · healthcheck: GET /healthz on its own :8888
 
 gate    oauth2-proxy, pinned to an exact release
         · the forward-auth sidecar caddy asks about every request
@@ -909,19 +955,28 @@ caddy   caddy:2-alpine
 ```
 
 **Every service is stripped to what it was proved to need**, and it is one decision rather than
-four: every Linux capability dropped, `no-new-privileges`, a read-only root filesystem with a tmpfs
-over whatever each still writes, and an unprivileged uid everywhere but `gate`. `gate` stays root
-because pinning a uid there would silently decide the mode of the operator's allowlist file; it is
-bounded instead to the one capability root is being kept for, `DAC_READ_SEARCH`. The only other
-survivor is `NET_BIND_SERVICE` on `caddy`, which the image's binary needs in order to `exec` at all.
-None of this changes how the stack behaves once it is up.
+seven: every Linux capability dropped, `no-new-privileges`, and a read-only root filesystem with a
+tmpfs over whatever each still writes, on `db`, `dump`, `app`, `worker`, `egress-proxy`, `gate` and
+`caddy` alike. Six of the seven also run an unprivileged uid — `worker` and `egress-proxy` the
+image's own `node` user, same as `app`; `dump` the operator's own account, because the directory it
+writes to is theirs. Only `gate` stays root, because pinning a uid there would silently decide the
+mode of the operator's allowlist file; it is bounded instead to the one capability root is being kept
+for, `DAC_READ_SEARCH`. The only other survivor is `NET_BIND_SERVICE` on `caddy`, which the image's
+binary needs in order to `exec` at all. None of this changes how the stack behaves once it is up.
 
-The in-process scheduler (§10) is why there is no separate worker service. A worker container would
-mean two images, two deployments, and two places to read logs, to save a missed poll on restart.
-`caddy` is a different kind of service — the ingress front door, not application logic — and is the
-only container reachable from outside the compose network. `gate` is there because that front door
-is where sign-in has to be decided: every path to the app runs through it, including a device on the
-LAN dialling this box's published port directly, which is the threat the gate exists for.
+Three of the seven services share one image now, where every service used to run its own: `app`,
+`worker` and `egress-proxy` all pull the same published image, told apart only by `CMD`. It is the
+same trade the Job scheduler row above states, taken for the same reason (spec 0018 §2.4).
+`worker` gets no database credential and shares no network with `db`, `app` or `gate`; `egress-proxy`
+is the fence between it and the internet, and neither container can reach the other's neighbours.
+[ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md) records
+the decision, and the alternative it was taken over — **the mailbox**, a Postgres table through
+which the worker would have claimed and answered a request under a minimal role of its own. `caddy`
+is a different kind of service again — the ingress front door, not
+application logic — and is the only container reachable from outside the compose network. `gate` is
+there because that front door is where sign-in has to be decided: every path to the app runs through
+it, including a device on the LAN dialling this box's published port directly, which is the threat
+the gate exists for.
 
 **Dockerfile — multi-stage:**
 
@@ -949,26 +1004,34 @@ Migrations must be idempotent so a restart is always safe.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | yes | — | Postgres connection string |
+| `POSTGRES_PASSWORD` | yes | — | The bundled Postgres's password — the requirement `DATABASE_URL` below used to carry, moved here instead. `db` reads it by this name; `app` and `dump` never see it, but read the same value as `PGPASSWORD` — the name the Postgres driver itself consults — so a password no longer has to live inside a connection string at all |
+| `DATABASE_URL` | no | `postgres://portfolio@db:5432/portfolio` | Postgres connection string, carrying no password of its own now that one is above. Compose supplies this default, pointed at the bundled `db`; set it yourself only to run against a Postgres this project does not own |
 | `PUBLIC_ORIGIN` | yes | — | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. Also read by the `gate` service — see below |
 | `AUTH_GATE` | no | `none` | Whether something in front of the app authenticates: `external` or `none`. It guards nothing — it only decides whether the warning banner (§10) is drawn, so that the app neither cries wolf behind the gate nor stays quiet without one. Compose sets `external`, because in that file it is a fact |
 | `PORT` | no | `3000` | HTTP listen port |
 | `MAX_UPLOAD_MB` | no | `10` | Largest statement upload accepted, in whole MB |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation, and the trading day a quote's close is filed under |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
+| `PRICE_WORKER_SOCKET` | no | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only** — Compose sets it for neither service, so both meet at this same fixed path inside the shared `price-worker-sock` volume (§10.1); set it yourself only for a checkout running the worker outside Compose |
 
 **The rest of the gate's settings are not in that table, because the app reads none of the rest.**
 `PUBLIC_ORIGIN` moved into the table above for exactly that reason: unlike its neighbours, the app
 now derives the lock's WebAuthn relying-party id from it
 (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) — another variable shared with the
 sidecar, though not its first: `TZ`, above, already reaches both `app` and `gate` (`compose.yaml`),
-validated and used by each. Its Google client and its cookie secret genuinely are the gate's alone —
+validated and used by each. `POSTGRES_PASSWORD` earns its row for the opposite reason: `server/
+config.ts` validates no variable by that name — nothing the app runs ever asks for it — but `db`
+fails to start without it, and its value still reaches `app` and `dump`, arriving there as
+`PGPASSWORD` rather than under the name the operator set. Its Google client and its cookie secret
+genuinely are the gate's alone —
 Compose-level variables consumed only by the `gate` service, with no default, and a missing one
-stops `up` the same way a missing `PUBLIC_ORIGIN` does. Who may enter is not a variable at all: a
-file of addresses beside the Compose file, one per line, because it is a list that grows rather
-than a value that changes. `.env.example`'s gate section is the operator-facing recipe for those two
-and the allowlist; `PUBLIC_ORIGIN`'s own recipe sits beside `DATABASE_URL`'s now, in the section
-above it.
+stops `up` the same way a missing `PUBLIC_ORIGIN` or `POSTGRES_PASSWORD` does. Who may enter is not a
+variable at all: a file of addresses beside the Compose file, one per line, because it is a list that
+grows rather than a value that changes. `.env.example`'s gate section is the operator-facing recipe
+for those two and the allowlist, sitting between `PUBLIC_ORIGIN`'s own required section above it and
+`POSTGRES_PASSWORD`'s required section below — `DATABASE_URL`'s recipe moved further down still, into
+its own optional section, now that setting it at all means overriding Compose's default rather than
+supplying a missing value.
 
 **The household's settings are deliberately not in that table.** Environment variables remain the
 whole of what an *operator* configures — everything validated at startup, everything that needs a
@@ -979,10 +1042,14 @@ under Settings (§8.4). There is no `CAPITAL_GAINS_RATE` variable and there is n
 answer from. (An upgrade that still sets the old variable is ignored without error; the cadence is
 re-entered once at Settings → Prices.)
 
-**Volumes.** One store for Postgres data: `./volumes/db/data`, beside the Compose file, reached
-through a `db-store` volume name the local driver binds to that path — a directory the operator can
-see and move, with the ownership a volume brings (§10.1). The application container is otherwise
-**stateless** — it writes nothing to its own filesystem, so it can be destroyed and recreated
+**Volumes.** Two named volumes now, not one. `db-store` is the store for Postgres data:
+`./volumes/db/data`, beside the Compose file, reached through the volume name the local driver binds
+to that path — a directory the operator can see and move, with the ownership a volume brings (§10.1).
+`price-worker-sock` is new, and different in kind: a tmpfs, not a directory on the host
+(`size=1m,uid=1000,gid=1000,mode=0770`), holding nothing but the socket file `worker` creates at
+start and unlinks at `SIGTERM` — nothing in it is meant to survive a restart, still less a backup.
+The application container is otherwise **stateless** — its own mount of that second volume is
+read-only, so it still writes nothing to its own filesystem and can be destroyed and recreated
 freely, and backups have exactly one target (§10, `pg_dump`). Uploaded CSVs are retained in
 Postgres rather than on disk (§5.2) specifically to preserve this property.
 
@@ -1507,3 +1574,48 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     **the lock is only as strong as whatever unlocks the passkey provider on that device**
     ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) states all three as
     properties of the web platform, not of this implementation).
+17. **A compromised worker can poison a price, and nothing downstream can check it against a second
+    source.** What crosses the socket (§6.2) is checked for shape only — a ceiling on the price
+    itself, a window on how recent a quote's date may be, a floor on how far back a backfilled close
+    may reach — never for truth, so a hostile symbol still prices the wrong instrument and a hostile
+    answer can rewrite the stocks-versus-funds split a screen reads by. Bounding the price does not
+    bound `quantity × price`; a large enough holding still overflows the column the ceiling was meant
+    to protect, caught instead by a write-time guard on the quantity side. Closing the unverifiable
+    half means a second provider to check the first against, the redundancy §6.1 declined to build
+    for one household's worth of load.
+18. **The shared socket volume is only half fenced.** `app` mounts `price-worker-sock` read-only, so
+    nothing it does — compromised or not — can unlink the socket file, squat its path with a
+    directory, or exhaust the tmpfs's inodes (§10.1). `worker` still mounts it read-write, because it
+    is the side that has to create the socket in the first place, so a compromised worker can still
+    deny the refresh to itself and to its own next restart by doing exactly that. The recovery is
+    operational, not architectural — recreate the volume (`docs/runbook.md`) — because closing the
+    other half would mean the worker never writing to its own socket path, which is not a smaller
+    worker, just a different bug in the same place.
+19. **The app is still the superuser.** This slice narrowed what a compromised `app` can reach on the
+    network to nothing, but it changed no database grant: the role the app connects as can still do
+    anything a superuser can, on tables this design never asked it to touch. Moving it to a role
+    scoped to what the app actually needs is real work, opened by this slice and not done in it.
+20. **A legitimate symbol can be too long for the worker to accept.** The pattern the worker checks
+    binds at fifteen characters; the app's own rule on a stored symbol tolerates up to forty. A
+    symbol that uses the difference never refreshes — shown stale, with a log line naming it — and
+    the fix is narrowing where the longer bound is still needed, not widening the worker's pattern
+    back out toward the internet.
+21. **The app's last route out is an application-layer one, not closed.** Neither network `app` sits
+    on carries a default route, so it reaches nothing off them at IP level. It can still reach
+    `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which has egress of its own — so a
+    compromised app has a relay to Google, hop by hop, that no network rule denies it. Closing it
+    means the gate stops being reachable through the front door, which is what the front door is
+    for. Named rather than removed.
+22. **The worker's bounds hold only while the worker is honest.** Its rate cap, its batch sizes and
+    its one-call deadline are its own code, so they bound a compromised worker not at all; what
+    remains after that are the proxy's socket cap, its deadlines, and the five hosts it will open a
+    tunnel to. Both halves come from one npm tree and one image, so a supply-chain compromise
+    reaches both at once. Decorrelating the worker's dependencies from the app's is named as
+    follow-up work in `docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md`
+    and is not done.
+23. **Below Docker Engine 28 the isolation silently does not apply.** The networks that carry no
+    gateway rely on an option Engine 26 ignores without comment and Engine 27 refuses outright,
+    and `docker compose up` reports success either way. An instance can therefore run with the
+    topology this design describes and none of the isolation it depends on, with nothing in the
+    output saying so; `docs/operating.md`'s Installing section carries the version check that is
+    the only way to know.

@@ -48,11 +48,15 @@ Why: [Reverse proxy and TLS](operating.md#reverse-proxy-and-tls),
 
 ## `docker compose up` refuses to start anything
 
-**Confirm.** No container is created and the message names one variable or one file.
+**Confirm.** No container is created and the message names one variable or one file. This is not
+only `up`: `ps`, `logs` and `down` refuse identically, for the same reason, against the same broken
+`.env` — Compose interpolates every `${VAR:?}` before it can do anything at all, including list or
+tear down what is already running.
 
-- A `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET` or `PUBLIC_ORIGIN` named in the
-  refusal — it is unset or empty in `.env`. `docker compose config --quiet` reproduces this without
-  starting anything, and reports the first one it hits.
+- A `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET`, `PUBLIC_ORIGIN`,
+  `POSTGRES_PASSWORD`, `DUMP_UID` or `DUMP_GID` named in the refusal — it is unset or empty in
+  `.env`. `docker compose config --quiet` reproduces this without starting anything, and reports the
+  first one it hits.
 - A bind-mount complaint naming `./allowed-emails.txt` — the file is not there. This one surfaces at
   `up`, not at `config`.
 
@@ -281,6 +285,7 @@ Rule out these before suspecting the provider.
 **Confirm.**
 
 ```sh
+docker compose ps                                    # app, worker and egress-proxy — all healthy?
 docker compose logs --tail=500 app | grep "Price refresh"
 ```
 
@@ -302,27 +307,91 @@ ordinary. So:
   docker compose logs --tail=500 app | grep -i "Price poller did not start"
   ```
 
-- **The provider is unreachable, or `worker` is.** Grep for the stem `Price provider failed`, or for
-  `Price refresh` lines reporting stale instruments. Last-known prices are kept and marked stale —
-  never zeroed — and `/healthz` deliberately stays `200`, because a third-party outage must not make
-  Compose restart a healthy app. `app` has no egress of its own by construction — every fetch
-  crosses the shared socket to `worker` instead — so this stem now covers a dead, restarting or
-  never-started `worker` too, and reads `no worker listening at /run/price-worker/worker.sock
-  (ENOENT)` for that case rather than naming a provider. Check `docker compose ps` for `worker`
-  before anything else, and [the worker's own healthcheck](operating.md#the-workers-own-healthcheck)
-  for what its states mean: giving `app` a network back does not fix a dead worker, and undoes this
-  release's isolation for nothing.
+- **The provider is unreachable, or `worker` or `egress-proxy` is.** Grep for the stem
+  `Price provider failed`, or for `Price refresh` lines reporting stale instruments. Last-known
+  prices are kept and marked stale — never zeroed — and `/healthz` deliberately stays `200`, because
+  a third-party outage must not make Compose restart a healthy app. `app` has no egress of its own
+  by construction — every fetch crosses the shared socket to `worker`, which in turn reaches Yahoo
+  only through `egress-proxy` — so this one stem now covers four different faults, told apart by the
+  text it carries and by `docker compose ps`:
+
+  - **`no worker listening at /run/price-worker/worker.sock (ENOENT)`** — `worker` is dead,
+    restarting, or was never started; `docker compose ps` shows it unhealthy, restarting, or missing
+    outright. `(ECONNREFUSED)` in its place names a stale socket file with nothing behind it,
+    `(EACCES)` a permission slip.
+  - **`fetch failed`, with `connect ECONNREFUSED <address>` or `getaddrinfo ENOTFOUND egress-proxy`
+    as its cause** — `worker` is up but `egress-proxy` is not: stopped answering, or never started.
+    `docker compose ps egress-proxy` is not `healthy`, or `docker compose ps` shows six rows where
+    seven belong.
+  - **`fetch failed`, whose cause names a proxy response with a status** — grep `Proxy response`;
+    the status in it is the discriminator, `502` for a far side that could not be reached and `504`
+    for one that ran past a deadline. Both `worker` and `egress-proxy` are healthy, and Yahoo or the
+    resolver behind the proxy is down. Nothing to restart; wait it out.
+  - **`fetch failed`, whose cause is a socket disconnecting before TLS was established** — no status
+    at all, which is the tell: an SNI teardown. The host answered, but under a name `egress-proxy`
+    refuses to forward, so the proxy tore the tunnel down mid-handshake rather than answering. Both
+    containers stay healthy throughout, and this one is a code fix (the allowlist's host list), not
+    an operator's — see [Security](operating.md#security).
+
+  The exact wording of those last two comes from Node and its HTTP client rather than from this
+  project, so match on the shapes above — a status, or the absence of one — rather than on a
+  sentence a dependency upgrade can reword without failing anything here.
+
+  Check `docker compose ps` for all three — `app`, `worker` and `egress-proxy` — before anything
+  else, and [the worker's own healthcheck](operating.md#the-workers-own-healthcheck) for what its
+  states mean: giving `app` a network back does not fix a dead worker or a dead proxy, and undoes
+  this release's isolation for nothing.
 
 **Do.** Press **Refresh now** on any figure screen first — it spends a provider request
 immediately, works outside market hours, and needs no restart. The line it prints under the button
 is the confirmation: how many prices it fetched, or that there was nothing new. (With JavaScript
-off there is no line — the page simply reloads, and the stamp is all there is.) The as-of stamp
-alone is not a verdict: it is the *oldest* fetched quote, so a press that worked can leave it
-still, and outside market hours it usually will. Beyond that, nothing destructive is ever
-warranted here: `docker compose restart app` is the remaining action, and it needs a page render
-afterwards to start the loop again.
+off there is no line — the page simply reloads, and the stamp is all there is.) With JavaScript off
+against an alive-but-slow worker, that reload can itself block for a while: up to
+`⌈feed instruments / 100⌉ × 15 s + 5 × 35 s` — 190 s for up to a hundred feed instruments, more
+above it — and a house proxy that cuts an idle request at 60 s shows its own `502` or `504` while
+the refresh keeps running behind it regardless. Reload the page rather than pressing the button
+again. The as-of stamp alone is not a verdict: it is the *oldest* fetched quote, so a press that
+worked can leave it still, and outside market hours it usually will. Beyond that, nothing
+destructive is ever warranted here: `docker compose restart app` is the remaining action, and it
+needs a page render afterwards to start the loop again.
 
 Why: [Monitoring](operating.md#monitoring).
+
+---
+
+## `worker` is restarting with `EADDRINUSE`, `ENOSPC` or `EISDIR` at `/run/price-worker/worker.sock`
+
+**Confirm.**
+
+```sh
+docker compose ps worker
+docker compose logs --tail=50 worker | grep "Price worker:"
+```
+
+`worker` cycling through `Restarting` in `docker compose ps` rather than settling into `healthy`,
+and its log filling with repeated lines at the stem `Price worker:`, each naming one of those three
+codes against `/run/price-worker/worker.sock`. The worker exits before it ever holds the socket —
+`Price worker listening on …` never appears — so `restart: unless-stopped` puts it straight back
+into the same failure; restarting `worker` on its own does not end this.
+
+**Do.** The shared volume itself is polluted — a directory squatting the socket's path, or its
+inodes spent — never something a container restart clears. Stop and remove *both* containers that
+mount it, drop the volume, then bring the stack back:
+
+```sh
+docker compose rm -sf app worker
+docker volume rm portfolio_price-worker-sock
+docker compose up -d
+```
+
+`rm -sf` stops them first: a stopped container still references the volume, and `docker volume rm`
+refuses one still in use. `app` mounts the same volume too (read-only, for the same socket), which
+is why it has to come down along with `worker`, not `worker` alone. Nothing else is touched: this
+volume holds one socket file and nothing durable, and neither the cluster nor the dumps are in it —
+both live at paths in the checkout, under `./volumes/`, whatever happens to a volume *name*.
+
+Why: [The worker's own healthcheck](operating.md#the-workers-own-healthcheck),
+[Upgrading](operating.md#upgrading).
 
 ---
 
@@ -340,7 +409,9 @@ attempt to fill it came to. An empty list means this is not your problem.
 
 - **Nothing yet, or a recent `filled`.** Wait. A refresh fills a few instruments at a time, so a
   household that has just loaded years of statements works through them over a handful of refreshes.
-  Pressing **Refresh now** spends one immediately.
+  Pressing **Refresh now** spends one immediately. (With JavaScript off against a slow worker that
+  press can block for a while — see [Prices have stopped
+  updating](#prices-have-stopped-updating) above.)
 - **`no_history`.** Nothing to do. The feed has no history for that ticker and will keep answering
   so, at one request a day.
 - **`non_usd`.** Nothing to do here; the instrument should not have been created against that
@@ -689,7 +760,8 @@ The procedure is in [Restoring](operating.md#restoring). Run it from there rathe
 this entry lists only what people get wrong.
 
 - **Stop `app` first.** The in-process price poller holds a connection, and `dropdb` fails while it
-  does.
+  does. `worker` may keep running — it holds no database connection of its own, and nothing about
+  the restore reaches it, so there is no `stop worker` line to add.
 - **Keep `--exit-on-error --single-transaction` on `pg_restore`.** Without both, it continues past
   failures and leaves a half-old, half-new schema, which is the thing the restore is avoiding.
 - **The site answers `502` for the whole window.** `caddy` stays up and retries its upstream. That

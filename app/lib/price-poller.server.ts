@@ -99,7 +99,7 @@ function logBackfill(report: BackfillReport): void {
 
   const summary =
     `Price backfill: ${report.attempted} attempted, ${report.written} closes written, ` +
-    `${failed} failed.${report.batchFailed ? " The batch itself failed; see the error above." : ""}`;
+    `${failed} failed.${report.batchFailed ? " The batch itself failed; see the line above." : ""}`;
 
   if (failed > 0 || report.batchFailed) console.warn(summary);
   else console.info(summary);

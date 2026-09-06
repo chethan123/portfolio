@@ -8,7 +8,9 @@ provider outage leaves a gap that carry-forward covers, and no job goes back to 
 the first and narrowing the second. Whenever an instrument's position history reaches back behind
 its spine, the running system fetches that instrument's daily history from the feed and inserts
 every trading day the spine does not already hold. It never replaces a row it recorded itself. This
-ADR is numbered 0011 because 0010 is reserved by spec 0015's header for an ADR not yet written.
+ADR is numbered 0011 because 0010 was already spoken for by spec 0015's header, against an ADR that
+had not been written yet. It has been since:
+[0010](0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
 
 **Superseded in part** by [0018](../specs/0018-price-worker.md): "spec 0015" here — in the
 paragraph above, under "In-process", under "Mailbox-shaped, for the worker" and in "The outbound
