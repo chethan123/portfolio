@@ -18,6 +18,85 @@ story, not rewritten.
 
 **Status:** ready-for-agent
 
+**Corrected — the citations, and the checklist that is shorter than the ticket's own sentence.**
+
+Eight releases landed between this ticket being written and being built, and every citation in
+it was accurate at `1058d64`, its own last edit. Citations into the top of a file still land:
+`CONTEXT.md`'s three are exact, so are `docs/operating.md`'s first four and
+`docs/runbook.md:49`. Everything deeper has drifted — `docs/operating.md` grew from 1,143 lines
+to 1,727 and its Upgrading section moved 361 lines. Every number in the right-hand column below
+was re-read on the tree this was built from.
+
+Two things matter more than the numbers.
+
+**The checklist is narrower than the paragraph above it.** "What to build" says *every* document
+that says prices are fetched in-process, **that there is no worker container**, or that
+`DATABASE_URL` carries a password. The checklist then never reaches the three places that say it
+in so many words — `ARCHITECTURE.md` §3.1's "**No worker container.**" bullet (`:162-164`),
+§11.2's roads-not-taken row (`:2012`), and
+[ADR-0009](../../adr/0009-the-stack-takes-dumps-not-backups.md) `:34-36`, which names all three
+of them. Those are in scope by the ticket's own sentence; the list simply under-enumerates. The
+same is true of the counts: an item that corrects "All four drop every Linux capability" cannot
+leave "**All four containers are `read_only: true`**" (`ARCHITECTURE.md:180`) standing two
+sections away.
+
+**Half of the operating guide is already written.** Tickets 05 to 08 landed the Engine and
+Compose floors and their checks, `compose.external-db.yaml`, the `PRICE_WORKER_SOCKET` row
+marked development-only, the `Egress proxy` and `Price worker` log stems, the worker's
+healthcheck section, and the Upgrading rules. Those items are re-reads, not writes. Read as
+written this ticket over-scopes `docs/operating.md` and under-scopes `ARCHITECTURE.md`.
+
+| Written as | Actually at | What is really there |
+|---|---|---|
+| `DESIGN.md:826` | `:828` | the Job scheduler row; a **Lock** row was inserted above it |
+| `DESIGN.md:874-903` | `:882-909` | the services fence, still four services |
+| `DESIGN.md:905-911` | `:911-917` | the hardening paragraph, still "one decision rather than four" |
+| `DESIGN.md:913-918` | `:919-924` | the "no separate worker service" paragraph |
+| `DESIGN.md:944-951` | `:950-958` | the environment table; `PUBLIC_ORIGIN` was inserted into it |
+| `DESIGN.md:416-419` | unchanged | correct — but it is the `PriceProvider` fence, so a sentence goes at `:421`, not inside it |
+| `ARCHITECTURE.md:92-100` | `:92-102` | correct; the diagram edge is `:86`, the trust-boundary row `:113` |
+| `ARCHITECTURE.md:337-339` | `:345`, `:346`, `:347` | pool, `yahoo-finance2` import, price write |
+| `ARCHITECTURE.md:345` (env reader) | `:355` | `:345` is now the pool row |
+| `ARCHITECTURE.md:1474` (§7.2) | `:1518` | `:1474` is mid-sentence in §6.4 |
+| `ARCHITECTURE.md:1519` (§7.4) | `:1566` | `:1519` is a blank line in §7.2 |
+| `ARCHITECTURE.md:1539` (§7.5) | `:1587` | and its diagram draws a function that no longer exists |
+| `ARCHITECTURE.md:1581` (§7.6) | `:1634` | |
+| `ARCHITECTURE.md:1631` (§7.7) | `:1684` | **wrong section** — §7.7 is the PWA shell, where "worker" means *service* worker. "One image, three entrypoints" belongs in §8.1 (`:1709`) |
+| `docs/operating.md:184-197` | `:228-254` | Running against your own Postgres |
+| `docs/operating.md:206` | `:263` | already reworded to six services — and omits `egress-proxy` |
+| `docs/operating.md:238` | `:317` | Environment variables |
+| `docs/operating.md:485` | `:609` | `## Security`; the egress subsection is `:735` |
+| `docs/operating.md:710` | `:999`, `:1006` | restart policy, then the worker's own healthcheck |
+| `docs/operating.md:717` | `:1035` | `### Logs` |
+| `docs/operating.md:738` | `:1058-1092` | the `Price provider failed` bullet — carrying **four** shapes, not three |
+| `docs/operating.md:761` | `:1115` | the four causes, unchanged and still true |
+| `docs/operating.md:870` / `:894` | `:1231` / `:1254-1256` | Restoring, and the reason `stop app` is enough |
+| `docs/operating.md:906` / `:931-941` | `:1267` / `:1292-1306` | the drill, and rebuilding from nothing |
+| `docs/operating.md:949` | `:1310` | `## Upgrading` |
+| `docs/runbook.md:270` | `:277` | Prices have stopped updating |
+| `docs/runbook.md:525` | `:611` | I changed the database password |
+| `docs/runbook.md:553` | `:686` | I need to restore |
+| `docs/developing.md:331` | `:334` | `## Recipes`; the `.env.worker` recipe is `:394-419` |
+| `docs/developing.md:435` | `:465` | Verify the split convention |
+| `docs/developing.md:564-571` | `:595-612` | the `.env`-is-read-by bullets |
+| `README.md:592-600` | `:617-627` | Where prices come from; the two false sentences are `:619-620` and `:626-627` |
+| `README.md:458` | `:464-485` | the mermaid block; the `app -.-> yahoo` edge is `:484` |
+| `app/lib/price-poller.server.ts:174` | `:175` | `:174` is the first half of the same template literal |
+
+**And three of its instructions are already carried out, or cannot be.** `ARCHITECTURE.md`'s
+§4.2 import row already names `server/yahoo-client.ts:121`; Appendix A already lists four of the
+six modules it says to add, leaving only `provider-socket.server.ts` and `egress-proxy.ts`
+genuinely missing — though two of the rows that *are* there still say "**Nothing calls it yet**"
+(`:2067`) and "until ticket 06" (`:2069`). **PR #220 is merged**, so "if still open, is
+re-pointed" is a condition that cannot be met; its content is in the tree and already cites
+0018, and what it cannot yet cite is ADR-0010. `docs/specs/README.md:46` cites ADR-0010 too — a
+dangling reference standing in the tree until this ticket writes it.
+
+Finally, **"rewrite nothing else in them" cannot survive this ticket's own ADR**:
+[ADR-0011](../../adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md) `:11` says 0010 is
+"reserved by spec 0015's header for an ADR not yet written". Writing it falsifies that clause,
+and only that clause.
+
 **`DESIGN.md`, `ARCHITECTURE.md`**
 
 - [ ] DESIGN §10's **Job scheduler** row (`:826`): the scheduler stays in-process and the fetch
