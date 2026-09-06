@@ -205,6 +205,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   startPricePoller();
 
   const url = new URL(request.url);
+  // Skipped deliberately, not just for shape: this is the one request an un-granted browser can hammer.
   if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;
 
   let firstRun: FirstRunStep = null;

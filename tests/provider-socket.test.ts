@@ -167,7 +167,8 @@ describe("socketProvider().getDailyCloses", () => {
 
 describe("ask", () => {
   it("keeps the history budget past the worker's own Yahoo watchdog", async () => {
-    // 30_000 here is Yahoo's own fetch timeout default (yahoo-client.ts:135), not PRODUCTION_TIMEOUTS.timeout — a different, coincidentally-equal 35s
+    // 30_000 is Yahoo's own fetch timeout default (createYahooClient's `timeoutMs`), not
+    // PRODUCTION_TIMEOUTS.timeout — a different 35s that only coincidentally equals BUDGET_MS.history today
     await start({ quote: async () => [], chart: async () => ({}) });
 
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");

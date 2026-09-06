@@ -52,8 +52,8 @@ function partsIn(instant: Date, timeZone: string): Record<string, string> {
 }
 
 /**
- * Trading date in the market's own zone; pass `regularMarketTime`, not now. A quote stamped after
- * 19:00 New York is already tomorrow in UTC, which files an evening NAV under tomorrow's date.
+ * Trading date in the market's own zone; pass `regularMarketTime`, not now. A naive UTC date breaks
+ * here: a quote stamped after 19:00 New York is already tomorrow in UTC, filing an evening NAV a day late.
  */
 export function marketDateOf(instant: Date, timeZone: string): IsoDate {
   const parts = partsIn(instant, timeZone);

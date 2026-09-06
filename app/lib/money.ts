@@ -9,7 +9,7 @@ export const MONEY_SCALE = 4;
 // numeric(20, 8), the scale holding.quantity is stored at (§4.1).
 export const QUANTITY_SCALE = 8;
 
-// 0.0001%: finer than any screen renders, so a portfolio's shares still sum to 1.000000.
+// 0.0001% — finer than any screen renders, and wide enough that positive shares sum to 1.000000.
 export const SHARE_SCALE = 6;
 
 const FIVE = "5".charCodeAt(0);
@@ -80,7 +80,7 @@ const ABSENT = new Set(["", "-", "--", "—", "n/a"]);
 // string, absence, or unparseable (§5.3, spec 0004) — never through a JS number.
 // Thousands separators accepted only where they genuinely group by 3; ambiguous
 // forms like "1.234,56" (European) are refused rather than misread. Parens = negative,
-// trailing % kept unscaled, U+2212 read as hyphen.
+// a trailing % is stripped and the value left unscaled, U+2212 read as hyphen.
 export function normaliseFigure(cell: string): NormalisedFigure {
   const trimmed = cell.trim().replace(/−/g, "-");
 
