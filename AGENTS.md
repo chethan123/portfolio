@@ -67,6 +67,12 @@ parsing edges, and a reproducing case for every bug fixed. Leave alone the tests
 framework behaviour, restate the implementation line by line, or mock so heavily they only
 exercise the mock. Fewer, sharper tests.
 
+**Comments.** A comment is earned: delete it; if nothing is lost, it stays deleted. What survives
+says what the code cannot — a constraint, a library quirk, an `ADR-0008` pointer; cite an argument
+and the citation is the whole comment. A module earns a header naming the risk it exists for, a
+util none. Then cut the survivors again: fragments over sentences, plain words, grammar sacrificed
+to brevity.
+
 **Docs.** Check a library's current docs before using it, rather than recalling — this stack moves
 (React Router 7, React 19, Kysely, Zod 4, Vitest 4, Node 24). Say which version you checked when
 it drives the decision.
