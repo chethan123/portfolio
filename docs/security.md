@@ -4,7 +4,8 @@
 Yodlee, and no password to a financial institution anywhere in it. It learns what you hold because
 you upload a statement you downloaded yourself, or type a balance in. That is the whole of the
 ingest path, and it is why the rest of this page can be short. The only secrets the box keeps are
-its own: the database password and the two values the Google sign-in gate needs, in `.env`.
+its own: the database password and the gate's two Google secrets, in `.env`, plus the unlock grants
+in its own database (§3). No credential to anything of yours is among them.
 
 You are weighing this against a hosted aggregator that does hold those logins. This page covers what
 leaves your box, what defends what, and what is not defended.
@@ -49,14 +50,16 @@ graph TB
   Settings → Prices. Once anyone has loaded a page since the last restart, that timer runs whether
   or not anyone is still looking. Its own ticks skip the quote fetch outside market hours, but
   pressing Refresh now or committing an upload fetches at any hour, and any tick may fill in missing
-  daily history. Yahoo never learns how many shares, or what they are worth to you; it does learn,
-  per ticker, the earliest date you need a price for.
+  daily history — a few instruments per tick, and only ones missing prices. Yahoo never learns how
+  many shares, or what they are worth to you. It does learn, for a ticker whose history is being
+  filled, a date a week before the earliest you have held it.
 - **Nothing else.** No analytics, no error reporting, no CDN, no third-party script of any kind in
   the page — and no web font from anyone else's server: the one typeface is a file this box serves
   itself. The service worker stores nothing on the device, so there is no cached copy of your
   figures on the phone either.
-- **A deploy adds the image registries** — `ghcr.io`, Docker Hub, `quay.io` — which learn when you
-  upgrade, and nothing else.
+- **Starting the stack contacts the image registries** — `ghcr.io`, Docker Hub, `quay.io`. The app's
+  three containers are set to pull on every `docker compose up`, so those registries learn when you
+  deploy, and nothing else.
 
 ## 2. If something goes wrong
 
@@ -179,14 +182,13 @@ graph TB
 - **TLS is not in this stack.** The bundled Caddy serves plain HTTP; the certificate and public
   hostname are your proxy's job. That is also why the gate is enforced *here* rather than upstairs: a
   LAN device can dial this box directly, and that device is the threat the gate exists for.
-- **Privilege is dropped, with the exceptions named.** `app`, `worker`, `egress-proxy`, `db` and
-  `dump` run non-root and read-only with `cap_drop: ALL` and `no-new-privileges`. The other two are
-  exceptions:
-  `caddy` keeps `NET_BIND_SERVICE` because the image's binary will not start without it, and `gate` —
-  the container that faces Google — **runs as root** with `DAC_READ_SEARCH`, because the published
-  image sets no user and the allowlist file's mode is yours. Both are still read-only. An automated
-  test in CI reads these settings back out of the running containers rather than trusting the file,
-  and probes the worker for the others by name and by every container address.
+- **Privilege is dropped, with the exceptions named.** All seven containers run read-only with
+  `no-new-privileges` and every Linux capability dropped. Two hold one capability back: `caddy` keeps
+  `NET_BIND_SERVICE`, without which the image's binary will not start, and `gate` keeps
+  `DAC_READ_SEARCH` so it can open your allowlist file whatever its mode. And one runs as root —
+  `gate`, the container that faces Google, because the published image sets no user. An automated
+  test in CI reads all seven postures back out of the running containers rather than trusting the
+  file, and probes the worker for the others by name and by every container address.
 
 ### The two ways the no-egress claim is not absolute
 
