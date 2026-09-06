@@ -659,9 +659,10 @@ printf 'worker: %s\n' "$mounts_line"
 # `postgres:17-alpine` image as `db` (both `image: *postgres-image`), so the
 # same three commands against a third service cost nothing extra to run.
 # `worker` joins them as of ticket 08: `worker-proxy` is internal too now, so
-# the worker has no default route either, and this loop's `/proc/net/route`
-# check is a stronger proof of that than the standalone `nslookup` check
-# below — free, since the loop already exists.
+# the worker has no default route either, and this loop proves it twice over —
+# the DNS probe below and `/proc/net/route`, the second being the stronger of
+# the two since a resolver can be absent for reasons other than the topology.
+# Free, since the loop already exists.
 log "Checking app, db, dump and worker have no route out"
 
 # `db` and `dump` share an image with no node, so their request is busybox's

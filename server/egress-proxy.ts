@@ -188,19 +188,29 @@ function isIpLiteral(host: string): boolean {
  * for `family: 4` alone (module header, step 2).
  */
 function isPrivateAddress(address: string): boolean {
+  // An IPv4-mapped IPv6 answer is the same address wearing a different
+  // notation, and the checks below would miss every one of them, so it is
+  // unwrapped before any of them run rather than duplicated into each.
+  const bare = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address)?.[1] ?? address;
+
   if (
-    address === "127.0.0.1" ||
-    address === "::1" ||
-    address.startsWith("127.") ||
-    address.startsWith("10.") ||
-    address.startsWith("169.254.") ||
-    address.startsWith("192.168.")
+    bare === "127.0.0.1" ||
+    bare === "::1" ||
+    bare.startsWith("127.") ||
+    bare.startsWith("10.") ||
+    bare.startsWith("169.254.") ||
+    bare.startsWith("192.168.") ||
+    // 0.0.0.0/8. Not a host address at all, but `connect(2)` treats `0.0.0.0`
+    // as "this host" and lands on loopback — measured. It is also what a
+    // blackholing LAN resolver answers with by default, which is ADR-0005's
+    // adversary arriving by the one route this guard exists to close.
+    bare.startsWith("0.")
   ) {
     return true;
   }
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(address)) return true; // 172.16.0.0/12
-  if (/^fe[89ab][0-9a-f]:/i.test(address)) return true; // fe80::/10
-  if (/^f[cd][0-9a-f]{2}:/i.test(address)) return true; // fc00::/7
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(bare)) return true; // 172.16.0.0/12
+  if (/^fe[89ab][0-9a-f]:/i.test(bare)) return true; // fe80::/10
+  if (/^f[cd][0-9a-f]{2}:/i.test(bare)) return true; // fc00::/7
   return false;
 }
 

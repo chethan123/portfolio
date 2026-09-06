@@ -402,6 +402,20 @@ describe("resolving and connecting the upstream (step 2)", () => {
     expect(line).toContain("403");
   });
 
+  it.each([
+    ["0.0.0.0", "the address a blackholing resolver answers with, which connects to loopback"],
+    ["0.1.2.3", "the rest of 0.0.0.0/8, which is not a host address either"],
+    ["::ffff:127.0.0.1", "loopback wearing IPv4-mapped IPv6 notation"],
+  ])("answers 403 for %s — %s", async (address) => {
+    const port = await start({ dnsLookup: fakeDnsLookup([address]) });
+    const socket = track(await connectRaw(port));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    const { line } = await waitForStatusLine(socket);
+
+    expect(line).toContain("403");
+  });
+
   it("connects through a second address when the first refuses, within the one deadline", async () => {
     const upstream = await startFakeUpstream();
     upstreams.push(upstream);
@@ -567,6 +581,32 @@ describe("the concurrency bound", () => {
     // timeout. A generous ceiling well under any deadline in this file
     // still fails a mutant that made the ninth socket hang instead.
     expect(elapsed).toBeLessThan(1000);
+
+    for (const socket of held) socket.destroy();
+  });
+
+  it("leaves a ninth GET /healthz unanswered while eight are held, which is why the healthcheck asks for one", async () => {
+    // The reason `compose.yaml` gives the proxy a `GET /healthz` healthcheck
+    // rather than a bare connect. A TCP connect completes at the accept queue
+    // whatever the server is doing, so it reads healthy with every slot held;
+    // only a request the HTTP server itself answers proves it is not
+    // saturated. The case above pins that the ninth *socket* closes cleanly —
+    // this one pins that no `200` comes back with it, which is the half the
+    // healthcheck actually depends on.
+    const port = await start();
+
+    const held: net.Socket[] = [];
+    for (let i = 0; i < 8; i++) held.push(track(await connectRaw(port)));
+
+    const ninth = track(await connectRaw(port));
+    let answered = "";
+    ninth.on("data", (chunk: Buffer) => {
+      answered += chunk.toString("latin1");
+    });
+    ninth.write("GET /healthz HTTP/1.1\r\nHost: proxy\r\n\r\n");
+    await waitForClose(ninth);
+
+    expect(answered).not.toContain("200");
 
     for (const socket of held) socket.destroy();
   });

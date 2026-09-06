@@ -2,7 +2,10 @@
 # in-process in `app`, but since ticket 06's cutover it no longer calls Yahoo
 # itself: it dials `worker` — the same image, reached over a socket in a
 # shared volume, and holding no credential of its own — for every price
-# fetch. The one scheduled
+# fetch, and `worker` in turn reaches Yahoo only through `egress-proxy`, which
+# admits a `CONNECT` to five hosts and checks the TLS server name inside the
+# tunnel against the host it was opened to — the worker's own network reaches
+# nothing else at all. The one scheduled
 # service is `dump`, argued in ADR-0009 — a dump that stops when the app is
 # down is worthless, and `pg_dump` belongs to the database's image. `caddy`
 # is the ingress front door and the only service that publishes a port;
@@ -39,9 +42,10 @@
 # Docker Compose 2.31.0 or newer is the second floor, beside it — but not, in
 # this release, a load-bearing one: `up` only recreates a network whose
 # definition drifted when it can compare against a config hash it recorded on
-# the live one, and nothing here asks it to. Every network below is created
-# from nothing: an existing install's implicit `default` bridge is *removed*
-# here, not redefined into `internal`, and `egress-worker` — the one network
+# the live one, and nothing here asks it to. The five an upgrade already has —
+# `backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — keep the
+# definition they were created with, and the two this release brings are new
+# names, so neither kind is a drifted network. `egress-worker` — the one network
 # that used to carry over byte-identical from release to release — is
 # deleted outright by ticket 08 rather than turned `internal` in place
 # (Docker cannot flip a plain bridge to `internal` on a live network, which
