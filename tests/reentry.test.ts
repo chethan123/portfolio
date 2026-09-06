@@ -1,15 +1,9 @@
 /**
- * Reentry guard (ticket 06, ~/lib/reentry.ts): shouldPostLock's boundary, and watchReentry's
- * wiring of the two DOM signals it watches, against the real export. shouldPostLock is pure;
- * watchReentry gets a plain object standing in for document/window (AGENTS.md's rule against
- * jsdom), touching only addEventListener/removeEventListener and two clocks.
- * Measured against the imported REENTRY_GRACE_MS, not a copied number, so reentry.ts declaring
- * a different constant shows up here rather than only in a real browser.
- * watchReentry takes no hasPasskey belief — three earlier rounds gave it one, each leaving the
- * call site free to hand it something stale; the fix is that the old call shape no longer
- * typechecks, so a reverted call site fails `npm run typecheck` before any test runs.
- * postLockNow: review found nothing wrong with the lock itself, only invented rendering on top
- * of it (now removed); it still guards a fetch that resolves for a 502 and one without keepalive.
+ * Reentry guard (ticket 06, ~/lib/reentry.ts): shouldPostLock's boundary, and watchReentry's wiring
+ * of the two DOM signals it watches. watchReentry gets a plain object standing in for
+ * document/window (AGENTS.md's rule against jsdom). Measured against the imported REENTRY_GRACE_MS,
+ * not a copied number. watchReentry takes no hasPasskey belief — three earlier rounds gave it one
+ * that a call site could hand something stale; now the old call shape fails typecheck instead.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -67,15 +61,13 @@ describe("shouldPostLock", () => {
   });
 
   it("posts once the wall gap alone exceeds the grace, even though the monotonic clock stalled through a suspend", () => {
-    // Math.max's scenario: performance.now() doesn't advance while suspended, so the wall gap
-    // has to carry a phone locked in a pocket for ten minutes
+    // Math.max's scenario: performance.now() doesn't advance while suspended, so the wall gap carries it
     const hidden = { wallMs: 0, monoMs: 0 };
     expect(shouldPostLock(hidden, REENTRY_GRACE_MS + 1, 1)).toBe(true);
   });
 
   it("posts once the monotonic gap alone exceeds the grace, even though the wall clock ran backwards", () => {
-    // other direction: NTP correction/clock set back makes the wall gap negative — the
-    // monotonic gap (can't run backwards) carries this; the negative wall value just loses the Math.max
+    // other direction: NTP correction makes the wall gap negative — the monotonic gap carries this
     const hidden = { wallMs: 1_700_000_000_000, monoMs: 0 };
     const nowWallMs = hidden.wallMs - 60 * 60 * 1000; // the clock jumps back an hour
     const nowMonoMs = REENTRY_GRACE_MS + 1;
@@ -279,9 +271,8 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even when the wall clock jumps backwards while hidden",
     () => {
-      // Date.now() can run backwards (NTP, manual clock set); moving it back here while
-      // performance.now() advances past the grace proves the monotonic gap carries this —
-      // reverting to Date.now() alone would fail, since the gap would go negative instead
+      // Date.now() can run backwards (NTP); moving it back here while performance.now() advances
+      // past the grace proves the monotonic gap carries this.
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -309,9 +300,8 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
     () => {
-      // the more important direction: performance.now() doesn't advance while suspended (all
-      // major OSes) — the wall clock has to carry a phone locked in a pocket for ten minutes;
-      // reverting to performance.now() alone would fail this test
+      // performance.now() doesn't advance while suspended (all major OSes) — the wall clock has
+      // to carry a phone locked in a pocket for ten minutes.
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;

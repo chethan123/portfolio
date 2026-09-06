@@ -1,10 +1,8 @@
 /**
- * Net worth trend line (DESIGN.md §8.1, §13.6) — a polyline, a path, no
- * charting library. Every colour resolves from a custom property via
- * classes, not SVG presentation attributes (§12) — a hardcoded `stroke`
- * can't follow a theme. Masking is a prop, not a hook (spec 0007): this is
- * the one file besides `amount.tsx` allowed to call a money formatter
- * (`masking-boundary.test.ts` enforces it) — line/grid/fill stay unchanged either way.
+ * Net worth trend line (DESIGN.md §8.1, §13.6) — a polyline, a path, no charting library. Every
+ * colour resolves from a custom property via classes, not SVG presentation attributes (§12).
+ * Masking is a prop, not a hook (spec 0007): this is the one file besides `amount.tsx` allowed to
+ * call a money formatter (`masking-boundary.test.ts` enforces it) — line/grid/fill stay unchanged either way.
  */
 import { useId, type ReactNode } from "react";
 
@@ -15,13 +13,11 @@ import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
 import type { ChartPoint, SessionAxis } from "~/lib/chart-range";
 
-// Abstract 1000×300 box, stretched to fit — no measurement pass, identical
-// server render. `vector-effect="non-scaling-stroke"` keeps the line 3px
-// (and the grid dash undistorted) after that stretch.
+// Abstract 1000×300 box, stretched to fit — no measurement pass, identical server render.
+// `vector-effect="non-scaling-stroke"` keeps the line 3px (and the grid dash undistorted) after that stretch.
 const WIDTH = 1000;
 const HEIGHT = 300;
 
-// Breathing room above/below the extremes, as a share of the range.
 const PADDING = 0.08;
 
 // Fractions of the drawn value domain — feeds both grid and axis labels, so a rule always has a label.
@@ -83,15 +79,9 @@ export function buildScale(points: ChartPoint[]): Scale {
 // Where the thousands scale reaches $1 — the rounding quantum; a fourth decimal there always renders `0`.
 const MAX_TICK_DP = 3;
 
-/**
- * Decimals from the span, not by trying labels until two stop matching:
- * rounding to a unit of at most a quarter of the span guarantees at least
- * two units between neighbouring rules, so distinctness falls out of the
- * arithmetic rather than being searched for (a search let a $150 move buy
- * four decimals, non-monotonically gaining/losing digits between refreshes).
- * `scale` is the larger end of the domain by magnitude — the rule whose unit
- * does the separating.
- */
+/** Decimals from the span, not by trying labels until two stop matching: rounding to a unit of at
+ * most a quarter of the span guarantees two units between neighbouring rules, so distinctness
+ * falls out of the arithmetic rather than being searched for. `scale` is the domain's larger end by magnitude. */
 function tickPrecision(span: number, scale: number): number {
   const unit = 10 ** (scale * 3);
   // Never past the rounding quantum — below it, two rules a tenth of a dollar apart on the axis land on one label.
@@ -105,13 +95,10 @@ function tickPrecision(span: number, scale: number): number {
 }
 
 /**
- * Horizontal rules, read off the drawn (padded) domain, not the data's
- * min/max — labelling the box's top with the series' max would put every
- * tick 8% out. Precision comes from the span, not fixed at one decimal:
- * `formatCompact` sizes its suffix by magnitude alone, so past a million a
- * $30K session move can vanish into one shared `5.9M` label — each rule
- * keeps its own suffix rather than forcing agreement, which is exact but
- * would round `96.0K` into a `0.1M` with a $50K error bar on a wide range.
+ * Horizontal rules, read off the drawn (padded) domain, not the data's min/max — labelling the
+ * box's top with the series' max would put every tick 8% out. Precision comes from the span, not
+ * fixed at one decimal: `formatCompact` sizes its suffix by magnitude alone, so each rule keeps
+ * its own suffix rather than forcing agreement, which would round `96.0K` into a `0.1M`.
  */
 export function gridRules(scale: Scale, masked: boolean): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
@@ -135,7 +122,6 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
 const toPolyline = (points: ChartPoint[], scale: Scale) =>
   points.map((point) => `${scale.x(point.date)},${scale.y(point.amount)}`).join(" ");
 
-// One plotted point's slice of the pointer plane (spec 0010, ADR-0004). `manual` is provenance for the readout (§7).
 export type HitTarget = {
   left: number;
   right: number;
@@ -143,7 +129,6 @@ export type HitTarget = {
   manual: boolean;
 };
 
-// Tiles the box midpoint to midpoint, first/last extending to the edges — full coverage, nearest point always wins.
 export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: Scale): HitTarget[] {
   const points = [
     ...manual.map((point) => ({ point, manual: true })),
@@ -159,7 +144,6 @@ export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: 
   }));
 }
 
-// Closed down to the box's floor, not the lowest point — else a strip of canvas under the trough reads as a second baseline.
 function toArea(points: ChartPoint[], scale: Scale): string {
   const first = points[0];
   const last = points.at(-1);
@@ -194,7 +178,6 @@ function readoutDate(date: string, session: SessionAxis | null): string {
   return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
 }
 
-// One point's caption: date, full-precision value (matches the headline digit for digit), provenance if hand-typed.
 function Readout({
   target,
   masked,
@@ -223,11 +206,8 @@ export function NetWorthChart({
   session,
   id,
 }: {
-  // Derived from real position sets. Solid line, filled.
   computed: ChartPoint[];
-  // Hand-typed pre-day-zero points (§7). Dashed, never blended.
   manual: ChartPoint[];
-  // Descriptive half only — ending figure/date derived from the last plotted point, so the label is true on every range.
   label: string;
   // Required, no default — everything else in this feature fails closed to masked; a default could only fail the other way.
   masked: boolean;
@@ -241,7 +221,6 @@ export function NetWorthChart({
 
   const all = [...manual, ...computed];
 
-  // Two points make a line; one makes a dot, and the honest thing to show is nothing.
   if (all.length < 2) return null;
 
   const scale = buildScale(all);
@@ -350,8 +329,7 @@ export function NetWorthChart({
           />
         ) : null}
 
-        {/* Pointer plane (spec 0010, ADR-0004) — HTML percentages, not SVG (non-uniform stretch is fatal for text, the marker's reason).
-            `tabIndex={-1}`: focusable for a tap to pin a readout, without becoming a tab stop. */}
+        {/* Pointer plane (spec 0010, ADR-0004) — HTML percentages, not SVG (non-uniform stretch is fatal for text). `tabIndex={-1}`: focusable to pin a readout, without becoming a tab stop. */}
         <div className="chart-hits" aria-hidden="true">
           {targets.map((target, index) => (
             <div
@@ -382,12 +360,8 @@ export function NetWorthChart({
   );
 }
 
-/**
- * One shared sentence for an empty chart panel (spec 0015) — a session with
- * one observed moment is real state between the poller's attempts, nothing
- * to do with how many statements exist. Guarded on there being a moment at
- * all: with none, `children` (the caller's own fallback) is the true sentence instead.
- */
+/** One shared sentence for an empty chart panel (spec 0015) — a session with one observed moment
+ * is real state, nothing to do with how many statements exist; with none, `children` is the true sentence instead. */
 export function ChartEmptyNote({
   session,
   moments,

@@ -1,14 +1,8 @@
-// settings/passkeys.tsx (ADR-0012, spec 0019, ticket 05): reads a submission, hands it to lock.server, renders back
-// whatever that module decided. Assertion/enrolment/removal validity rules are lock.server's (tests/lock.test.ts); every
-// refusal here is asserted by its exact printed sentence, never a route-invented paraphrase. No browser in this suite, so
-// most assertion/registration responses come from tests/support/webauthn.ts, posted straight to action. The pure
-// decisions the route pulls out of its effects (runConfirmCeremony, applyRemovalOptionsResult, removalConfirmDisabled,
-// runRemovalCeremony) are driven directly with unlock-ceremony mocked file-wide (as unlock.test.ts does), since calling
-// them directly is what exercises requestAssertion.
-//
-// The action returns most answers through react-router's data() (so it can attach Set-Cookie alongside a payload);
-// called directly, data() hands back {data, init}, not the payload or a Response — payloadOf/grantIdOf below unwrap it,
-// as upload-wizard.test.ts does for the codebase's one other data() return.
+// settings/passkeys.tsx (ADR-0012, spec 0019, ticket 05) is a thin pass-through to lock.server — every refusal here
+// is asserted by its exact printed sentence, never a route paraphrase. No browser: webauthn.ts fixtures post straight
+// to action; the route's pure decisions (runConfirmCeremony, applyRemovalOptionsResult, removalConfirmDisabled,
+// runRemovalCeremony) are driven directly with unlock-ceremony mocked file-wide. Action answers via data() (for
+// Set-Cookie) — called directly it hands back {data, init}; payloadOf/grantIdOf below unwrap it.
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +24,7 @@ import {
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-// Mocked file-wide, same shape as unlock.test.ts — the four pure functions this file drives directly need requestAssertion mocked to be testable at all.
+// Mocked file-wide — the four pure functions driven directly here need requestAssertion mocked to run at all.
 vi.mock("~/lib/unlock-ceremony", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/unlock-ceremony")>();
   return { ...actual, requestAssertion: vi.fn(), supportsPasskeys: vi.fn() };
@@ -72,7 +66,7 @@ const {
 } = await import("~/lib/lock.server");
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { middleware } = await import("../../app/root.tsx");
-// Read from where domain and screen share it (ticket 11's F14) — a restatement here is exactly the drift that finding was about.
+// Read from where domain and screen share it — a restatement here is the drift ticket 11's F14 found.
 const { CHALLENGE_TTL_MS } = await import("~/lib/lock");
 
 afterAll(closeTestDatabase);
@@ -80,8 +74,8 @@ afterAll(closeTestDatabase);
 /** A passkey nobody signs for — good for a row that is only ever a removal *target*, never an authoriser. */
 const BYSTANDER_PUBLIC_KEY = new Uint8Array([1, 2, 3, 4]);
 
-// A well-formed COSE EC public key nobody's private key corresponds to — a malformed stand-in (four raw bytes) would
-// make completeRegistration refuse before ever reaching the rule under test (finding 6).
+// Well-formed COSE EC public key nobody's private key corresponds to — a malformed stand-in would refuse before
+// reaching the rule under test (finding 6).
 function unrelatedPublicKeyCose(): Uint8Array {
   const { publicKey: generated } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const jwk = generated.export({ format: "jwk" }) as { x?: string; y?: string };
@@ -222,8 +216,8 @@ describe("the loader", () => {
   );
 
   it(
-    // Pre-fix, this route minted options from a click handler's own fetch (unlock.tsx's commit c0af420's bug on the
-    // sibling screen) — a round trip ahead of the ceremony, spending the press's activation on the wait, not the check.
+    // Pre-fix this route minted options from a click handler's own fetch (unlock.tsx commit c0af420) — a round trip
+    // ahead of the ceremony, spending the press's activation on the wait, not the check.
     "returns this page's own enrolment assertion options, minted here rather than by a later press",
     withDatabase(async ({ seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
@@ -316,8 +310,8 @@ describe(
     );
 
     it(
-      // A retry used to wait for a later press to revalidate (unlock.tsx's commit c0af420) — proves the fix landed
-      // here too: the instant the outcome settles, not deferred to the next Confirm press.
+      // A retry used to wait for a later press to revalidate (unlock.tsx commit c0af420) — proves the fix landed
+      // here too, the instant the outcome settles.
       "revalidates immediately once a dismissed prompt leaves loaderData.enrolOptions stale, without submitting",
       async () => {
         vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
@@ -418,8 +412,8 @@ describe("applyRemovalOptionsResult — landing a row's own options-fetch never 
   });
 
   it(
-    // The bug this ticket fixes: a row auto-ran the ceremony the moment its options landed. Landing a fetch only ever
-    // stores options, never touches requestAssertion — that call belongs to runRemovalCeremony alone, off a second press.
+    // The bug this ticket fixes: a row auto-ran the ceremony the moment its options landed — landing a fetch must
+    // only store options, never touch requestAssertion.
     "stores the landed options without ever calling requestAssertion",
     () => {
       const setNote = vi.fn();
@@ -932,7 +926,7 @@ describe("a duplicate credential is refused rather than creating a second row", 
         ),
       );
 
-      // Same credential id and public key as the first — the authenticator "replaying" its one credential, exactly what excludeCredentials can't prevent client-side without a browser.
+      // Same credential id and public key as the first — excludeCredentials can't prevent this client-side without a browser.
       const duplicate = payloadOf<{ ok: false; formError: string } | { ok: true }>(
         await action(
           args(
@@ -1384,8 +1378,8 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
   );
 
   it(
-    // Server has no browser zone to correct to — the <time> element carries the raw instant and formatDate's UTC text,
-    // identical to the client's pre-hydration render, so nothing here can mismatch.
+    // Server has no browser zone to correct to — <time> carries the raw instant + formatDate's UTC text, identical
+    // to the client's pre-hydration render.
     "renders each date inside a <time> element carrying the raw instant, with formatDate's own UTC text as the first paint",
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({

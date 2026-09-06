@@ -1,14 +1,7 @@
-/**
- * Renders through the real shell (`Layout`) rather than a page component
- * alone — the open-instance banner and first-run prompt are shell rules, not
- * page rules, so a test of the page in isolation wouldn't notice the shell
- * failing to carry them.
- *
- * Warnings are failures here. Under `createRoutesStub` there's no route
- * manifest behind `Layout`'s `<Links />`, so React emits an empty-href
- * warning that is a stub artefact, not an app bug; {@link renderThroughLayout}
- * allows only that one message and throws on anything else.
- */
+/** Renders through the real shell (`Layout`), not a page component alone — the open-instance banner and
+ * first-run prompt are shell rules a page-only test wouldn't notice failing. Warnings are failures here,
+ * except `createRoutesStub`'s empty-href stub artefact (no route manifest behind `Layout`'s `<Links />`) —
+ * {@link renderThroughLayout} allows only that one message. */
 import { renderToStaticMarkup } from "react-dom/server";
 import { Outlet, createRoutesStub } from "react-router";
 
@@ -30,20 +23,10 @@ export type RootData = {
 /** Matched on React's formatted message, not a stack — the `%s` placeholders arrive as separate arguments. */
 const STUB_STYLESHEET_WARNING = 'An empty string ("") was passed to the';
 
-/**
- * Renders one route's own component with data its real loader produced —
- * unlike {@link renderThroughLayout}, which renders the shell around a
- * stand-in body.
- *
- * Takes hydration data, not a stub loader: a loader resolves a tick after
- * renderToStaticMarkup reads the tree, so the markup would come back empty —
- * and an empty string passes every `not.toContain` assertion vacuously.
- * Pass the real loader's (and action's) output rather than a hand-built
- * fixture, which is a second copy free to drift from it while still passing.
- *
- * `path` may carry a search string — rendered at the whole address, matched
- * on the pathname alone, so a control built from existing params is testable.
- */
+/** Renders one route's own component with data its real loader produced — unlike {@link renderThroughLayout},
+ * which wraps a stand-in body in the shell. Takes hydration data, not a stub loader, since a loader resolves a
+ * tick after renderToStaticMarkup reads the tree — the markup would come back empty and pass every
+ * `not.toContain` vacuously. `path` may carry a search string, matched on the pathname alone. */
 export function renderRoute<T>(
   Component: React.ComponentType<never>,
   path: string,
@@ -74,12 +57,8 @@ export function renderRoute<T>(
   );
 }
 
-/**
- * Render `path` inside the real `Layout`, with root loader data.
- *
- * @throws whatever React warned about, if it warns about anything other than
- *         the stub's unresolvable stylesheet link.
- */
+/** Renders `path` inside the real `Layout` with root loader data.
+ * @throws whatever React warned about, other than the stub's unresolvable stylesheet link. */
 export function renderThroughLayout(path: string, rootData: RootData): string {
   const warnings: string[] = [];
   const wasErroring = console.error;

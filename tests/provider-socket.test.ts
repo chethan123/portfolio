@@ -86,7 +86,6 @@ describe("socketProvider().getQuotes", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const quotes = await socketProvider().getQuotes(["VTI", "AAA\nPrice worker: forged line"]);
 
-    // before mockRestore(), which also clears the recorded calls
     expect(warn).toHaveBeenCalledTimes(1);
     const [message] = warn.mock.calls[0]!;
     expect(message).toBe(
@@ -245,8 +244,7 @@ describe("ask", () => {
   });
 
   it("does not treat a mid-stream read error as ProviderUnreachable", async () => {
-    // keyed on syscall === "connect" only — a mid-stream ECONNRESET carries syscall: "read" and must reach the caller as a plain failure, not abort the batch
-    // a real TCP reset isn't reproducible over a unix socket, so this synthesises the exact error shape
+    // keyed on syscall === "connect" only — a mid-stream ECONNRESET carries syscall: "read" and must reach the caller as a plain failure, not abort the batch. Not reproducible as a real TCP reset over a unix socket, so this synthesises the exact error shape.
     await start({
       // never resolves — nothing here should settle the promise before the synthetic error does
       quote: () => new Promise<never>(() => undefined),
@@ -415,8 +413,7 @@ describe("ask", () => {
 
     await new Promise<void>((resolve) => empty200.close(() => resolve()));
 
-    // fresh server on the same path (safe: the unix socket file goes with the first server's
-    // close) for the non-200 half, so this one test pins both
+    // fresh server on the same path (safe: the unix socket file goes with the first server's close) for the non-200 half, so this one test pins both
     currentServer = http.createServer((req, res) => {
       res.writeHead(502);
       res.end();

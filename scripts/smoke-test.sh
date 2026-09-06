@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
-#
-# CI-only container smoke test — what a unit/integration test structurally
-# cannot reach: `up` on an empty data directory produces a working instance
-# once the gate is configured (and refuses to start until it is), the app
-# waits for Postgres, a restart is safe, the front door is shut, and the
-# runtime image contains what it's specified to and nothing else.
-#
-# Gate values below are throwaway: oauth2-proxy never contacts Google at
-# startup, so the sidecar boots on fake credentials — only the real Google
-# round trip is out of reach here (operator's checklist, not CI's).
-#
-# Slow and deliberately thin. Behaviour gets tested elsewhere.
-#
-# Run from the repository root:  ./scripts/smoke-test.sh
+# CI-only container smoke test — what unit tests structurally cannot reach: `up` on an empty
+# data directory works, the stack refuses to start unconfigured, the front door is shut, and
+# the runtime image holds what it is specified to. Gate credentials below are throwaway;
+# oauth2-proxy never contacts Google at startup. Run from the repository root.
 set -euo pipefail
 
 # Build from the checkout, not the published image compose.yaml pulls — else
@@ -35,13 +25,9 @@ export DUMP_GID="${DUMP_GID:-$(id -g)}"
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 
-# Set before the trap, because the trap reads it.
 allowlist_is_ours=false
 
-# `down -v` no longer discards the database (it lives in the checkout now), so
-# this empties it explicitly at both ends of the run. Postgres leaves it 0700
-# uid 70 — unreadable to a non-root runner — so this borrows root from the
-# daemon, exactly as the operator's own restore does (docs/operating.md).
+# `down -v` no longer discards the database (it lives in the checkout) — emptied explicitly, borrowing root from the daemon since Postgres leaves it 0700 uid 70 (docs/operating.md).
 empty_db_dir() {
   mkdir -p "$DB_DIR"
   [[ -n "${DB_IMAGE:-}" ]] || return 0
@@ -61,7 +47,6 @@ cleanup() {
   docker compose down -v --remove-orphans || true
   empty_db_dir || true
   empty_dumps_dir || true
-  # Only the one this script wrote — a developer may have a real allowlist here.
   [[ "$allowlist_is_ours" == true ]] && rm -f "$ALLOWLIST"
   return 0
 }
@@ -82,17 +67,14 @@ wait_for_healthy() {
 
 expect_status() {
   local expected="$1" actual
-  # `app` healthy does not mean the separate `caddy` container has bound its
-  # own port yet, so retry briefly.
+  # `app` healthy doesn't mean `caddy` has bound its own port yet, so retry briefly.
   actual="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
     --retry 10 --retry-connrefused --retry-delay 1 "$HEALTH_URL" || true)"
   [[ "$actual" == "$expected" ]] || fail "GET /healthz returned ${actual}, expected ${expected}"
   printf 'GET /healthz -> %s\n' "$actual"
 }
 
-# Checked before anything else touches Compose: engine 26 silently ignores
-# `gateway_mode_ipv4`, 27 refuses it, and only 28 makes the isolated-network
-# checks below reliable — better "engine too old" here than a topology bug downstream.
+# Checked first: engine 26 silently ignores `gateway_mode_ipv4`, 27 refuses it — only 28 makes the isolated-network checks below reliable.
 log "Checking the Docker Engine floor"
 engine_version="$(docker version --format '{{.Server.Version}}')" ||
   fail "could not read the Docker Engine version"
@@ -102,11 +84,7 @@ engine_major="${engine_version%%.*}"
 ((engine_major >= 28)) || fail "Docker Engine ${engine_version} is below the 28.0 floor"
 printf 'Docker Engine %s\n' "$engine_version"
 
-# Exported, not written to .env, so the run is identical on a bare CI runner
-# and beside a real configured instance. Exported ahead of both refusal
-# checks below (not just the second): compose names whichever missing
-# variable Go map iteration reaches first, a coin flip unless every other
-# required variable is already real — moving either below its check brings the flake back.
+# Exported, not written to .env, ahead of both refusal checks below — compose names whichever missing variable Go map iteration reaches first, so order here is load-bearing.
 export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
 export GATE_CLIENT_SECRET="smoke-test-client-secret"
 # Run, not quoted, from .env.example: the sidecar refuses a value not
@@ -115,10 +93,7 @@ GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
 export GATE_COOKIE_SECRET
 export PUBLIC_ORIGIN="https://smoke.example.test"
 
-# compose-go's refusal names whichever missing variable its Go map iteration
-# reaches first — not deterministic (measured: 33/40 POSTGRES_PASSWORD, 7/40 a
-# gate variable, all five unset). Isolated here instead: the gate's four are
-# already real, so POSTGRES_PASSWORD is the only thing left to fail on.
+# compose-go's refusal names whichever missing variable it reaches first (nondeterministic) — isolated here since the gate's four are already real.
 log "Checking the stack refuses to start without a database password"
 if refusal="$(env -u POSTGRES_PASSWORD docker compose --env-file /dev/null config --quiet 2>&1)"; then
   fail "compose accepted a configuration with no POSTGRES_PASSWORD"
@@ -131,11 +106,7 @@ printf 'compose refused: %s\n' "$refusal"
 # gate variables — otherwise it would fail naming this one instead.
 export POSTGRES_PASSWORD="smoke-test-postgres-password"
 
-# `config`, not `up`: interpolation is up's first step and needs no daemon.
-# `--env-file /dev/null` so a developer's own .env can't quietly satisfy the
-# variables. `env -u` unsets all four gate variables regardless of what's
-# exported above; POSTGRES_PASSWORD is already real, keeping this as clean an
-# isolation as the check above, just of four names instead of one.
+# `config`, not `up`: needs no daemon. `--env-file /dev/null` so a dev's own .env can't satisfy the variables; `env -u` isolates just the four gate names.
 log "Checking the stack refuses to start without gate credentials"
 if refusal="$(env -u GATE_CLIENT_ID -u GATE_CLIENT_SECRET -u GATE_COOKIE_SECRET \
   -u PUBLIC_ORIGIN docker compose --env-file /dev/null config --quiet 2>&1)"; then
@@ -146,7 +117,6 @@ fi
   fail "compose refused without naming the missing variable: ${refusal}"
 printf 'compose refused: %s\n' "$refusal"
 
-# Resolvable only now: `config` interpolates the whole file, gate variables included.
 DB_IMAGE="$(docker compose config --images db)"
 readonly DB_IMAGE
 
@@ -158,14 +128,7 @@ if [[ ! -e "$ALLOWLIST" ]]; then
   allowlist_is_ours=true
 fi
 
-# The override's whole point: an install on its own Postgres must never
-# depend on the bundled one coming up healthy (dump-loop.sh refuses any host
-# but `db` and would crash-loop against a stranger's). With no `bundled-db`
-# profile, `db`/`dump` must never be *created*, not merely fail healthy.
-#
-# `app worker gate` named explicitly, `caddy` left out: caddy's
-# `depends_on: app: condition: service_healthy` would make `up` wait
-# forever, since app has no real Postgres here and never turns healthy.
+# An install on its own Postgres must never depend on the bundled one — with no `bundled-db` profile, db/dump must never be created. `caddy` left out: its `depends_on` on app healthy would hang `up` forever.
 log "Checking compose.external-db.yaml starts neither db nor dump"
 (
   export COMPOSE_FILE="compose.yaml:compose.external-db.yaml:compose.dev.yaml"
@@ -174,13 +137,9 @@ log "Checking compose.external-db.yaml starts neither db nor dump"
   export COMPOSE_PROFILES=""
   trap 'docker compose down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
   docker compose up -d --build app worker gate
-  # `-a`: containers that exist at all, not just currently-up ones — without
-  # it a dropped-for-this-profile-set service could never appear regardless
-  # of whether the override created it. `--services`, not literal names: not
-  # every Compose version takes a profile-dropped name as an argument.
+  # `-a`: containers that exist at all, not just up ones; `--services` since not every Compose version takes a profile-dropped literal name.
   created="$(docker compose ps -a --services)"
-  # Positive control: assert the three services this `up` actually asked for
-  # did appear, or a broken invocation would pass the absence check below having tested nothing.
+  # Positive control: assert the three asked-for services did appear, or the absence check below would test nothing.
   for present in app worker gate; do
     grep -Fxq "$present" <<<"$created" ||
       fail "compose.external-db.yaml: ${present} did not appear in ps -a --services either: ${created}"
@@ -201,13 +160,10 @@ log "Waiting for the app healthcheck"
 wait_for_healthy
 expect_status 200
 
-# Proves the worker listens *in the built image* — an incomplete Dockerfile
-# copy set dies on first import, and nothing else would catch it.
 log "Waiting for the worker healthcheck"
 wait_for_healthy worker
 
-# /healthz is non-200 while any migration is unrecorded, so 200 above already
-# proves the schema current. This checks the other half: the runner made it so.
+# /healthz is non-200 while any migration is unrecorded, so 200 above already proves current — this checks the runner made it so.
 log "Checking migrations ran at startup"
 # Captured, not piped: `grep -q` exits at first match and the producer's
 # SIGPIPE would trip `pipefail`.
@@ -226,7 +182,6 @@ cluster_dir="$(ls -ldn "$DB_DIR" | awk '{ print $3, $1 }')"
   fail "${DB_DIR} is '${cluster_dir}', expected Postgres's own 70 drwx------"
 printf '%s: %s\n' "$DB_DIR" "$cluster_dir"
 
-# Second boot re-runs the runner against an already-migrated database; a non-zero exit would never reach healthy.
 log "Restarting the app container"
 docker compose restart app
 wait_for_healthy
@@ -237,7 +192,6 @@ logs="$(app_logs)"
   fail "the restarted container did not skip already-applied migrations"
 printf 'restart skipped applied migrations\n'
 
-# A third run, inside the real image against the real database: exit 0, apply nothing.
 log "Re-running the migration runner inside the container"
 migrate_output="$(docker compose exec -T app node ./server/migrate.ts)" ||
   fail "re-running migrations exited non-zero"
@@ -264,12 +218,10 @@ for path in /app/app /app/tests /app/vite.config.ts /app/react-router.config.ts;
 done
 printf 'no source tree\n'
 
-# Without these, a fresh volume comes up with no schema at all.
 migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' | tr -d '[:space:]')"
 [[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
 printf 'migration .sql files in the image: %s\n' "$migration_count"
 
-# Asked per file rather than inferred from the worker healthcheck alone.
 for path in /app/server/migrate.ts /app/server/yahoo-client.ts \
   /app/server/symbol-pattern.ts /app/server/price-worker.ts; do
   run_in_image "test -f $path" || fail "missing from the runtime image: $path"
@@ -281,16 +233,13 @@ for pkg in vitest vite typescript @react-router/dev @types/react; do
 done
 printf 'no dev dependencies\n'
 
-# What `yahoo-finance2` declares but the app never loads (see
-# scripts/prune-unreachable-deps.mjs). Asserted here because nothing else can
-# catch the prune silently ceasing to fire.
+# What yahoo-finance2 declares but the app never loads (scripts/prune-unreachable-deps.mjs) — asserted since nothing else catches the prune silently stopping.
 for pkg in @modelcontextprotocol/sdk @deno/shim-deno fetch-mock-cache hono jose cors; do
   run_in_image "test ! -e /app/node_modules/$pkg" ||
     fail "unreachable dependency still in the runtime image: $pkg"
 done
 printf 'unreachable yahoo-finance2 dependencies pruned\n'
 
-# The other half: the prune must not have overshot into what the app needs.
 for pkg in yahoo-finance2 tough-cookie tldts express react-router kysely pg zod; do
   run_in_image "test -e /app/node_modules/$pkg" ||
     fail "the prune removed a dependency the app needs: $pkg"
@@ -302,15 +251,13 @@ printf 'runtime dependencies intact\n'
 run_in_image 'test ! -e /app/node_modules/yahoo-finance2/script' ||
   fail "the CommonJS copy of yahoo-finance2 is still in the runtime image"
 
-# Proved, not inferred: it loads through a lazy import() on first call, so a
-# healthy container says nothing about it. Only the worker reaches it since 06's cutover.
+# Proved, not inferred: it loads via a lazy import() on first call, so a healthy container says nothing about it.
 docker compose exec -T worker node -e \
   'import("yahoo-finance2").then(({default:YahooFinance})=>{process.exit(typeof new YahooFinance().quote==="function"?0:1)}).catch(()=>process.exit(1))' ||
   fail "the ESM half of yahoo-finance2 did not import and construct inside the image"
 printf 'yahoo-finance2 CommonJS copy removed, ESM half loads\n'
 
-# Grepped against the *built* output, not source: a stray comment naming the
-# package would trip a source grep but is stripped by the build, so a hit here is a real import.
+# Grepped against the built output, not source — a stray source comment would trip a source grep, but a hit here is a real import.
 log "Checking the app's built bundle carries no trace of yahoo-finance2"
 run_in_image '! grep -rq yahoo-finance2 /app/build/server/' ||
   fail "yahoo-finance2 is reachable from the app's own built server bundle"
@@ -332,7 +279,6 @@ printf 'db port not published\n'
 [[ "$(published_ports app)" != *HostPort* ]] || fail "the app port is published to the host"
 printf 'app port not published\n'
 
-# The worker has no TCP listener to publish — only the socket.
 [[ "$(published_ports worker)" != *HostPort* ]] || fail "the worker port is published to the host"
 printf 'worker port not published\n'
 
@@ -341,8 +287,7 @@ printf 'worker port not published\n'
 [[ "$(published_ports egress-proxy)" != *HostPort* ]] || fail "the egress-proxy port is published to the host"
 printf 'egress-proxy port not published\n'
 
-# The gate believes X-Forwarded-* from whatever reaches it, so a published
-# port here would let a caller walk past the gate asserting its own identity.
+# The gate trusts X-Forwarded-* from whatever reaches it — a published port here would let a caller walk past it asserting its own identity.
 [[ "$(published_ports gate)" != *HostPort* ]] || fail "the gate port is published to the host"
 printf 'gate port not published\n'
 
@@ -350,17 +295,12 @@ printf 'gate port not published\n'
   fail "caddy is not published on port 80"
 printf 'caddy published on 80\n'
 
-# The container half of that mapping, tied to the host half: host 80 must land
-# on the 8080 listener specifically, so this fails if the Caddyfile's site
-# address and compose.yaml's `ports:` drift apart.
+# The container half of that mapping — fails if the Caddyfile's site address and compose.yaml's ports: drift apart.
 [[ "$(published_ports caddy)" == *'"8080/tcp":[{'*'"HostPort":"80"'* ]] ||
   fail "caddy's host port 80 does not map to the container's 8080 listener: $(published_ports caddy)"
 printf 'caddy listens on 8080 inside\n'
 
-# Nothing else can notice this posture: a container that regained root, a
-# capability, or a writable rootfs serves every request exactly as before.
-# Caps, no-new-privileges and read-only each checked twice — daemon's record
-# and the kernel's own answer — since the two disagree in the interesting cases.
+# Nothing else notices this posture — caps, no-new-privileges and read-only each checked twice: daemon's record and the kernel's own answer.
 log "Checking the containers' privileges"
 
 # null and [] both mean none; the daemon's CAP_ prefix is stripped so a
@@ -373,9 +313,7 @@ caps_of() {
   printf '%s' "${raw//CAP_/}"
 }
 
-# $2 is the exact CapAdd set, not a "contains" — an unargued-for capability is
-# the thing to catch. $3 is the CapEff the kernel must report at PID 1: the
-# daemon's record alone would miss a runtime that accepted the option and ignored it.
+# $2 is the exact CapAdd set (an unargued-for capability is the thing to catch); $3 is the kernel's own CapEff at PID 1, since the daemon's record alone can miss a silently-ignored option.
 expect_caps() {
   local service="$1" expected="$2" want_eff="$3" dropped added eff
   dropped="$(caps_of "$service" CapDrop)"
@@ -400,7 +338,6 @@ expect_caps egress-proxy "" 0000000000000000
 # cap_net_bind_service=ep and the kernel refuses to exec it from an empty
 # bounding set — compose.yaml has the transcript.
 expect_caps caddy "NET_BIND_SERVICE" 0000000000000400
-# Root cannot open a file it does not own without this.
 expect_caps gate "DAC_READ_SEARCH" 0000000000000004
 
 expect_no_new_privileges() {
@@ -408,7 +345,6 @@ expect_no_new_privileges() {
   declared="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$(docker compose ps -q "$1")")"
   [[ "$declared" == *"no-new-privileges"* ]] ||
     fail "${service} does not set no-new-privileges: ${declared}"
-  # The kernel's answer at PID 1 — no setuid binary can hand anything back.
   applied="$(docker compose exec -T "$service" awk '/^NoNewPrivs/ { print $2 }' /proc/1/status |
     tr -d '[:space:]')"
   [[ "$applied" == "1" ]] ||
@@ -440,9 +376,7 @@ expect_uid gate 0
 # account that owns its directory, which on a runner is the runner's own.
 expect_uid dump "$DUMP_UID"
 
-# Declared read_only, then the kernel's refusal by name — a bare non-zero
-# exit proves nothing, since / is root-owned 0755 and a non-root uid gets
-# "Permission denied" on a writable rootfs too.
+# Declared read_only, then the kernel's refusal by name — a bare non-zero exit proves nothing, since a non-root uid gets "Permission denied" on a writable rootfs too.
 expect_read_only_root() {
   local service="$1" declared refusal
   declared="$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$(docker compose ps -q "$service")")"
@@ -458,8 +392,7 @@ for service in app db caddy gate dump worker egress-proxy; do
   expect_read_only_root "$service"
 done
 
-# The mount set, not the socket's mode, is what keeps a compromised sidecar
-# off the worker's socket (research §8.5) — only app and worker may mount it.
+# The mount set, not the socket's mode, keeps a compromised sidecar off the worker's socket (research §8.5) — only app and worker may mount it.
 log "Checking the price-worker-sock volume fence"
 for service in db dump gate caddy egress-proxy; do
   mount_names="$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' \
@@ -470,9 +403,7 @@ for service in db dump gate caddy egress-proxy; do
 done
 printf 'db, dump, gate, caddy, egress-proxy do not mount price-worker-sock\n'
 
-# The mount set only says who is on the volume, not what they may do with it
-# — deleting `:ro` (compose.yaml:288) leaves every check above green. `.RW`
-# is Docker's own field name; false means read-only.
+# The mount set only says who is on the volume, not what they may do — deleting :ro (compose.yaml:288) leaves every check above green.
 log "Checking app's price-worker-sock mount is read-only"
 app_sock_rw="$(docker inspect --format \
   '{{range .Mounts}}{{if eq .Destination "/run/price-worker"}}{{.RW}}{{end}}{{end}}' \
@@ -482,8 +413,7 @@ app_sock_rw="$(docker inspect --format \
 printf 'app: price-worker-sock is read-only\n'
 
 log "Checking resource bounds"
-# Exact, not "positive": a fork bomb or memory balloon still reports positive
-# numbers. worker and egress-proxy share the identical bounds (tickets 05, 08).
+# Exact, not "positive" — a fork bomb or memory balloon still reports positive numbers.
 expect_resource_bounds() {
   local service="$1" resource_line pids mem
   resource_line="$(docker inspect --format '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
@@ -501,8 +431,6 @@ for service in worker egress-proxy; do
   expect_resource_bounds "$service"
 done
 
-# The network fence below doesn't cover an external Postgres reachable over
-# the open internet — asserted so adding DATABASE_URL "for convenience" fails loudly.
 log "Checking the worker carries no DATABASE_URL"
 worker_env="$(docker inspect --format '{{json .Config.Env}}' "$(docker compose ps -q worker)")" ||
   fail "could not inspect the worker's environment"
@@ -510,8 +438,6 @@ worker_env="$(docker inspect --format '{{json .Config.Env}}' "$(docker compose p
   fail "worker's environment carries DATABASE_URL: ${worker_env}"
 printf 'worker: no DATABASE_URL\n'
 
-# The one positive assertion: proof the volume, uids and mode line up
-# together, not just that each holds in isolation.
 log "Checking app reaches the worker's /healthz over the shared socket"
 docker compose exec -T app node -e '
   const http = require("node:http");
@@ -532,26 +458,17 @@ mounts_line="$(docker compose exec -T worker grep ' /run/price-worker ' /proc/mo
   fail "worker's /proc/mounts has no entry for /run/price-worker"
 [[ "$mounts_line" == *" tmpfs "* ]] ||
   fail "/run/price-worker is not tmpfs in worker: ${mounts_line}"
-# `" tmpfs "` alone also matches the device column: deleting the volume's `o:`
-# string still passes that check with a root-owned 1777 tmpfs of half of RAM.
-# Kernel prints tmpfs options in a fixed order (size, mode, uid, gid), matched
-# one at a time since `nr_inodes` can print between them.
+# `" tmpfs "` alone also matches the device column — options matched one at a time since `nr_inodes` can print between them.
 for option in mode=770 uid=1000 gid=1000; do
   [[ "$mounts_line" == *"$option"* ]] ||
     fail "/run/price-worker tmpfs is missing ${option}: ${mounts_line}"
 done
 printf 'worker: %s\n' "$mounts_line"
 
-# backend/caddy-app/caddy-gate/worker-proxy are all `internal: true`: no
-# default route at all, so none of these four can reach the internet by any
-# path, not merely a blocked one. Proved twice per service — a DNS probe and
-# /proc/net/route — since a resolver can be absent for reasons other than topology.
+# All four networks are `internal: true` — no default route at all. Proved twice per service (DNS probe + /proc/net/route) since a resolver can be absent for other reasons.
 log "Checking app, db, dump and worker have no route out"
 
-# app probes over its own healthcheck fetch; db/dump (no node) use busybox
-# wget. Both carry an explicit abort budget: with no gateway on `internal:
-# true` networks the resolver SERVFAILs fast (proxyDNS=false, research §1.4),
-# but a TCP SYN into a nonexistent route can sit unanswered far longer.
+# app probes via its healthcheck fetch; db/dump (no node) use busybox wget — both carry an abort budget since a TCP SYN into a nonexistent route can sit unanswered far longer than a SERVFAIL.
 expect_no_egress() {
   local service="$1" default_route status
   # A misspelled service or stopped container must fail loudly here, not read
@@ -587,9 +504,7 @@ expect_no_egress() {
   ((status != 0)) || fail "${service} resolved a public hostname"
   printf '%s: cannot resolve a public hostname\n' "$service"
 
-  # `00000000` in the *destination* column (field 2) of /proc/net/route is a
-  # default route; matched by column, not substring — a direct route to the
-  # container's own subnet legitimately carries `00000000` as its *gateway* (field 3).
+  # `00000000` in the destination column (field 2) is a default route — matched by column, since a direct route can carry it in the gateway column too.
   default_route="$(docker compose exec -T "$service" \
     awk 'NR>1 && $2=="00000000" { print }' /proc/net/route)" ||
     fail "could not read ${service}'s /proc/net/route"
@@ -604,10 +519,7 @@ for service in app db dump worker; do
   expect_no_egress "$service"
 done
 
-# Read from the daemon's IPAM record, not a connect attempt (which would only
-# prove the negative for the address it picked, and could fall back to
-# localhost). Under `isolated` no gateway is allocated at all — empty here on
-# an engine that honours it, populated on one that silently ignores it (Engine 26, the floor above).
+# Read from the daemon's IPAM record, not a connect attempt — under `isolated` no gateway is allocated on an engine that honours it.
 log "Checking the isolated networks were created with no gateway"
 for net in backend caddy-app caddy-gate worker-proxy; do
   gateway="$(docker network inspect \
@@ -628,22 +540,16 @@ for net in backend caddy-app caddy-gate worker-proxy; do
   printf '%s: host bridge br-%s carries no address\n' "$net" "$bridge_id"
 done
 
-# worker-proxy is worker's only network, shared with none of app/gate/db. A
-# connect to an unroutable address waits on the kernel's default (minutes),
-# so every attempt carries its own 3s timeout — never `ping` (NET_RAW dropped).
+# worker-proxy is worker's only network, shared with none of app/gate/db — every attempt carries its own 3s timeout, never `ping` (NET_RAW dropped).
 log "Checking the worker cannot reach app, gate or db"
 
-# Space-separated: {{range}} supplies no separator, and a service on more
-# than one network (spec §3.6) would glue two addresses into one string that
-# still passes the -n guard and reports "unreachable" for the wrong reason.
+# Space-separated: {{range}} supplies none, and a multi-network service (spec §3.6) would glue addresses together otherwise.
 container_ip() {
   docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
     "$(docker compose ps -q "$1")"
 }
 
-# ECONNREFUSED proves a route exists to that host — the port is merely
-# closed there — so it counts as reached, not unreachable. Everything else
-# (no route, unresolvable name, a real timeout) counts as unreachable.
+# ECONNREFUSED proves a route exists (port merely closed) — counts as reached; everything else counts as unreachable.
 unreachable_from_worker() {
   local host="$1" port="$2" desc="$3" output
   if output="$(docker compose exec -T worker node -e '
@@ -665,9 +571,7 @@ unreachable_from_worker() {
     printf 'worker cannot reach %s (%s:%s)\n' "$desc" "$host" "$port"
     return 0
   fi
-  # Empty output means the node script itself exited 1 (reached). Anything on
-  # stdout/stderr means exec never got that far — a compose error shouldn't
-  # read as a broken-isolation finding.
+  # Empty output means the script itself exited 1 (reached); anything on stdout/stderr means exec never got that far.
   [[ -z "$output" ]] ||
     fail "could not test whether worker can reach ${desc} (${host}:${port}): ${output}"
   fail "worker reached ${desc} (${host}:${port}) — network isolation broken"
@@ -690,10 +594,7 @@ unreachable_from_worker db 5432 "db by name"
 probe_all_ips db 5432 "db"
 
 
-# Topology checks above prove the wiring; this proves the proxy actually
-# forwards allowed traffic. Best-effort: a CI runner with no route to the
-# real internet skips it, and the 403/405/healthz/stopped-proxy cases below
-# prove the same control without needing Yahoo at all.
+# Topology above proves the wiring; this proves the proxy forwards traffic — best-effort, skipped without real internet (other cases below don't need it).
 log "Checking the worker reaches Yahoo through the proxy"
 yahoo_reachable=true
 yahoo_fetch_output="$(docker compose exec -T worker node -e '
@@ -707,9 +608,7 @@ else
   printf 'SKIPPED (no route to the real internet from this runner): worker fetch of query2.finance.yahoo.com through the proxy — %s\n' "$yahoo_fetch_output"
 fi
 
-# Proxy env vars stay set on worker throughout — stopping egress-proxy
-# removes only what they point at, so a failure proves the topology, not the
-# flag, is what the worker's egress depends on.
+# Proxy env vars stay set on worker throughout — stopping egress-proxy removes only what they point at, isolating topology from the flag.
 log "Checking the fetch fails while egress-proxy is stopped"
 docker compose stop egress-proxy >/dev/null || fail "could not stop egress-proxy"
 # Exit 1 is the assertion; anything else (127, exec never starting) must not
@@ -728,12 +627,8 @@ printf 'worker: fetch through the proxy fails while egress-proxy is stopped\n'
 docker compose start egress-proxy >/dev/null || fail "could not restart egress-proxy"
 wait_for_healthy egress-proxy
 
-# All three from `worker`: worker-proxy is internal, so the proxy is
-# reachable only from containers on it.
 log "Checking the proxy refuses a CONNECT to a host off the allowlist"
-# mail.yahoo.com resolves under the same Yahoo edge as the allowed hosts
-# (research §3.1) but isn't itself allowlisted — a 403 proves gating by
-# name, not by where the bytes end up. Runs before anything dials upstream, so no real route needed.
+# mail.yahoo.com shares Yahoo's edge with the allowed hosts (research §3.1) but isn't allowlisted — a 403 proves gating by name, needing no real route.
 connect_status="$(docker compose exec -T worker node -e '
   const net = require("node:net");
   const socket = net.connect({ host: "egress-proxy", port: 8888 }, () => {
@@ -784,9 +679,7 @@ printf 'proxy: GET / -> %s\n' "$other_status"
 
 if [[ "$yahoo_reachable" == true ]]; then
   log "Checking a mismatched server name tears down the tunnel, not a 403"
-  # server/egress-proxy.ts's own header: the 200 is written before the
-  # ClientHello is read, so a mismatch can't be answered 403 — the client
-  # sees a TLS failure instead. Needs a real tunnel, so shares the skip above.
+  # server/egress-proxy.ts: the 200 is written before the ClientHello is read, so a mismatch can't be answered 403 — the client sees a TLS failure instead.
   if docker compose exec -T worker node -e '
     const net = require("node:net");
     const tls = require("node:tls");
@@ -795,8 +688,7 @@ if [[ "$yahoo_reachable" == true ]]; then
     raw.once("connect", () => {
       raw.write("CONNECT finance.yahoo.com:443 HTTP/1.1\r\nHost: finance.yahoo.com:443\r\n\r\n");
     });
-    // A proxy that closes before writing a status must fail this, not pass
-    // it — the 10s raw timeout catches that only incidentally, so `answered` makes it deliberate.
+    // A proxy closing before a status must fail this too — `answered` makes that deliberate.
     let answered = false;
     const closedEarly = () => { if (!answered) process.exit(1); };
     raw.once("end", closedEarly);
@@ -824,8 +716,7 @@ else
   printf 'SKIPPED (no route to the real internet from this runner): server-name mismatch teardown\n'
 fi
 
-# The capability's effect, not its declaration — reads the same 0600 file
-# above through the sidecar's own uid on a non-root runner.
+# The capability's effect, not its declaration — reads the same 0600 file through the sidecar's own uid on a non-root runner.
 allowlist_seen="$(docker compose exec -T gate cat /etc/oauth2-proxy/allowed-emails.txt |
   tr -d '[:space:]')" || fail "the gate could not read its allowlist at all"
 [[ -n "$allowlist_seen" ]] ||
@@ -836,8 +727,7 @@ if [[ "$allowlist_is_ours" == true ]]; then
 fi
 printf 'gate reads its allowlist through the bind mount\n'
 
-# The catch-up rule makes this cheap: an empty dumps directory at startup
-# means the first dump happens within seconds, no schedule to wait on.
+# The catch-up rule makes this cheap: an empty dumps directory at startup means the first dump happens within seconds.
 log "Waiting for the first dump"
 dump_path=""
 deadline=$((SECONDS + 120))
@@ -850,32 +740,26 @@ done
 dump_name="$(basename "$dump_path")"
 printf 'dump wrote %s\n' "$dump_name"
 
-# The name is the contract the collector orders by, so it is asserted rather
-# than eyeballed.
 [[ "$dump_name" =~ ^portfolio-[0-9]{8}T[0-9]{6}Z\.dump$ ]] ||
   fail "dump is named '${dump_name}', not portfolio-YYYYMMDDTHHMMSSZ.dump"
 
-# 0640: the dumps are the household's finances in plaintext, readable to the
-# account that collects them and to nobody else.
+# 0640: the dumps are the household's finances in plaintext, readable only to the account that collects them.
 dump_mode="$(stat -c '%a' "$dump_path")"
 [[ "$dump_mode" == "640" ]] || fail "dump is mode ${dump_mode}, expected 640"
 
-# Written only by a verified run — so its presence is the claim under test.
 [[ -f "${DUMPS_DIR}/last-success.json" ]] ||
   fail "the run wrote no success marker"
 grep -q "$dump_name" "${DUMPS_DIR}/last-success.json" ||
   fail "the success marker does not name ${dump_name}"
 [[ -f "${dump_path}.json" ]] || fail "no sidecar json beside ${dump_name}"
 
-# The one fact no consumer can derive, checked against the file it describes.
 recorded_sha="$(sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "${dump_path}.json")"
 actual_sha="$(sha256sum "$dump_path" | cut -d' ' -f1)"
 [[ "$recorded_sha" == "$actual_sha" ]] ||
   fail "sidecar json records sha ${recorded_sha}, file hashes to ${actual_sha}"
 printf 'sidecar json records the archive it sits beside\n'
 
-# Polled, not sampled: a probe run a moment before the rename leaves the
-# service `starting` until the next interval.
+# Polled, not sampled — a probe a moment before the rename leaves the service `starting` until the next interval.
 dump_health=""
 deadline=$((SECONDS + 60))
 while ((SECONDS < deadline)); do
@@ -888,8 +772,7 @@ done
   fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
 
-# The failure this verification step exists for: pg_restore --list reads
-# only the front of the archive and would pass a file missing most of its data.
+# pg_restore --list reads only the front of the archive and would pass a file missing most of its data.
 docker compose run --rm -T dump verify "/dumps/${dump_name}" >/dev/null 2>&1 ||
   fail "the service refused an archive it had just written and verified"
 
@@ -909,17 +792,13 @@ docker compose run --rm -T dump prune /dumps >/dev/null 2>&1 ||
   fail "prune kept a dump older than the retention window"
 [[ -e "$dump_path" ]] ||
   fail "prune deleted the newest dump"
-# An operator's own `portfolio-$(date +%F).dump`, parked here before an upgrade:
-# not this service's to delete.
+# An operator's own `portfolio-$(date +%F).dump` parked here before an upgrade is not this service's to delete.
 [[ -e "${DUMPS_DIR}/portfolio-2020-01-03.dump" ]] ||
   fail "prune deleted a file it did not write"
 printf 'retention: window applied, newest kept, foreign names untouched\n'
 rm -f "${DUMPS_DIR}/truncated.bin" "${DUMPS_DIR}/portfolio-2020-01-03.dump"
 
-# Proves the framework, not just the container: react-router-serve over the
-# real build, route manifest, server render — vitest loads no React Router
-# plugin, so this is the one place that's exercised. Asked from inside app's
-# own container to skip the gate, which is about the front door, not the renderer.
+# Proves the framework, not just the container — vitest loads no React Router plugin, so this is the one place it's exercised. Asked inside app's container to skip the gate.
 log "Fetching a real page from the app container"
 
 page="$(docker compose exec -T app node -e \
@@ -929,9 +808,7 @@ page="$(docker compose exec -T app node -e \
 [[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
 printf 'GET / rendered a page\n'
 
-# The one thing a rendered page can't vouch for: its <link> tags carry
-# whether the files behind them exist or not — exactly how an image that
-# 404'd all four once shipped unnoticed.
+# The one thing a rendered page can't vouch for: whether its <link> targets actually exist — how a 404'd asset once shipped unnoticed.
 log "Fetching the static assets from the app container"
 
 for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2; do
@@ -941,16 +818,13 @@ for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2
   printf 'GET %s -> %s\n' "$asset" "$status"
 done
 
-# The body, not just the status: "200 with the wrong body" is the failure
-# Compose, the proxy and monitoring cannot see.
+# The body, not just the status — "200 with the wrong body" is the failure Compose, the proxy, and monitoring cannot see.
 health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
 [[ "$health" == *'"status":"ok"'* ]] || fail "GET /healthz body was not ok: ${health}"
 [[ "$health" == *'"migrations":"current"'* ]] ||
   fail "GET /healthz did not report the schema current: ${health}"
 printf 'GET /healthz -> %s\n' "$health"
 
-# The only place "every path is behind the gate" gets checked. No Google
-# account needed — the browser is turned away before Google is consulted.
 log "Checking the gate refuses an unauthenticated request"
 
 status_of() {
@@ -973,28 +847,23 @@ sign_in="$(location_of "$BASE_URL/")"
   fail "the redirect to the gate did not carry where the visitor was going: ${sign_in}"
 printf 'GET / -> 302 %s\n' "$sign_in"
 
-# One hop proves two things: /oauth2/* is answered by the sidecar (the app has
-# no such route and would 404), and skip_provider_button is on — the next
-# screen is Google itself, not an interstitial.
+# One hop proves two things: /oauth2/* is answered by the sidecar (app would 404), and skip_provider_button is on — next screen is Google itself.
 google="$(location_of "$BASE_URL$sign_in")"
 [[ "$google" == https://accounts.google.com/o/oauth2/auth\?* ]] ||
   fail "the gate's sign-in went to '${google}', expected Google's authorization endpoint"
 [[ "$google" == *"client_id=${GATE_CLIENT_ID}"* ]] ||
   fail "the redirect to Google did not carry the configured client id: ${google}"
-# The redirect URI is percent-encoded in the query, but the host survives intact.
 [[ "$google" == *"redirect_uri="* && "$google" == *"smoke.example.test"* ]] ||
   fail "the redirect to Google did not carry the configured redirect URL: ${google}"
 printf 'GET %s -> 302 Google, carrying the client id\n' "$sign_in"
 
-# The gate's verdict endpoint, consulted by Caddy on every request. The app
-# would 404 here; a 401 can only be the sidecar's.
+# The gate's verdict endpoint, consulted by Caddy on every request — the app would 404 here, so a 401 can only be the sidecar's.
 auth_status="$(status_of "$BASE_URL/oauth2/auth")"
 [[ "$auth_status" == "401" ]] ||
   fail "GET /oauth2/auth returned ${auth_status}, expected the gate's 401"
 printf 'GET /oauth2/auth -> %s from the gate\n' "$auth_status"
 
-# The one exemption still holds — if this ever needs credentials, every uptime
-# monitor pointed here goes blind at once.
+# The one exemption still holds — if this ever needs credentials, every uptime monitor pointed here goes blind at once.
 expect_status 200
 
 log "Smoke test passed"

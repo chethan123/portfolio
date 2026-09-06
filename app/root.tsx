@@ -44,10 +44,8 @@ import "./app.css";
 /** Refusing `/unlock` would refuse the one screen that lifts the refusal. A test pins the length. */
 export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
 
-/**
- * Copy of react-router 7.18.2's unexported `decodePath`: per-segment decode, re-escaping any `/`
- * a decode produces. Malformed escapes fall back to the raw value rather than throwing.
- */
+/** Copy of react-router 7.18.2's unexported `decodePath`: per-segment decode, re-escaping any
+ * `/` a decode produces; malformed escapes fall back to the raw value rather than throwing. */
 function decodedPathname(pathname: string): string {
   try {
     return pathname
@@ -59,11 +57,8 @@ function decodedPathname(pathname: string): string {
   }
 }
 
-/**
- * Path comparison the way the router matches: `compilePath` is case-insensitive and its tail is
- * `\/*$`, so `/Healthz`, `/healthz/` and `/healthz//` all reach the same route. Decoded first, or
- * `/lock%2Dnow` slips past every predicate built on this.
- */
+/** Path comparison the way the router matches: `compilePath` is case-insensitive and its tail is
+ * `\/*$`, so `/Healthz`, `/healthz/`, `/healthz//` all reach the same route; decoded first, or `/lock%2Dnow` slips past every predicate built on this. */
 function normalizedPathname(pathname: string): string {
   const decoded = decodedPathname(pathname);
   const lower = decoded.toLowerCase();
@@ -80,20 +75,15 @@ function isLockNowPath(pathname: string): boolean {
   return normalizedPathname(pathname) === LOCK_NOW_ACTION;
 }
 
-/**
- * Keeps documents out of Firefox's bfcache, and Safari's over HTTPS. Chrome admits them anyway,
- * so the `pageshow` re-check in `~/lib/reentry.ts` is the answer there, not this header.
- */
+/** Keeps documents out of Firefox's bfcache, and Safari's over HTTPS. Chrome admits them anyway,
+ * so the `pageshow` re-check in `~/lib/reentry.ts` is the answer there, not this header. */
 function withNoStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
   return response;
 }
 
-/**
- * Return address only for `GET`/`HEAD`: `/masking` and `/refresh` are action-only, so bouncing a
- * refused POST back would land the reader on a loader-less route (400). `safeReturn` resolves an
- * absent parameter to `/`.
- */
+/** Return address only for `GET`/`HEAD`: `/masking` and `/refresh` are action-only, so bouncing a
+ * refused POST back would land the reader on a loader-less route (400). */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
   if (method === "GET" || method === "HEAD") {
@@ -110,10 +100,9 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * React Router 7.18.2 makes this same `Origin` check itself for document mutations and single-fetch
- * actions, but not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. Compares
- * hosts, not `PUBLIC_ORIGIN`, to agree with the framework behind the proxy. A missing `Origin`
- * continues, as it does there; `Origin: null` is unparseable and refused.
+ * React Router 7.18.2 makes this same `Origin` check for document mutations/single-fetch actions,
+ * but not resource routes (`/lock-now`, `/masking`, `/refresh`). Compares hosts, not `PUBLIC_ORIGIN`,
+ * to agree with the framework behind the proxy; a missing `Origin` continues, `Origin: null` is refused.
  */
 const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
   if (!MUTATION_METHODS.has(request.method.toUpperCase())) return;
@@ -132,16 +121,10 @@ const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) =>
 };
 
 /**
- * The lock (docs/adr/0012). Refuses by *throwing* before `next()`, so no loader runs — a refusal
- * written as a bare `return` would serve the page instead, since the framework calls `next()` for a
- * middleware that returns without one.
- *
- * `args.url`, never `request.url`: only the former is stripped of react-router's `.data` suffix and
- * `_routes` params, which would otherwise fail the exemption check and loop a locked browser.
- *
- * Fails closed — a thrown check refuses and is never folded into the no-passkey branch. Exempting
- * `/healthz` also exempts `/healthz.data`, which serves this loader's setup fields to a browser
- * holding no grant: kept deliberately (spec 0020, decided 2026-09-05); Caddy gates the `.data` form.
+ * The lock (docs/adr/0012). Refuses by *throwing* before `next()` — a bare `return` would serve the
+ * page instead. `args.url`, never `request.url`: only the former strips react-router's `.data`
+ * suffix/`_routes` params, which would otherwise fail the exemption check and loop a locked browser.
+ * Exempting `/healthz` also exempts `/healthz.data` (spec 0020, decided 2026-09-05; Caddy gates it).
  */
 const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) => {
   if (LOCK_EXEMPT_PATHS.includes(normalizedPathname(url.pathname))) {
@@ -150,9 +133,8 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
 
   const grantId = readLockCookie(request);
 
-  // A refusal on this path still clears the cookie: the reader asked to lock. Cookie required as
-  // well as path and method — path and method alone are forgeable cross-site, and `SameSite=Lax`
-  // withholds the cookie from that request but not the response clearing it.
+  // A refusal on this path still clears the cookie: the reader asked to lock. Cookie required too
+  // — path/method alone are forgeable cross-site, and `SameSite=Lax` withholds the cookie from that request but not the response clearing it.
   const isLockNowRequest = isLockNowPath(url.pathname) && request.method === "POST" && grantId !== undefined;
 
   let locked: boolean;
@@ -180,13 +162,9 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
   return withNoStore(await next());
 };
 
-/** Order matters: who may ask is settled before which browser may read, so a forgery costs no database call. */
 export const middleware: Route.MiddlewareFunction[] = [crossOriginMutationMiddleware, lockMiddleware];
 
-/**
- * Neutral values, telling a browser that has proven nothing no fact about the household — the
- * payload is serialised into the page whatever `Layout` renders.
- */
+/** Neutral values, telling a browser that has proven nothing no fact about the household. */
 const UNLOCK_SCREEN_ROOT_DATA = {
   gated: true,
   firstRun: null as FirstRunStep,
@@ -195,13 +173,9 @@ const UNLOCK_SCREEN_ROOT_DATA = {
   hasPasskey: false,
 };
 
-/**
- * Masking is resolved server-side: a page that drew the amounts and then hid them is the one
- * failure this feature cannot have (story 30). Every read fails toward masked.
- */
+/** Masking is resolved server-side: a page that drew the amounts and then hid them is the one failure this feature cannot have (story 30); every read fails toward masked. */
 export async function loader({ request }: Route.LoaderArgs) {
-  // §6.2. Root's loader is the only server path every render passes through, including while
-  // locked. Idempotent, not awaited, cannot throw.
+  // §6.2. Root's loader is the only server path every render passes through, including while locked; idempotent, not awaited, cannot throw.
   startPricePoller();
 
   const url = new URL(request.url);
@@ -217,7 +191,6 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   let masked = true;
-  // Published for the toggle's client writer: it has to produce a byte-identical cookie.
   let maskingPolicy: MaskingPolicy = "masked";
 
   try {
@@ -228,8 +201,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again
-  // rather than passed down from the middleware so `tests/support/routes.ts`'s `args()` can call
-  // this loader directly.
+  // rather than passed down from the middleware so `tests/support/routes.ts`'s `args()` can call this loader directly.
   let hasPasskey = false;
   try {
     hasPasskey = await isLocked();
@@ -297,40 +269,33 @@ function Brand({ search }: { search: string }) {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  // From the loader, not a prop: `Layout` wraps error boundaries, where there is no loader data.
   const rootData = useRouteLoaderData<typeof loader>("root");
   const { pathname, search } = useLocation();
 
-  // Off the address (ADR-0008): a loader could not hand it down inside an error boundary.
   const owners = ownerSearch(readOwnerFilter(new URLSearchParams(search)));
 
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
-  // Bare shell for the unlock screen: every piece of chrome assumes a grant this browser has not
-  // proven, and the masking toggle would write `document.cookie` on the way out.
+  // Bare shell for the unlock screen: every piece of chrome assumes a grant this browser has not proven, and the masking toggle would write `document.cookie` on the way out.
   const isUnlockScreen = isUnlockPath(pathname);
 
-  // The household's passkey, not this browser's lock state. `undefined` reads false: no control is
-  // the fail-safe answer on an error boundary.
+  // The household's passkey, not this browser's lock state; `undefined` reads false — no control is the fail-safe answer on an error boundary.
   const hasPasskey = rootData?.hasPasskey === true;
 
   const { revalidate } = useRevalidator();
 
-  // Never post the lock on a `hasPasskey` flip: a sibling tab of the browser that just enrolled
-  // shares its cookie, so that would delete the grant the enrolment minted.
+  // Never post the lock on a `hasPasskey` flip: a sibling tab of the browser that just enrolled shares its cookie, so that would delete the grant the enrolment minted.
   const attemptLock = useCallback((): void => {
     void postLockNow(revalidate, fetch);
   }, [revalidate]);
 
-  // A persisted restore only re-asks the middleware — it never posts the lock.
   const askServer = useCallback((): void => {
     revalidate();
   }, [revalidate]);
 
   // No test reaches this effect: the suite is DOM-less, so `renderToStaticMarkup` runs no effects.
-  // Steps S8/S9 of the drive script under docs/research/2026-09-05-lock-slice-launch-review/harness/
-  // are the evidence that it installs.
+  // Steps S8/S9 of the drive script (docs/research/2026-09-05-lock-slice-launch-review/harness/) are the evidence it installs.
   useEffect(() => {
     if (isUnlockScreen) return;
 

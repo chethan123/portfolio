@@ -560,7 +560,6 @@ describe("effectiveDate", () => {
   });
 
   it("is the statement's own date when that is still ahead of today", () => {
-    // recordedDate allows one day of slack (household east of UTC)
     expect(effectiveDate(tomorrow)).toBe(tomorrow);
   });
 

@@ -1,19 +1,16 @@
 /**
- * requestRegistration's own error mapping, driven for real rather than through a mock of
- * itself. Its own file because @simplewebauthn/browser is reached through a dynamic import()
- * inside the function body, so mocking it here would otherwise replace it for every test in
- * settings-passkeys.test.ts. The thrown error is shaped the way the library shapes it, not the
- * platform: identifyRegistrationError.js's InvalidStateError branch wraps the DOMException in
- * a WebAuthnError but leaves `.name` as the platform's own "InvalidStateError", which the
- * mapping matches on.
+ * requestRegistration's own error mapping, driven for real rather than through a mock of itself.
+ * Its own file because @simplewebauthn/browser is reached through a dynamic import() inside the
+ * function body, so mocking it here would otherwise replace it for every test in
+ * settings-passkeys.test.ts. The thrown error is shaped the way the library shapes it: its
+ * InvalidStateError branch wraps the DOMException but leaves `.name` as the platform's own.
  */
 import { describe, expect, it, vi } from "vitest";
 
 const startRegistration = vi.hoisted(() => vi.fn());
 
-// deliberately partial: the package's other two exports are destructured inside try blocks, so
-// a future test calling supportsPasskeys/requestAssertion would get a quiet false/failed rather
-// than a loud failure — add them here first
+// deliberately partial: the package's other two exports are destructured inside try blocks, so a
+// future test calling supportsPasskeys/requestAssertion would get a quiet false/failed — add them here first
 vi.mock("@simplewebauthn/browser", () => ({ startRegistration }));
 
 const { requestRegistration } = await import("~/lib/unlock-ceremony");

@@ -17,10 +17,9 @@ function lockNowForms(markup: string): string[] {
   );
 }
 
-/** Markup from a container's opening tag to its matching close, by class name not nesting
- * depth — renderToStaticMarkup gives one flat string, so counting forms alone can't tell
- * "one per region" from "both in one region" or "one in the forbidden bottom nav". Finding
- * the first closing tag after the opening one is enough — none of these regions nests its own tag. */
+/** Markup from a container's opening tag to its matching close, by class name not nesting depth —
+ * counting forms alone can't tell "one per region" from "both in one region" or "one in the
+ * forbidden bottom nav". First closing tag after the opening one is enough — none of these nests. */
 function regionByClass(markup: string, className: string, tag: "nav" | "div"): string {
   const start = markup.indexOf(`class="${className}"`);
   if (start === -1) throw new Error(`no ${className} in markup`);
@@ -66,10 +65,9 @@ describe("the lock-now control", () => {
   });
 
   it("does not render on the bare unlock shell, even on a household that holds a passkey", () => {
-    // Bare-shell branch (app/root.tsx's Layout) drops every control for /unlock, this one
-    // included — locking an already-locked browser would discard the return address.
-    // Guarded here, not assumed, since narrowing the bare-shell branch to name MaskingToggle
-    // alone would reproduce exactly this failure.
+    // Bare-shell branch (app/root.tsx's Layout) drops every control for /unlock, this one included —
+    // locking an already-locked browser would discard the return address. Guarded here, not assumed,
+    // since narrowing the branch to name MaskingToggle alone would reproduce this failure.
     const markup = renderThroughLayout("/unlock", {
       gated: true,
       firstRun: null,

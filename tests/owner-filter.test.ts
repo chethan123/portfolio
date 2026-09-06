@@ -152,10 +152,8 @@ describe("the canonical spelling", () => {
   });
 
   it("is a fixed point of both serialisers a canonical address is put through, which is what lets a loader compare with strict equality", () => {
-    // two round trips: new URL() mirrors what url.search already went through once; new
-    // URLSearchParams() mirrors react-router's callRouteHandler rebuilding the request (see
-    // toOwnerParam's doc). A speller fixed in only one loop misses characters the two
-    // serialisers spell differently (apostrophe vs ~ ! ( ) space).
+    // two round trips: new URL() mirrors url.search; new URLSearchParams() mirrors react-router's
+    // callRouteHandler rebuild. A speller fixed in only one misses characters they spell differently.
     const arrivesAsItself = (canonical: string) => {
       expect(new URL(`http://portfolio.test/${canonical}`).search).toBe(canonical);
       // "" has no leading "?" to strip/restore — exempted rather than accidentally passing
@@ -168,9 +166,8 @@ describe("the canonical spelling", () => {
       arrivesAsItself(canonicalOwnerSearch(new URLSearchParams(address)));
     }
 
-    // ids readOwnerFilter keeps on purpose, plus ones the two serialisers spell differently:
-    // ~!() and space (form), apostrophe (URL parser), *+%/non-ASCII (both, differently);
-    // "03" and a 25-digit id per the same reasons owner-reading.server.ts keeps them.
+    // ids readOwnerFilter keeps on purpose, plus ones the two serialisers spell differently: ~!()
+    // and space (form), apostrophe (URL parser), *+%/non-ASCII (both, differently).
     for (const id of [
       "o'brien",
       "a b",

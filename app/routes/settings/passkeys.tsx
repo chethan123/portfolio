@@ -1,17 +1,9 @@
 /**
- * Settings → Passkeys: list, enrol, remove. Every rule about whether either is allowed belongs to
- * `~/lib/lock.server`. docs/adr/0012, spec 0019
- *
- * Enrolling is always two presses, the first passkey included: WebKit requires each WebAuthn call
- * inside its own user activation, so a ceremony may never sit behind an awaited round trip. The
- * enrolment challenge is therefore minted in the loader, once per load; a removal's is scoped to one
- * credential and minted by that row's first press, so minting all of them per load would flood the
- * `remove` purpose's budget.
- *
- * Every verified assertion mints a grant, so the confirm step and every removal set this browser's
- * cookie. A removal's assertion may be signed by a passkey other than the target — `allowCredentials`
- * cannot exclude it without stranding a one-passkey household — so the action reads back what is
- * actually still live rather than assuming the signer survived.
+ * Settings → Passkeys: list, enrol, remove (docs/adr/0012, spec 0019); rules belong to lock.server.
+ * Enrolling is always two presses — WebKit needs each WebAuthn call inside its own user activation
+ * — so the enrolment challenge is minted once per load, a removal's per row press instead.
+ * Every verified assertion mints a grant; since a removal's assertion may be signed by a passkey
+ * other than the target, the action reads back what is actually still live rather than assuming the signer survived.
  */
 import { useEffect, useRef, useState } from "react";
 import { data, useFetcher, useRevalidator } from "react-router";
@@ -148,9 +140,8 @@ export async function action({ request }: Route.ActionArgs) {
         supersedes: priorGrantId,
       });
 
-      // The minted grant is credited to whichever passkey signed, which may be the one just
-      // deleted. At most one of the two branches below finds a live row; a browser unlocked under
-      // the passkey it removed finds neither, which is what the cleared cookie is for.
+      // The minted grant is credited to whichever passkey signed, which may be the one just deleted
+      // — at most one of the two branches below finds a live row; unlocked under the removed passkey finds neither, what the cleared cookie is for.
       const mintedGrant = await readGrant(grant.id);
       let setCookie: string;
       if (mintedGrant !== undefined) {
@@ -201,12 +192,8 @@ export async function action({ request }: Route.ActionArgs) {
 
 export type RemovalWarningKind = "turnsOffTheLock" | "locksThisBrowser" | "safeElsewhere";
 
-/**
- * The last passkey wins over every other case: removing it turns the lock off, so warning about a
- * lockout would be a lie. Otherwise the only question is whether the target owns *this browser's*
- * grant. `"unknown"` takes the cautious branch — never told it is safe on a fact this request could
- * not confirm.
- */
+/** The last passkey wins over every other case: removing it turns the lock off, so warning about
+ * lockout would lie. Otherwise it's whether the target owns *this browser's* grant — `"unknown"` takes the cautious branch. */
 export function removalWarningKind(
   targetId: string,
   totalPasskeys: number,
@@ -297,11 +284,8 @@ export const NO_CEREMONY_MESSAGE =
 
 type EnrolPanelProps = { hasPasskeys: boolean; supported: boolean | null; enrolOptions: AssertionOptions };
 
-/**
- * `revalidate` on the settled outcome, never from the next press: `enrolOptions` is minted once per
- * load, so a dismissed or failed attempt leaves it stale, and refreshing inside the next click would
- * spend that click's user activation on the round trip. Never on `"ok"` — the submit carries its own.
- */
+/** `revalidate` on the settled outcome, never the next press: `enrolOptions` is minted once per
+ * load, and refreshing inside the next click would spend its user activation on the round trip. Never on `"ok"` — submit carries its own. */
 export async function runConfirmCeremony(
   optionsJSON: AssertionOptions,
   label: string,
@@ -331,11 +315,8 @@ export async function runConfirmCeremony(
   if (shouldRevalidateBeforeRetry(outcome.status === "dismissed" ? "dismissed" : "failed")) revalidate();
 }
 
-/**
- * `revalidatorState` counts: a dismissed confirm starts `enrolOptions` refreshing without moving
- * `phase`, and a press accepted then would wait on that round trip inside its own activation.
- * Never `"readyToCreate"` — that is exactly when Create must stay pressable.
- */
+/** `revalidatorState` counts: a dismissed confirm refreshes `enrolOptions` without moving `phase`,
+ * so an accepted press would wait on that round trip inside its own activation. Never `"readyToCreate"` — that's when Create must stay pressable. */
 export function enrolBusy(
   phase: EnrolPhase,
   fetcherState: "idle" | "loading" | "submitting",
@@ -388,8 +369,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
     setPhase("idle");
   }, [fetcher.state, fetcher.data]);
 
-  // `shouldRunCeremony` is `unlock.tsx`'s, imported: the phases it does not share map to `"idle"`,
-  // which it treats identically. An effect, not the click handler, so it waits on props.
+  // `shouldRunCeremony` is `unlock.tsx`'s, imported: the phases it doesn't share map to `"idle"`. An effect, not the click handler, so it waits on props.
   useEffect(() => {
     const mappedPhase = phase === "confirming" ? "confirming" : "idle";
     if (!shouldRunCeremony(mappedPhase, revalidator.state, confirmCeremonyStarted.current)) return;
@@ -404,8 +384,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
     setPhase("confirming");
   }
 
-  // Runs `requestRegistration` off this gesture with nothing awaited ahead of it; the expiry check
-  // is synchronous, so it costs no activation.
+  // Runs `requestRegistration` off this gesture with nothing awaited ahead of it; the expiry check is synchronous, so it costs no activation.
   function handleCreatePasskey() {
     if (registrationOptions === null || registrationMintedAt === null) return;
 
@@ -435,8 +414,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
       return;
     }
 
-    // Nothing reached the server, so the challenge is unspent: staying ready lets a retry — through
-    // a different provider, for the already-registered case — reuse it.
+    // Nothing reached the server, so the challenge is unspent: staying ready lets a retry (through a different provider, for the already-registered case) reuse it.
     setPhase("readyToCreate");
     setNote(
       outcome.status === "dismissed"
@@ -458,8 +436,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
 
   const confirmedLabel = registrationOptions?.user.name ?? label;
   const canUseAPasskey = supported !== false;
-  // Keyed on the options, not `phase`: the Create button must not flicker back to the confirm step
-  // while its own ceremony runs.
+  // Keyed on the options, not `phase`: the Create button must not flicker back to the confirm step while its own ceremony runs.
   const readyToCreate = registrationOptions !== null;
 
   return (
@@ -556,9 +533,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
           </button>
         )}
 
-        {/* Stays last: `.panel-form`'s sibling rule only zeroes a button's top margin when it
-            directly follows a full-line member, and even a `display: none` element between reopens
-            the 24px drop. */}
+        {/* Stays last: `.panel-form`'s sibling rule only zeroes a button's top margin when it directly follows a full-line member, and even a `display: none` element between reopens the 24px drop. */}
         <noscript>
           <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
         </noscript>
@@ -599,10 +574,7 @@ export function applyRemovalOptionsResult(
   setRemovalOptions(result.options);
 }
 
-/**
- * A removal the *server* refused has already spent its challenge, so this re-mints. Without it every
- * later Confirm press on the row retries a challenge that can never succeed.
- */
+/** A removal the *server* refused has already spent its challenge, so this re-mints — without it every later Confirm press on the row retries a challenge that can never succeed. */
 export function applyRemoveResult(
   result: ActionData,
   setNote: (note: string | null) => void,
@@ -619,10 +591,7 @@ export function applyRemoveResult(
   setNote(null);
 }
 
-/**
- * Two rows submitting removals at once each carry a `Set-Cookie`, and the later one can name a grant
- * the other already cascaded away. A row's own in-flight removal is covered by its own fetcher.
- */
+/** Two rows submitting removals at once each carry a `Set-Cookie`, and the later one can name a grant the other already cascaded away. A row's own in-flight removal is covered by its own fetcher. */
 export function lockedByOtherRow(activeRemovalId: string | null, credentialId: string): boolean {
   return activeRemovalId !== null && activeRemovalId !== credentialId;
 }
@@ -637,12 +606,9 @@ export function removalConfirmDisabled(
 }
 
 /**
- * Run straight off the Confirm removal press, no effect: a row's options are never carried across a
- * revalidation, so there is no revalidator state to wait on. A dismissed or failed outcome leaves
- * them in place — the challenge was never spent.
- *
- * `releaseLock` fires only on that branch: the `"ok"` branch must stay locked until its own
- * submission lands, which is what stops two removals racing.
+ * Run straight off the Confirm removal press, no effect: a row's options are never carried across
+ * a revalidation. A dismissed/failed outcome leaves them in place — the challenge was never spent.
+ * `releaseLock` fires only there: the `"ok"` branch stays locked until its own submission lands, stopping two removals racing.
  */
 export async function runRemovalCeremony(
   optionsJSON: AssertionOptions,
@@ -721,8 +687,7 @@ function PasskeyRow({
     setNote(null);
 
     if (!acknowledged) {
-      // No ceremony: the domain module refuses an unticked acknowledgement before looking for an
-      // assertion, so this carries no `Set-Cookie` and needs no page lock.
+      // No ceremony: the domain module refuses an unticked acknowledgement before looking for an assertion, so this carries no `Set-Cookie` and needs no page lock.
       void fetcher.submit({ intent: "remove", credentialId: passkey.credentialId }, { method: "post" });
       return;
     }

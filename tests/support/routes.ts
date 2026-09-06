@@ -1,12 +1,9 @@
 /**
- * Calls a route the way react-router calls it — builds the Request, catches
- * the Response a loader/action throws for redirects/404s. Pairs with
- * withDatabase: getDb() resolves to the test's transaction, so an
- * argument-less loader query reads the seeded rows.
+ * Calls a route the way react-router calls it — builds the Request, catches the Response a
+ * loader/action throws for redirects/404s. Pairs with withDatabase (getDb() resolves to the test's transaction).
  */
 import { RouterContextProvider } from "react-router";
 
-/** Cookie header a browser would send, if any — masking (spec 0007) reads one. */
 function withCookie(request: Request, cookie?: string): Request {
   if (cookie !== undefined) request.headers.set("Cookie", cookie);
   return request;
@@ -15,7 +12,6 @@ function withCookie(request: Request, cookie?: string): Request {
 // `duplex` is required by the Fetch spec once body is a stream; lib.dom.d.ts doesn't type it yet.
 type StreamingRequestInit = RequestInit & { duplex?: "half" };
 
-/** Rebuilds a request from a (possibly mutated) URL, carrying body/headers/signal across. */
 function rebuild(url: URL, request: Request): Request {
   const init: StreamingRequestInit = {
     method: request.method,
@@ -29,10 +25,8 @@ function rebuild(url: URL, request: Request): Request {
 }
 
 /**
- * Copied from react-router 7.18.2's callRouteHandler (server-runtime/data.ts):
- * URLSearchParams.delete re-serialises the whole query even for an absent
- * key (`,`→`%2C`, space→`+`), so a hand-typed URL doesn't match what a route
- * actually sees.
+ * Copied from react-router 7.18.2's callRouteHandler (server-runtime/data.ts): URLSearchParams.delete
+ * re-serialises the whole query even for an absent key (`,`→`%2C`, space→`+`), so a hand-typed URL doesn't match what a route actually sees.
  */
 function stripIndexParam(request: Request): Request {
   const url = new URL(request.url);
@@ -52,16 +46,13 @@ function stripRoutesParam(request: Request): Request {
 }
 
 /**
- * The request a loader/action is actually handed, after react-router's own
- * stripRoutesParam(stripIndexParam(...)) rebuild. Under
- * future.v8_passThroughRequests that rebuild goes away — delete both
- * strippers with it rather than trust them to still reproduce anything.
+ * The request a loader/action is actually handed, after react-router's own stripRoutesParam(stripIndexParam(...))
+ * rebuild. Under future.v8_passThroughRequests that rebuild goes away — delete both strippers with it.
  */
 function throughRouteHandler(request: Request): Request {
   return stripRoutesParam(stripIndexParam(request));
 }
 
-/** A GET, with search params if the route reads any, and a cookie if it reads one. */
 export function get(path: string, cookie?: string): Request {
   return withCookie(throughRouteHandler(new Request(`http://portfolio.local${path}`)), cookie);
 }
@@ -122,7 +113,6 @@ export async function outcomeOf<T>(run: () => Promise<T>): Promise<T | Response>
   }
 }
 
-/** The thrown Response, or a test failure if the route returned instead of throwing one. */
 export async function responseOf(run: () => Promise<unknown>): Promise<Response> {
   const outcome = await outcomeOf(run);
 
@@ -134,7 +124,6 @@ export async function responseOf(run: () => Promise<unknown>): Promise<Response>
   return outcome;
 }
 
-/** Location header of a thrown redirect. */
 export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
   const response = await responseOf(run);
 
@@ -144,18 +133,10 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
   return response.headers.get("Location") ?? "";
 }
 
-/**
- * Runs a route's middleware chain around a stand-in response — middleware
- * wraps the response, not the loader's return value (chartRangeMiddleware).
- * `onNext` lets a caller assert a pre-next() refusal (the lock, root.tsx's
- * middleware) actually short-circuited, since "no figure in the markup"
- * passes vacuously against a refusal too.
- *
- * Flat loop, not nested: can't assert *order* between two middleware
- * directly — arrange them to answer differently instead, as root.test.ts's
- * cross-origin case does. Also doesn't reproduce callRouteHandler's request
- * rebuild — the real pipeline hands middleware the pre-rebuild request.
- */
+/** Runs a route's middleware chain around a stand-in response (middleware wraps the response, not the loader's
+ * return value). `onNext` asserts a pre-next() refusal short-circuited — "no figure in the markup" passes
+ * vacuously against a refusal too. Flat loop, not nested: can't assert order between two middleware directly,
+ * and doesn't reproduce callRouteHandler's request rebuild. */
 export async function servedThrough(
   middleware: readonly unknown[], // untyped against generated Route.MiddlewareFunction[]; cast at call site
   request: Request,

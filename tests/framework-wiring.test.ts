@@ -1,13 +1,9 @@
 // The one wiring the lock rests on that nothing else in this suite touches: future.v8_middleware.
-// With the flag off, handleDocumentRequest passes no generateMiddlewareResponse
-// (node_modules/react-router/dist/development/chunk-ZA36QIGN.mjs:1430-1441) and
-// staticHandler.query never calls runServerMiddlewarePipeline (chunk-62JRHF6Z.mjs:3522-3534),
-// so app/root.tsx's middleware export is never read — every other test still passes because
-// each calls the middleware array directly via servedThrough.
-// Two complementary tests: a tripwire on the config value (catches the flag flipping, proves
-// nothing about behavior), and a hand-built ServerBuild driven through createRequestHandler
-// with the flag forced on and off (proves the pipeline itself, but can't notice the config
-// changing — that's the tripwire's job).
+// With the flag off, react-router never calls runServerMiddlewarePipeline (react-router 7.18.2
+// internals), so app/root.tsx's middleware export is never read — every other test still passes
+// because each calls the middleware array directly via servedThrough. Two complementary tests: a
+// tripwire on the config value, and a hand-built ServerBuild driven through createRequestHandler
+// with the flag forced on and off (proves the pipeline; can't notice the config changing).
 // Route modules import from source, never build/server — getDb() resolves to this test's own
 // transaction via async storage; the built bundle carries its own pool.
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -18,14 +14,12 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/da
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-// Imported after the environment is set (getConfig() memoises its first read), same as
-// every other route test in this suite.
+// Imported after the environment is set (getConfig() memoises its first read).
 const config = (await import("../react-router.config.ts")).default;
 const rootModule = await import("../app/root.tsx");
 const { stopPricePoller } = await import("~/lib/price-poller.server");
 
-// Root loader starts the refresh loop (as in tests/routes/root.test.ts) — stopped so it
-// doesn't outlive this file.
+// Root loader starts the refresh loop — stopped so it doesn't outlive this file.
 afterEach(() => {
   stopPricePoller();
 });
@@ -35,9 +29,8 @@ afterAll(closeTestDatabase);
 /** Smallest ServerBuild the 7.18.2 runtime accepts, real root module + one child so /holdings
  * matches something. entry.module's default renders a plain Response — enough to tell "let
  * through" from "refused" without a React render. */
-/** Set by the child loader — shows the request reached a loader, not just answered 200 (a
- * thrown loader also renders 200 "page" via entry.module's default, so the body alone can't
- * tell "served" from "error boundary"). */
+/** Set by the child loader — a thrown loader also renders 200 "page", so the body alone can't
+ * tell "served" from "error boundary". */
 let childLoaderCalls = 0;
 
 function buildWith(middlewareEnabled: boolean): ServerBuild {
@@ -87,8 +80,7 @@ async function serve(middlewareEnabled: boolean): Promise<Response> {
 
 describe("the framework flag the lock rests on", () => {
   it("declares middleware on, which is the only reason the root middleware export is ever read", () => {
-    // Tripwire only — catches the flag flipping, proves nothing about behavior (see file
-    // header for the mechanism; the test below is the actual proof).
+    // Tripwire only — catches the flag flipping, proves nothing about behavior (test below is the proof).
     expect(config.future?.v8_middleware).toBe(true);
   });
 
@@ -104,13 +96,11 @@ describe("the framework flag the lock rests on", () => {
       // Refused before anything ran, which a status alone would not say.
       expect(childLoaderCalls).toBe(0);
 
-      // Same build, request, seeded passkey — no lock at all. Without this half, the 302
-      // above could be coming from anywhere.
+      // Same build, request, seeded passkey — no lock at all. Without this half, the 302 above could be anything.
       const served = await serve(false);
       expect(served.status).toBe(200);
       expect(await served.text()).toBe("page");
-      // Loader ran too — entry.module's default answers 200 "page" for an error render too,
-      // so the body alone isn't evidence.
+      // Loader ran too — entry.module's default answers 200 "page" for an error render too.
       expect(childLoaderCalls).toBe(1);
     }),
   );
@@ -118,8 +108,7 @@ describe("the framework flag the lock rests on", () => {
   it(
     "serves the same request with middleware on once the household holds no passkey, so the refusal above is the lock's decision",
     withDatabase(async () => {
-      // Control — without it, the 302 above could be anything this harness happens to
-      // produce for /holdings.
+      // Control — without it, the 302 above could be anything this harness produces for /holdings.
       childLoaderCalls = 0;
 
       const served = await serve(true);

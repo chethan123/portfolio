@@ -1,20 +1,9 @@
 /**
- * Seeds one plausible demo household: several accounts/institutions, two
- * people, three years of statements, a price drawdown, an unquotable
- * instrument, a negative-summing loan — every branch a dashboard renders.
- * Run: docs/developing.md, "Seeing it with real-shaped data".
- *
- * Idempotent: guard+wipe+insert in one transaction. Refuses anything but its
- * own `demo_seed` marker or a pristine migrated database — no `--force`,
- * never a way to lose a real portfolio.
- *
- * Deliberately unlocked: writes no passkey. capture-screenshots.ts plants
- * its own passkey+grant afterward (see its header) — a placeholder here
- * would lock a dev out with no assertion that could ever succeed.
- *
- * Money is generated as JS numbers, stored as decimal strings at column
- * scale — invented figures, not measured (not a DESIGN.md §4.1 violation);
- * every reported total is computed in SQL by the same view the app reads.
+ * Seeds one plausible demo household: accounts, two people, three years of statements, a price
+ * drawdown, an unquotable instrument, a negative-summing loan — every branch a dashboard renders.
+ * Idempotent: guard+wipe+insert in one transaction, refusing anything but its own marker or a pristine
+ * database (no `--force`). Deliberately unlocked — capture-screenshots.ts plants its own passkey afterward.
+ * Money here is generated as JS numbers, not a DESIGN.md §4.1 violation — totals are computed in SQL.
  */
 import { isMarketOpen, marketDateOf } from "../app/lib/market-hours.ts";
 import { ConfigError, loadConfig } from "../server/config.ts";
@@ -32,9 +21,8 @@ type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 type PriceSource = "feed" | "fixed" | "manual";
 
 /**
- * How an instrument gets its price history: walk (per-weekday close, market
- * beta + own drift), fixed (one close forever — USD, $1 money-market NAV),
- * none (no close ever — the CIT with no public symbol, DESIGN.md §4.3).
+ * How an instrument gets its price history: walk (per-weekday close, market beta + own drift),
+ * fixed (one close forever — USD, $1 money-market NAV), none (no close ever, DESIGN.md §4.3).
  */
 type Pricing =
   | { kind: "walk"; start: number; alpha: number; beta: number; noise: number }
@@ -59,11 +47,9 @@ type InstrumentSeed = {
 };
 
 /**
- * How a holding's quantity moves across statements: accumulate (sized to
- * hit endValue, growth of final count bought over the window — contributions,
- * not trades), units (same, no price to size against), balance (cash
- * drifting with noise, not monotonic), amortise (loan principal to zero,
- * negative throughout — sign lives in quantity, DESIGN.md §2).
+ * How a holding's quantity moves across statements: accumulate (grown to hit endValue —
+ * contributions, not trades), units (same, no price to size against), balance (cash drifting
+ * with noise, not monotonic), amortise (loan principal to zero, negative — sign lives in quantity, DESIGN.md §2).
  */
 type Sizing =
   | {
@@ -382,8 +368,7 @@ function buildCalendar(now: Date): Calendar {
     [2, 5, 8, 11].includes(new Date(msOf(date)).getUTCMonth());
 
   const quarterEnds = monthEnds.filter(isQuarterEnd);
-  // First quarter end; monthly accounts trim to start here too, or a lone
-  // earlier bank point turns the chart's first year into a cliff.
+  // First quarter end — monthly accounts trim here too, or a lone earlier bank point turns year one into a cliff.
   const dayZero = at(quarterEnds, 0);
 
   const priceDates: IsoDate[] = [];
@@ -412,10 +397,8 @@ function buildCalendar(now: Date): Calendar {
 }
 
 /**
- * Latest trading day with a session, walked backwards (a weekday can be a
- * market holiday). Built through isMarketOpen, not hours-from-midnight,
- * since NY is UTC-4/UTC-5 across the year. Close appended by hand:
- * isMarketOpen is half-open, and 16:00 is exactly when the last price strikes.
+ * Latest trading day with a session, walked backwards (a weekday can be a market holiday). Built
+ * through isMarketOpen, not hours-from-midnight (NY is UTC-4/5 across the year); close appended by hand — isMarketOpen is half-open.
  */
 function findSession(
   priceDates: readonly IsoDate[],
@@ -443,11 +426,8 @@ function findSession(
   return null;
 }
 
-/**
- * Session prices ending exactly on the close, not an interpolation: refresh
- * writes observation and quote in one transaction, so the 1D line's last
- * point and the headline must be the same figure (issue #94).
- */
+/** Session prices ending exactly on the close, not an interpolation: refresh writes observation and
+ * quote in one transaction, so the 1D line's last point and headline must match (issue #94). */
 function walkSession(from: number, to: number, instants: number, gauss: () => number): number[] {
   const prices: number[] = [];
 
@@ -501,9 +481,8 @@ function closeAt(series: Series, date: IsoDate): number | null {
 }
 
 /**
- * Correlated closes through one market factor + per-instrument beta —
- * independent walks average into a shapeless line; one shared factor gives
- * the drawdown/recovery and keeps bond funds nearly flat, as they are.
+ * Correlated closes through one market factor + per-instrument beta — independent walks average
+ * into a shapeless line; one shared factor gives the drawdown/recovery and keeps bonds flat.
  */
 function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Series> {
   const dates = calendar.priceDates;
@@ -532,8 +511,7 @@ function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Serie
       continue;
     }
 
-    // alpha is drift *over* the market — subtracting market drift back out
-    // would cancel every instrument's downturns too.
+    // alpha is drift *over* the market — subtracting market drift back out would cancel downturns too.
     const drift = pricing.alpha / TRADING_DAYS - (pricing.noise * pricing.noise) / 2;
     const series: Series = [];
     let price = pricing.start;
@@ -550,10 +528,8 @@ function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Serie
 }
 
 /**
- * Quantity moves only on statement dates (positions are constant between
- * uploads, DESIGN.md §3). Basis accumulates like a real one: opening lot at
- * a factor of day-zero price (predates the app), each later contribution at
- * that quarter's close.
+ * Quantity moves only on statement dates (DESIGN.md §3). Basis accumulates like a real one:
+ * opening lot at a factor of day-zero price, each later contribution at that quarter's close.
  */
 function buildQuantities(
   holding: HoldingSeed,
@@ -680,13 +656,10 @@ async function assertSafeToSeed(client: PoolClient): Promise<boolean> {
 }
 
 /**
- * Dependency order: unlock_grant before passkey, then position_set (cascades
- * holdings, releases RESTRICTs), classification last (instruments hold it
- * back). USD/Cash and its 1970 close belong to the initial migration and survive.
- *
- * passkey/unlock_grant stay even though this script writes neither —
- * capture-screenshots.ts plants them against an already-seeded database (see
- * its header), so a re-seed must clear a previous capture run's leftovers too.
+ * Dependency order: unlock_grant before passkey, then position_set (cascades holdings, releases
+ * RESTRICTs), classification last (instruments hold it back). USD/Cash and its 1970 close survive
+ * (belong to the initial migration). passkey/unlock_grant stay even though this script writes
+ * neither — capture-screenshots.ts plants them, so a re-seed must clear a previous capture run's leftovers too.
  */
 const WIPE = [
   `delete from unlock_grant`,
@@ -761,8 +734,7 @@ async function seed(
 ): Promise<Written[]> {
   const random = makeRandom(SEED);
   const prices = buildPrices(calendar, makeGaussian(random));
-  // Own stream: drawing from `random` here would spend draws before
-  // buildQuantities, silently re-rolling every bank balance.
+  // Own stream: drawing from `random` here would spend draws before buildQuantities, re-rolling every bank balance.
   const sessionGauss = makeGaussian(makeRandom(SESSION_SEED));
   const written: Written[] = [];
 

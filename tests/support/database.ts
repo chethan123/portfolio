@@ -1,7 +1,6 @@
 /**
- * Real Postgres, migrated, seeded through the fixture builder — no mock, no
- * SQLite, since the risk is Postgres-specific SQL and `numeric` handling.
- * Isolation is by transaction rollback: every test body runs in one, always
+ * Real Postgres, migrated, seeded through the fixture builder — no mock, no SQLite, since the risk
+ * is Postgres-specific SQL and `numeric` handling. Isolation is by transaction rollback, always
  * rolled back. Requires `docker compose -f compose.test.yaml up -d --wait`.
  */
 import { createDatabase, withDb, type Database } from "~/lib/db.server";

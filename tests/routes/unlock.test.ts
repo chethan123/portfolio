@@ -1,8 +1,7 @@
-// unlock.tsx's own contribution: asking the domain module whether the screen is needed, reading a submission that's never
-// assumed well-formed, verifying through the domain module, setting the grant cookie only on success, honoring safeReturn.
-// Assertion validity rules are lock.server's (tests/lock.test.ts). The ceremony itself (navigator.credentials.get()) isn't
-// simulated (no browser here) — ~/lib/unlock-ceremony is mocked, leaving shouldRunCeremony/runCeremony/
-// shouldRevalidateBeforeRetry (the pure decisions pulled out of effects, finding 10) driven directly, no DOM.
+// unlock.tsx's own contribution: asking the domain module whether the screen is needed, verifying a submission,
+// setting the grant cookie only on success, honoring safeReturn. Assertion validity is lock.server's (lock.test.ts).
+// No browser: ~/lib/unlock-ceremony is mocked, leaving shouldRunCeremony/runCeremony/shouldRevalidateBeforeRetry
+// (finding 10's pure decisions) driven directly, no DOM.
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Phase } from "../../app/routes/unlock.tsx";
@@ -45,9 +44,8 @@ const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { LOCK_COOKIE, verifyUnlock } = await import("~/lib/lock.server");
 const { RETURN_PARAM } = await import("~/lib/lock");
 
-// Every Phase, typed so a sixth member is a compile error here rather than a silent hole below (how "verifying" slipped
-// past four lists once). Record<Phase, 0>, not `[...] as const satisfies readonly Phase[]` — the latter only checks each
-// element *is* a Phase, missing a member *added*; it passed against a deliberately widened union.
+// Every Phase, typed so a sixth member is a compile error rather than a silent hole below ("verifying" slipped past
+// four lists once). Record<Phase, 0>, not `as const satisfies readonly Phase[]` — the latter misses a member *added*.
 const PHASES = Object.keys({
   idle: 0,
   confirming: 0,
@@ -68,8 +66,8 @@ function seedFixturePasskey(seedPasskey: Fixtures["seedPasskey"]) {
   return seedPasskey({ credentialId, publicKey, transports, backupEligible });
 }
 
-// Narrows the loader's union return type for a call already known to render, not redirect (finding 4's escapes don't
-// apply here) — throws on the redirect half so a wrong assumption fails here, not three lines later against undefined.challenge.
+// Narrows the loader's union return type for a call already known to render, not redirect — throws on the redirect
+// half so a wrong assumption fails here, not later against undefined.challenge.
 function expectScreenData(
   data: Awaited<ReturnType<typeof loader>>,
 ): Exclude<Awaited<ReturnType<typeof loader>>, Response> {
@@ -260,10 +258,8 @@ describe("unlocking", () => {
     }),
   );
 
-  // Two spellings, one rule: the first is refused by safeReturn's origin check; the second resolves to *this* origin and
-  // is refused only by the check on what safeReturn is about to return — sending the absolute one alone would pass with
-  // that second check gone. withDatabase called per case, not handed to it.each (which would type-check and discard it —
-  // set-balance.test.ts's note on the same trap).
+  // Two spellings, one rule: the first is refused by safeReturn's origin check, the second only by the check on what
+  // safeReturn is about to return. withDatabase called per case, not handed to it.each (which would discard it).
   it.each(["https://evil.test", "/..//evil.test"])(
     "sends a verified browser to the Overview rather than to %j, which is off-site however it is spelled",
     (redirectTo) =>
@@ -407,8 +403,8 @@ describe("what the screen renders", () => {
       const loaderData = await loader(args(get("/unlock")));
       const markup = renderRoute(Unlock, "/unlock", loaderData).toLowerCase();
 
-      // "key" deliberately absent — "passkey" contains it, so naive checking would fail against correct copy. Whole
-      // markup lowercased, so this also bans "face" appearing in e.g. a class or var(--surface-*) attribute value.
+      // "key" deliberately absent — "passkey" contains it. Whole markup lowercased, so this also bans "face" in an
+      // attribute value like var(--surface-*).
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
@@ -562,8 +558,8 @@ describe("UnlockControl — the unsupported-browser branch, and what the one but
   });
 
   it(
-    // Finding 5: a dismissed/failed attempt revalidates without moving phase off "idle" — before this fix, a press
-    // accepted here spent the click's activation waiting on that in-flight round trip rather than the check.
+    // Finding 5: a dismissed/failed attempt revalidates without moving phase off "idle" — a press accepted here used
+    // to spend the click's activation waiting on that round trip rather than the check.
     "disables the button while its revalidator is refreshing stale options, even though phase itself is idle",
     () => {
       const loading = renderToStaticMarkup(
@@ -740,7 +736,7 @@ describe("runCeremony", () => {
 
   it(
     // The padlock opens on "verifying" and nothing else — setting phase after awaiting submit would open it for one
-    // departing frame; never leaving "confirming" would never open it at all.
+    // departing frame; never leaving "confirming" wouldn't open it at all.
     "reports the assertion as with this instance before submitting it, and only then returns to idle",
     async () => {
       const response = assertionResponse("fixture-challenge");
@@ -759,8 +755,8 @@ describe("runCeremony", () => {
   );
 
   it(
-    // Can't show React batching commits (needs a DOM, none here) — shows only that the reset is handed to the scheduler,
-    // not called outright. Deleting the wrapper changes no other assertion here while restoring, in a real browser, the shut-padlock frame this exists to remove.
+    // Can't show React batching commits (needs a DOM, none here) — shows only that the reset is handed to the
+    // scheduler, not called outright.
     "schedules the return to idle as a transition, so it cannot commit ahead of the redirect",
     async () => {
       vi.mocked(requestAssertion).mockResolvedValue({
@@ -811,8 +807,8 @@ describe("runCeremony", () => {
   );
 
   it(
-    // A retry used to wait for a *later* press to revalidate, running the ceremony outside that press's own user
-    // activation. Pin: runCeremony itself calls revalidate the moment it learns options are stale, not deferred to a later press.
+    // A retry used to wait for a *later* press to revalidate, outside that press's own user activation. Pin:
+    // runCeremony calls revalidate the moment it learns options are stale.
     "revalidates immediately once a dismissed prompt leaves the options stale, without ever submitting",
     async () => {
       vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });

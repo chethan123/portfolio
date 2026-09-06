@@ -1,7 +1,7 @@
-// Resolving first sightings, and the writes that remember them forever (spec 0004 step 04).
-// Real Postgres — byte-exact collate "C" lookup, unique classification name, concurrent-draft
-// alias conflict. USD probe is always a stub (no test touches the network); stubs count calls
-// since "probed once per created feed instrument" is a rule, not an implementation detail.
+// Resolving first sightings, and the writes that remember them forever (spec 0004 step 04). Real
+// Postgres — byte-exact collate "C" lookup, unique classification name, concurrent-draft alias
+// conflict. Probe is always a stub (no test touches the network); stubs count calls since
+// "probed once per created feed instrument" is a rule, not an implementation detail.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ValidationError } from "~/lib/input.server";
@@ -21,10 +21,9 @@ import type { ProbeSymbols } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
-/** Probe answering ok for every symbol, counting calls — each call carries every symbol
- * asked in one go, so "probed once" is checked on the call list, not a count. quoteType
- * mirrors what a provider says (§4.4) — null here would pass while telling the screen
- * everything is unclassifiable. */
+/** Probe answering ok for every symbol, counting calls — each call carries every symbol asked in
+ * one go, so "probed once" is checked on the call list, not a count. quoteType mirrors what a
+ * provider says (§4.4) — null here would pass while telling the screen everything is unclassifiable. */
 function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; calls: string[][] } {
   const calls: string[][] = [];
   return {
@@ -852,9 +851,8 @@ describe("sameRawStrings", () => {
   });
 });
 
-/** Moved here from column-mapping.test.ts, which imported it from this module: the lookup
- * is resolution's, not the mapping's, and a rule tested a file away from the code it governs
- * is a rule nobody finds when that code changes. */
+/** Moved here from column-mapping.test.ts, which imported it from this module — the lookup is
+ * resolution's, not the mapping's. */
 describe("unresolvedStrings", () => {
   it(
     "matches byte-exactly, so a case or padding difference is a miss",

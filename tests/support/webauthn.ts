@@ -1,17 +1,8 @@
-/**
- * Builds a registration response and an assertion the library's own verifier
- * accepts, byte by byte, rather than replaying a captured blob — so a case
- * can vary exactly the byte a check reads, using the same isoCBOR/isoBase64URL
- * primitives the library verifies with.
- *
- * Never provoke a refusal with a broken signature: authData/clientDataJSON
- * are signed as one string, so flip a byte and re-sign (see `counter`, `rpID`
- * options below) rather than mutate after signing — otherwise the verifier
- * rejects the signature, not the rule the test claims to cover.
- *
- * Pairs with seedPasskey (fixtures.ts, ADR-0012): credentialId/publicKey/
- * transports/backupEligible here are exactly its non-defaulted params.
- */
+/** Builds a registration response and assertion the library's own verifier accepts, byte by byte, using
+ * the same isoCBOR/isoBase64URL primitives it verifies with — never a replayed blob. Never provoke a
+ * refusal with a broken signature: authData/clientDataJSON are signed as one string, so flip a byte and
+ * re-sign (`counter`, `rpID` below) rather than mutate after signing. Pairs with seedPasskey (fixtures.ts,
+ * ADR-0012): credentialId/publicKey/transports/backupEligible here are exactly its non-defaulted params. */
 import { createHash, createPrivateKey, sign as nodeSign } from "node:crypto";
 
 import { isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers";
@@ -122,16 +113,10 @@ function clientDataJSON(type: "webauthn.create" | "webauthn.get", challenge: str
   return new TextEncoder().encode(json);
 }
 
-/**
- * A RegistrationResponseJSON verifyRegistrationResponse accepts — fmt: "none",
- * empty attStmt, no signature, so rpID/credentialId/attestedCredentialId can
- * be overridden (a wrong rpIdHash, a second credential, a mismatched attested
- * id) with nothing to re-sign. A credentialId override must be canonical
- * base64url — completeRegistration refuses a decode/re-encode mismatch
- * between the attested and reported id. `transports` is `unknown` and
- * replaces the module constant wholesale, so a test can send what a broken
- * client might (a number, null) past this one cast.
- */
+/** A RegistrationResponseJSON verifyRegistrationResponse accepts — fmt: "none", empty attStmt, no signature,
+ * so rpID/credentialId/attestedCredentialId can be overridden with nothing to re-sign. A credentialId override
+ * must be canonical base64url — completeRegistration refuses a decode/re-encode mismatch. `transports` is
+ * `unknown` and replaces the module constant wholesale, so a test can send what a broken client might. */
 export function registrationResponse(
   challenge: string,
   options?: {
@@ -176,12 +161,8 @@ export function registrationResponse(
   };
 }
 
-/**
- * An AuthenticationResponseJSON verifyAuthenticationResponse accepts, signed
- * with the fixture's private key over authData || clientDataHash. `counter`
- * (default 0) and `rpID` vary and re-sign, for counter-progression/regression
- * and wrong-rpIdHash cases.
- */
+/** An AuthenticationResponseJSON verifyAuthenticationResponse accepts, signed with the fixture's private key
+ * over authData || clientDataHash. `counter` (default 0) and `rpID` vary and re-sign, for counter cases and wrong-rpIdHash. */
 export function assertionResponse(
   challenge: string,
   options?: { counter?: number; rpID?: string; flags?: number },

@@ -1,8 +1,8 @@
 // Where a figure is rounded on its way in, and what that costs. Two folds run on ingest — parseStatement folds rows
-// sharing a raw spelling, assembleDiff folds spellings resolving to one instrument — the second over figures the first
-// already rounded, so unless the exact numerator carries across, the flow computes an average of averages (200k random
-// two-spelling files put the divergence at 16.6%, worst case $0.51 on one cost basis, flowing into unrealized/gains/tax).
-// The other half is costBasisIs: "total" — the one lossy op on a figure read straight off a statement, never DB-tested before.
+// sharing a raw spelling, assembleDiff folds spellings resolving to one instrument — the second over figures the
+// first already rounded, so unless the exact numerator carries across, the flow computes an average of averages
+// (200k random two-spelling files: divergence 16.6%, worst case $0.51 on one cost basis). The other half is
+// costBasisIs: "total" — the one lossy op on a figure read straight off a statement.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { foldLots, parseStatement } from "~/lib/statement";
@@ -20,9 +20,8 @@ const encode = (text: string) => new TextEncoder().encode(text);
 
 describe("folding a position twice", () => {
   // Two spellings, AAA (1@10.00, 1@20.00) and BBB (2@30.00, 5@40.00). True weighted average over all four lots:
-  // (1×10+1×20+2×30+5×40)/9 = 290/9 = 32.2222…. Folding separately first (AAA→15.0000 exact, BBB→260/7=37.1429, rounded)
-  // then folding those results multiplies the dropped 0.0000004 back up by 7 shares, landing on 32.2223 — wrong by a
-  // hundredth of a cent, from an operation nobody asked to be approximate.
+  // 290/9 = 32.2222…. Folding separately first (AAA→15.0000 exact, BBB→260/7=37.1429 rounded) then folding those
+  // results multiplies the dropped 0.0000004 back up by 7 shares, landing on 32.2223 — wrong by a hundredth of a cent.
   const AAA = [
     { quantity: "1.00000000", costBasisPerShare: "10.00" },
     { quantity: "1.00000000", costBasisPerShare: "20.00" },
@@ -178,8 +177,7 @@ describe("the value shown on the review screen", () => {
   it(
     "is the figure the account reports once the statement lands",
     withDatabase(async (ctx) => {
-      // Review computes Value in JS (no holding_valued row yet to compute it in SQL) — the one place the view's
-      // multiplication is written twice (valueAt, uploads.server.ts), previously only tested with a terminating product.
+      // Review computes Value in JS — the one place the multiplication is written twice (valueAt, uploads.server.ts).
       // 1.23456789 × 81.1111 lands past 4 places, so both implementations must round the same way.
       const instrument = await ctx.seedInstrument({ symbol: "VTI" });
       await ctx.seedQuote({ instrument, price: "81.1111" });

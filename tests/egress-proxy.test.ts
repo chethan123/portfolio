@@ -1,10 +1,9 @@
 // Egress proxy (ticket 08, server/egress-proxy.ts): real node:http server on loopback, fake
 // dns.lookup and upstream net.connect (never a socket to the internet), raw TCP for the client
-// side — CONNECT tunnels and TLS bytes are below what fetch/http.request can drive directly.
-// The pipelined case below writes the CONNECT line and ClientHello in one socket.write(), which
-// a plain CONNECT client can't reach (no way to write before its own 'connect' event).
-// A paused net.Socket never notices a close (same trap as price-worker.test.ts) — every socket
-// not read through waitForStatusLine calls .resume() once it only needs the close.
+// side — CONNECT tunnels and TLS bytes are below what fetch/http.request can drive directly. The
+// pipelined case writes the CONNECT line and ClientHello in one socket.write(), unreachable from a
+// plain CONNECT client. A paused net.Socket never notices a close — every socket not read through
+// waitForStatusLine calls .resume() once it only needs the close.
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 
@@ -356,8 +355,8 @@ describe("resolving and connecting the upstream (step 2)", () => {
   });
 
   it("destroys the upstream socket it was still connecting when the deadline fires", async () => {
-    // Blackholing answers neither callback nor 'error' — left alone, the socket sits in SYN_SENT after
-    // the client's 504 (an unbounded leak; maxConnections counts client sockets only).
+    // Blackholing answers neither callback nor 'error' — left alone the socket sits in SYN_SENT
+    // after the client's 504, an unbounded leak (maxConnections counts client sockets only).
     const { fn, sockets: hungSockets } = hangingNetConnect();
     const port = await start({ netConnect: fn });
     const socket = track(await connectRaw(port));
@@ -667,8 +666,7 @@ describe("logging", () => {
   });
 
   it("writes a refusal as one physical line when the server_name carries control bytes", async () => {
-    // Refusal line quotes peer-chosen bytes unsanitised — one hello could otherwise forge further log
-    // lines, making the audit trail writable by the party being audited.
+    // Refusal line quotes peer-chosen bytes unsanitised — one hello could otherwise forge log lines.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { proxyPort } = await startWithUpstream();
     const socket = track(await connectRaw(proxyPort));
@@ -706,9 +704,8 @@ describe("logging", () => {
   });
 
   it("destroys an established tunnel on SIGTERM instead of waiting for it to end", async () => {
-    // server.close() leaves an upgraded socket alone — without SIGTERM handling this would hold open past
-    // Docker's 10s grace. idleTeardownMs pushed out on purpose so a natural idle-close doesn't hide the bug;
-    // assertion is on promptness, not eventual closure.
+    // server.close() leaves an upgraded socket alone — without SIGTERM handling this holds open past
+    // Docker's 10s grace. idleTeardownMs pushed out so a natural idle-close doesn't hide the bug.
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const before = process.listeners("SIGTERM");
     const { proxyPort } = await startWithUpstream({ idleTeardownMs: 30_000 });

@@ -161,7 +161,6 @@ describe("a step with nothing left to ask", () => {
             },
           },
         ],
-        // Manual: probe must never be reached; empty-map stub satisfies the required param.
         { probe: async () => new Map() },
       );
 

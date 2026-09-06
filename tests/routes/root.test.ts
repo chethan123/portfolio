@@ -1,7 +1,7 @@
-// The one loader and (ticket 03) one middleware that run on every page render. firstRunStep() throws when Postgres is
-// unreachable and this loader is an error boundary on every route, so a database merely restarting would error-page
-// every screen — one try is the fix, and the easiest thing to tidy away. Every middleware refusal below is proven on
-// next() never being invoked (servedThrough's onNext), never on inspecting a response a refusal never produced.
+// The one loader and (ticket 03) one middleware that run on every page render. firstRunStep() throws when Postgres
+// is unreachable and this loader is an error boundary on every route, so a database merely restarting would
+// error-page every screen. Every middleware refusal below is proven on next() never being invoked (servedThrough's
+// onNext), never on inspecting a response a refusal never produced.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -10,8 +10,8 @@ import { saveMaskingPolicy } from "~/lib/settings.server";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-// Seam onto touchGrant so one test can fail the grant check independently of isLocked — a single unreachable DB can't fail
-// one without the other, since isLocked (read first) would already refuse. undefined defers to the real function.
+// Seam onto touchGrant so one test can fail the grant check independently of isLocked (which would refuse first
+// on a genuinely unreachable DB). undefined defers to the real function.
 const touchGrantOverride = vi.hoisted(() => ({
   impl: undefined as ((id: string, db?: unknown) => Promise<unknown>) | undefined,
 }));
@@ -33,8 +33,8 @@ const { stopPricePoller } = await import("~/lib/price-poller.server");
 /** Refused immediately, which is how "the database is down" arrives here. */
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-// This loader also starts the refresh loop (§6.2) — a real 15-minute interval holding the live Yahoo provider, unref'd
-// but otherwise outliving this file. Stopped after every test.
+// This loader also starts the refresh loop (§6.2) — a real 15-minute interval, unref'd but otherwise outliving this
+// file. Stopped after every test.
 afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
@@ -266,9 +266,8 @@ describe("the lock middleware", () => {
   it(
     "clears the grant cookie on a refusal that is itself a POST to /lock-now carrying that browser's own grant, since an outage must not strand a grant the reader asked to end",
     async () => {
-      // Finding 3: an outage in isLocked refuses here, before /lock-now's own action (which clears the cookie) ever
-      // runs — pressing "Lock now" during the outage must still end the grant, or the cookie survives to readmit once
-      // the DB recovers. Cookie seeded here (finding 4) since a genuine same-origin press always carries it.
+      // Finding 3: an outage in isLocked refuses before /lock-now's own action (which clears the cookie) ever runs —
+      // pressing "Lock now" during the outage must still end the grant, or the cookie survives to readmit later.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -294,9 +293,8 @@ describe("the lock middleware", () => {
   it(
     "leaves the grant cookie alone on a refusal that is a POST to /lock-now during an outage, when the request carries no grant cookie at all — the cross-site forgery shape (finding 4, P1)",
     async () => {
-      // SameSite=Lax withholds LOCK_COOKIE from a cross-site form POST, so a request with no cookie at all is exactly
-      // what a forged auto-submit to /lock-now produces — indistinguishable by path+method from a real press during an
-      // outage. Requiring the cookie fixes this without a second CSRF mechanism beside Origin/SameSite=Lax (ADR-0005).
+      // SameSite=Lax withholds LOCK_COOKIE from a cross-site form POST, so a cookie-less request is exactly what a
+      // forged auto-submit produces. Requiring the cookie fixes this without a second CSRF mechanism (ADR-0005).
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -368,9 +366,8 @@ describe("the lock middleware", () => {
   it(
     "clears the grant cookie on a refusal from a POST to a percent-encoded spelling of /lock-now, since the router would match it the same way",
     async () => {
-      // Finding D: react-router decodes each pathname segment before matching (decodePath, 7.18.2), so POST /lock%2Dnow
-      // reaches the same action as /lock-now. Comparing the raw undecoded pathname (normalizedPathname reverted to
-      // pathname.toLowerCase() without decoding) fails this the same way finding 3 failed the plain spelling.
+      // Finding D: react-router decodes each pathname segment before matching (7.18.2), so POST /lock%2Dnow reaches
+      // the same action as /lock-now — comparing the raw undecoded pathname would fail this.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 

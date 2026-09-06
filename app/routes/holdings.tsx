@@ -51,10 +51,7 @@ import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/holdings";
 
-/**
- * Every position across every account, grouped/filterable (DESIGN.md §8.1). One query +
- * holdings-view.ts do all filtering/sorting/totals; view is the query string, `?edit=` opens a row.
- */
+/** Every position across every account, grouped/filterable (DESIGN.md §8.1); view is the query string, `?edit=` opens a row. */
 export function meta() {
   return [{ title: "Holdings · Portfolio" }];
 }
@@ -69,13 +66,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     query.direction = DEFAULT_DIRECTION;
   }
 
-  // `edit`/`saved` excluded from `HoldingsQuery`/`view` so filtering can't carry a half-typed
-  // correction; re-parsed, not echoed — mangled `edit=` just closes.
+  // `edit`/`saved` excluded from `HoldingsQuery`/`view` so filtering can't carry a half-typed correction; re-parsed, not echoed.
   const editing = parseRowKey(url.searchParams.get("edit"));
   const saved = parseRowKey(url.searchParams.get("saved"));
 
-  // Owner filter is household-wide (ADR-0008). `toSearch` re-serializes rather than echoes, so
-  // `parseQuery(toSearch(q))` is `q` — a bounce cannot loop.
+  // Owner filter is household-wide (ADR-0008). `toSearch` re-serializes, so `parseQuery(toSearch(q))` is `q` — a bounce cannot loop.
   const link = (owners: OwnerFilter) => toSearch(query, owners);
   const { reading, owner } = await ownerReading(request, {
     request: (owners) =>
@@ -93,16 +88,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
-  // Narrowed in SQL via the same predicate every screen reads through — not by filtering
-  // `household` here, a second implementation free to disagree.
+  // Narrowed in SQL via the same predicate every screen reads through — not by filtering `household` here, a second implementation free to disagree.
   const holdings = isFiltered(owners) ? await currentHoldings(reading) : household;
 
   // Built from every holding, not the filtered set, or a vanished option would leave no way to widen back.
   const filters = availableFilters(household, query);
   const visible = applyFilters(holdings, query);
 
-  // Receipt quotes the database, not the URL — `?saved=` only names the row; figures come from
-  // `household` so a hand-typed id can't fabricate one.
+  // Receipt quotes the database, not the URL — figures come from `household` so a hand-typed id can't fabricate one.
   const open = saved === null ? editing : null;
 
   const written =
@@ -156,10 +149,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
-/**
- * Restates one position; positions.server.ts owns what lands (§5.4). Row id comes from the
- * URL, not a hidden field, so it can't disagree with the page it was submitted from.
- */
+/** Restates one position; positions.server.ts owns what lands (§5.4). Row id comes from the URL, not a hidden field submitted alongside it. */
 export async function action({ request }: Route.ActionArgs) {
   const url = new URL(request.url);
   const target = parseRowKey(url.searchParams.get("edit"));
@@ -187,8 +177,7 @@ export async function action({ request }: Route.ActionArgs) {
 
 const EDITOR = "revise-position";
 
-// Canonical view plus one transient row (edit/saved) — kept out of `toSearch` since it's
-// request-only, never part of a link built from the view.
+// Canonical view plus one transient row (edit/saved) — kept out of `toSearch`, request-only, never part of a link built from the view.
 function withRow(
   search: string,
   param: "edit" | "saved",
@@ -275,8 +264,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     values: actionData?.values,
   };
 
-  // Clears only this screen's filters, not grouping/sort (how you read, not what); owner
-  // filter is separate — "Show everyone" is its own control.
+  // Clears only this screen's filters, not grouping/sort; owner filter is separate — "Show everyone" is its own control.
   const cleared = toSearch({ ...query, filters: new Map() }, owners) || ".";
   const columns = columnsFor(group);
   // +1 for the row's Edit control — no `SortKey`, so not a `Column`.
@@ -399,10 +387,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
   );
 }
 
-/**
- * Why the table is empty, in words. Owner filter takes precedence over this screen's own
- * selects (unreadable owner, then owner holding nothing, then the selects' overlap).
- */
+/** Why the table is empty, in words — owner filter takes precedence over this screen's own selects. */
 function describe({
   filters,
   narrowedTo,
@@ -414,7 +399,6 @@ function describe({
   unknownOwner: boolean;
   narrowedToNothing: boolean;
 }): string {
-  // Owner filter first — the more fundamental fact.
   if (unknownOwner) return UNREADABLE_OWNER;
 
   const holds = holdsNothing(narrowedTo);
@@ -425,7 +409,6 @@ function describe({
     .map((filter) => filter.selectedPhrase)
     .filter((phrase): phrase is string => phrase !== null);
 
-  // Narrowed and filtered: name whose portfolio it is.
   if (narrowedTo.length > 0 && chosen.length > 0) {
     return `${holds} nothing ${joinWords(chosen)}.`;
   }
@@ -472,8 +455,7 @@ function Header({
   );
 }
 
-// Hidden fields for the owner control — a GET form submits only its own, else switching owner
-// drops sort/grouping/filters. `edit`/`saved` excluded (see loader).
+// Hidden fields for the owner control — a GET form submits only its own, else switching owner drops sort/grouping/filters.
 function hiddenFields(query: HoldingsQuery): Record<string, string> {
   const fields: Record<string, string> = {};
 
@@ -717,11 +699,7 @@ type Editor = {
   values?: Record<string, string>;
 };
 
-/**
- * One holding, with (at most one at a time) its inline correction (§5.4). Inputs sit in a row
- * beneath, joined by `form=` — a `<form>` can't wrap a `<tr>`. Price/Value/Unrealized keep
- * showing stored figures while open, since correction is made against them.
- */
+/** One holding, with (at most one at a time) its inline correction (§5.4); inputs sit in a row beneath, joined by `form=` since a `<form>` can't wrap a `<tr>`. */
 function Row({
   holding,
   columns,
@@ -847,7 +825,6 @@ function Row({
             <Link
               className="row-edit"
               to={withRow(editor.view, "edit", holding)}
-              // Distinguishes identical "Edit" links for a screen reader's link list.
               aria-label={`Correct ${holding.instrumentName} in ${holding.accountName}`}
               preventScrollReset
             >
@@ -921,10 +898,7 @@ function Row({
   );
 }
 
-/**
- * What the totals were computed from (§8.2). Three separate counts — a workplace plan has a
- * price but no cost basis, an unquotable one is the reverse; one count would misreport the others.
- */
+/** What the totals were computed from (§8.2) — three separate counts, since a workplace plan has a price but no cost basis and an unquotable one is the reverse. */
 function Coverage({ total, grouped }: { total: Total; grouped: boolean }) {
   const { valueCoverage: value, unrealizedCoverage: unrealized } = total;
   const notes: string[] = [];

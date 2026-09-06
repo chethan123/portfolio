@@ -1,12 +1,9 @@
-// Where two independent queries answer one question and must not disagree (§8.2's weakest point). Most mitigation is
-// structural and needs no test (readers sum the same rounded value column). What's left is pairs whose *shapes* genuinely
-// differ — two SQL statements, SQL vs JS reduction, two reductions over one array — which can drift under an edit
-// unnoticed. The last two blocks (Holdings/Income by tax, Holdings/Analysis on all four cuts) agree only because both
-// read holdings-view.ts's one dimension accessor; these tests keep that structural, not lucky.
+// Where two independent queries answer one question and must not disagree (§8.2's weakest point) — pairs whose
+// *shapes* genuinely differ (two SQL statements, SQL vs JS reduction, two reductions over one array) and so can
+// drift under an edit unnoticed.
 //
-// Deliberately not asserted: netWorth and netWorthAt(…, today) disagree by design — current prices from quote.price, as-of
-// from price_daily.close (0002 vs 0003) — 482.10 vs 480.00, or 0.0000-over-zero-coverage with no price_daily row at all.
-// Pairing them would only pass by seeding both prices equal, a fixture not a rule.
+// Deliberately not asserted: netWorth and netWorthAt(…, today) disagree by design — current prices from quote.price,
+// as-of from price_daily.close (0002 vs 0003). Pairing them would only pass by seeding both prices equal.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { loader as analysis } from "../../app/routes/analysis.tsx";
@@ -117,8 +114,8 @@ describe("the Analysis screen's own arithmetic", () => {
     "slices a total it did not compute, and the slices add back up to it",
     withDatabase(async (ctx) => {
       // analysis.tsx issues two uncoupled queries (currentHoldings for slices, netWorth for the headline) — a filter or
-      // dropped row on either side would contradict the other (§8.2). BigInt over stored strings, not Number. Can't see
-      // a never-priced row (null contributes nothing to a sum) — the coverage test below is the complement.
+      // dropped row on either side would contradict the other (§8.2). Can't see a never-priced row here (contributes
+      // nothing to a sum) — the coverage test below is the complement.
       await anAwkwardPortfolio(ctx);
 
       const page = await analysisPage();
@@ -223,9 +220,8 @@ describe("the Income screen and the Holdings table", () => {
   it(
     "group by tax treatment identically, holding for holding",
     withDatabase(async (ctx) => {
-      // Holdings groups through groupHoldings, summing its own subtotals; Income groups through annualDividendBy,
-      // summing BigInt units in allocation.ts. They can't disagree because both read holdings-view.ts's one dimension
-      // accessor — a third copy of the labels would let them group identically and label differently, uncaught elsewhere.
+      // Holdings groups through groupHoldings; Income groups through annualDividendBy in allocation.ts. They can't
+      // disagree on labels because both read holdings-view.ts's one dimension accessor.
       await aPortfolioThatPays(ctx);
 
       const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ALL_OWNERS, ctx.db)]);
@@ -357,10 +353,9 @@ describe("the Analysis screen and the Holdings table", () => {
   it(
     "cut the household into the same buckets, by the same names, on every dimension",
     withDatabase(async (ctx) => {
-      // Labels match structurally now (both sides call the one groupingBy(id) accessor) — what would break it is
-      // Analysis growing a private label table again, how the two screens once printed "Workplace plan (401k, 403b)"
-      // vs "Workplace plan" for one bucket. Amounts/counts are independent (allocation.ts vs holdings-view.ts). Share is
-      // sharpest: both rank buckets and hand the rounding remainder to the first, agreeing only if ties break the same way (one compareText serves both).
+      // Labels match structurally (both sides call the one groupingBy(id) accessor) — Analysis once kept a private
+      // label table and printed "Workplace plan (401k, 403b)" vs "Workplace plan" for one bucket. Share is sharpest:
+      // both rank buckets and hand the rounding remainder to the first, agreeing only if ties break the same way.
       await aPortfolioCutFourWays(ctx);
 
       const [page, holdings] = await Promise.all([

@@ -1,8 +1,6 @@
 // Where the two net worth series meet (DESIGN.md §7). manualNetWorth returns rows raw and unmerged — "computed wins on
-// overlapping dates" is a chart-level statement this loader alone writes, as one filter over two comparisons. Getting it
-// wrong draws a lie that never throws: a blended hand-typed dot reads as a real daily curve, a duplicate date draws a
-// cliff. Also: junk ?range fallback, and (through the one render) allocation bars measuring against the gross positive
-// total so a mortgage bigger than the portfolio draws no negative bar.
+// overlapping dates" is a chart-level statement this loader alone writes. Getting it wrong draws a lie that never
+// throws: a blended hand-typed dot reads as a real daily curve, a duplicate date draws a cliff.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
@@ -47,8 +45,7 @@ async function seedDayZero(
 }
 
 // Three owners (not two, else "both" is the household and the all-owners collapse would bounce it away), each priced so
-// headlines differ and sum to a fourth. Alice's day zero (`hers`) differs from Bob/Carol's (`his`) so a narrowed chart's
-// reach is a distinct date. Alice: 100 VTI@100.0000. Bob: 40 BND@50.0000. Carol: 25 VXUS@20.0000.
+// headlines differ and sum to a fourth. Alice's day zero (`hers`) differs from Bob/Carol's (`his`) so a narrowed chart's reach is a distinct date.
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -157,8 +154,7 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(100), his: daysAgo(100) });
 
-      // Alice's account is older than its first upload (empty then, positions later) — history begins at 700 days, line at 100, and
-      // the gap between is where a hand-typed point could wrongly land under "Alice".
+      // Alice's account is older than its first upload (empty then, positions later) — history begins at 700 days, line at 100, and the gap between is where a hand-typed point could wrongly land under "Alice".
       const older = await ctx.seedAccount({ kind: "bank", name: "Alice Savings", owner: alice });
       await ctx.seedPositionSet({ account: older, asOf: daysAgo(700), holdings: [] });
       await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "5000.00" });
@@ -209,8 +205,7 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // Bob's accounts all close (off the roster), but holding_valued_at still reads a closed account for dates before its
-      // closure, so his past is reachable by id — a stale bookmark naming him must not sneak into "Showing Alice only" (§14).
+      // Bob's accounts all close (off the roster), but holding_valued_at still reads a closed account for dates before its closure, so a stale bookmark naming him must not sneak into "Showing Alice only" (§14).
       await ctx.db
         .updateTable("account")
         .set({ closed_at: new Date() })
@@ -218,7 +213,6 @@ describe("the Overview read as an owner", () => {
         .execute();
 
       const hers = await loader(args(get(`/?owner=${alice.id}&range=all`)));
-      // Through loader directly, so this must already be the address ownerReading accepts unchanged (toOwnerParam's repeated key).
       const stale = await loader(args(get(`/?${ownerParam(alice.id, bob.id)}&range=all`)));
 
       expect(stale.unknownOwner).toBe(true);
@@ -305,8 +299,7 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // No hand-typed rows — a note naming a cause the instance doesn't have is how notes stop being read. Under All
-      // deliberately: the one range where an existing point's omission is always the filter's, never the window's.
+      // No hand-typed rows — a note naming a cause the instance doesn't have is how notes stop being read. Under All deliberately: the one range where an existing point's omission is always the filter's, never the window's.
       const quiet = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(quiet.manualWithheld).toBe(false);
       expect(renderRoute(Overview, "/", quiet)).not.toContain(
@@ -426,8 +419,7 @@ describe("the Overview's three empty states", () => {
   it(
     "says nothing has been uploaded even when the address carries an owner filter",
     withDatabase(async (ctx) => {
-      // A bookmarked owner param against a fresh instance is filtered *and* empty — branching on the filter alone wrongly
-      // said "can no longer be read as", sending the reader hunting for a roster on a database that has none.
+      // A bookmarked owner param against a fresh instance is filtered *and* empty — branching on the filter alone wrongly said "can no longer be read as", sending the reader hunting for a roster on a database that has none.
       await ctx.seedPerson({ name: "Alice" });
       const data = await loader(args(get("/?owner=999999999")));
 
@@ -485,8 +477,7 @@ describe("the Overview's three empty states", () => {
         holdings: [{ instrument: vti, quantity: "10" }],
       });
 
-      // Dana owns no open account, so ?owner= naming Alice doesn't cover everybody and can't collapse — but the roster
-      // offers one name, which used to mean no control at all, stranding the filter with no way to clear it.
+      // Dana owns no open account, so ?owner= naming Alice doesn't cover everybody and can't collapse — but the roster offers one name, which used to mean no control at all, stranding the filter with no way to clear it.
       const data = await loader(args(get(`/?owner=${alice.id}`)));
       const markup = renderRoute(Overview, "/", data);
       expect(markup).toContain('aria-label="Filter by owner"');
@@ -800,8 +791,7 @@ describe("the number tail on the account rows", () => {
 });
 
 describe("the 1D range on the Overview", () => {
-  // Day zero, plus a session of observations. Daily close the day before is what an unobserved instant carries forward
-  // from; the quote is what the headline reads — both written the way one refresh writes them (story 8).
+  // Day zero, plus a session of observations. Daily close the day before is what an unobserved instant carries forward from; the quote is what the headline reads — both written the way one refresh writes them (story 8).
   async function seedSession(ctx: TestContext, session: string, previous: string): Promise<void> {
     const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
     const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });

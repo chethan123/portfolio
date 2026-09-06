@@ -1,8 +1,7 @@
 /**
- * The household's settings rows — capital gains rate, masking policy, refresh cadence, each a
- * row rather than an environment variable (DESIGN.md §8.1, §8.4). Exercises the schema's own
- * refusals too, not only zod's — a test that only went through the validator would pass on a
- * schema that had lost the range/single-row constraints.
+ * The household's settings rows — capital gains rate, masking policy, refresh cadence, each a row
+ * rather than an environment variable (DESIGN.md §8.1, §8.4). Exercises the schema's own refusals
+ * too, not only zod's, since a validator-only test would pass a schema that lost its constraints.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -51,10 +50,9 @@ describe("the capital gains rate", () => {
   it(
     "files a refusal under the name this form's field actually has",
     withDatabase(async ({ db }) => {
-      // rules themselves are percentRate's, pinned without a database in rate-input.test.ts
-      // (under the name `rate`) — only this call site shows the message arrives under
-      // capitalGainsRate, the name the Tax form's box carries; filed wrong it renders nowhere.
-      // asserted on the message, not just the key's presence — toHaveProperty alone would pass if every refusal said "banana"
+      // rules themselves are percentRate's, pinned in rate-input.test.ts — only this call site shows
+      // the message arrives under capitalGainsRate, the Tax form's field name; filed wrong it renders
+      // nowhere. Asserted on the message, not just the key's presence.
       const refusal = await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "101" }, db));
 
       expect(refusal.capitalGainsRate).toMatch(/more than 100/);

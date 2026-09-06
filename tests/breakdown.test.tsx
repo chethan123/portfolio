@@ -32,9 +32,8 @@ describe("the arcs", () => {
   });
 
   it("folds everything past the fifth row into one neutral wedge", () => {
-    // Seven groups, five colours: rank six and up merge into one --cat-other wedge, never
-    // a sixth hue or a repeat of --cat-5 (a tail dressed in a real color reads as one more group).
-    // Amounts descend with shares so the fixture can't fake the fold keying on share, not rank.
+    // Seven groups, five colours: rank six and up merge into one --cat-other wedge, never a sixth
+    // hue or a repeat of --cat-5. Amounts descend with shares so the fold can't fake keying on share.
     const wedges = ring([
       slice("A", "40.0000", "0.400000"),
       slice("B", "20.0000", "0.200000"),
@@ -103,9 +102,8 @@ describe("<Breakdown>", () => {
   });
 
   it("draws no ring, no zero and no chart frame when nothing is positive", () => {
-    // Loan-only household: nothing positive to draw, and total=0 checks §8.4's rule that an
-    // empty ring never shows $0.00. renderRoute (not bare) because amounts check mask state
-    // (spec 0007); rendered unmasked since the figures are what's under test.
+    // Loan-only household: total=0 checks §8.4's rule that an empty ring never shows $0.00.
+    // renderRoute (not bare) because amounts check mask state (spec 0007).
     const markup = renderRoute(
       () => (
         <Breakdown

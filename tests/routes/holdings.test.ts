@@ -474,8 +474,8 @@ describe("the three empty states", () => {
 });
 
 describe("the canonical bounce, through a real URL", () => {
-  // Asserted through new Request (every URL re-encoding in the picture), unlike holdings-view.test.ts's toSearch-is-a-fixed-point-
-  // of-itself check — weaker, blind to the URL parser and form-urlencoded serialiser each respelling what the other leaves bare.
+  // Asserted through new Request (every URL re-encoding in the picture) — unlike holdings-view.test.ts's
+  // toSearch-is-a-fixed-point check, this one isn't blind to the URL parser and form-urlencoded serialiser.
   const settles = async (search: string): Promise<void> => {
     const first = await outcomeOf(() => loader(args(get(`/holdings${search}`))));
     if (!(first instanceof Response)) return;
@@ -500,14 +500,13 @@ describe("the canonical bounce, through a real URL", () => {
         await redirectTo(() => loader(args(get(`/holdings?owner=${both.replace(",", "%2C")}`)))),
       ).toBe(`/holdings?${ownerParam(alice.id, bob.id)}`);
 
-      // Owner-only spellings (ownerReading's default grammar) are owner-reading.test.ts's to cover once for all screens;
-      // what stays here proves this screen's own grammar: untouched selects, grouping before owner, this screen's row params.
+      // Owner-only spellings are owner-reading.test.ts's to cover once for all screens; what stays here proves this
+      // screen's own grammar: untouched selects, grouping before owner, this screen's row params.
       for (const search of [
         `?owner=${alice.id}&account=&institution=&kind=&tax=&classification=&assetClass=`,
         `?group=kind&owner=${alice.id}`,
         `?owner=${alice.id}&sort=quantity&dir=asc&edit=1.2`,
-        // Two owners, not one — this screen's grammar (grouping/row params alongside owner) never had a multi-owner chain
-        // followed past its first hop. Comma-spelled: the legacy input readOwnerFilter reads, respelled by get()'s server-runtime rebuild before the loader sees it.
+        // Two owners, not one — this grammar never had a multi-owner chain followed past its first hop.
         `?owner=${both}`,
         `?group=kind&owner=${both}`,
       ]) {

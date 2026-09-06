@@ -1,6 +1,6 @@
-// Display formatters (DESIGN.md §13.3). Intl.NumberFormat needs a float and §4.1 keeps money
-// out of floats, so rounding and grouping are hand-rolled on digits — pinned: nines rolling
-// over, a carry that lengthens the number, a carry crossing a thousands boundary. Pure, no database.
+// Display formatters (DESIGN.md §13.3). Intl.NumberFormat needs a float and §4.1 keeps money out of
+// floats, so rounding and grouping are hand-rolled on digits — pinned: nines rolling over, a carry
+// that lengthens the number, a carry crossing a thousands boundary.
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -87,8 +87,7 @@ describe("formatCompact", () => {
   });
 
   it("promotes a value that rounding carries over its own boundary", () => {
-    // Bug this pins: 999,999 scaled to thousands rounds to 1000.0, would render
-    // "1,000.0K" not "1.0M".
+    // Bug this pins: 999,999 scaled to thousands rounds to 1000.0, would render "1,000.0K" not "1.0M".
     expect(formatCompact("999999")).toBe("1.0M");
     expect(formatCompact("999999999")).toBe("1.0B");
   });
@@ -108,9 +107,8 @@ describe("formatCompact", () => {
   });
 
   it("reports the scale a value's size puts it at, and not the one rounding lifts it to", () => {
-    // 999,999 prints as 1.0M at one decimal, 999.999K at three, but its size is thousands
-    // either way. Chart axis sizes precision off this — reading the promotion instead would
-    // let one endpoint near the next suffix buy the whole axis extra decimals it can't use.
+    // 999,999 prints as 1.0M at one decimal, 999.999K at three, but its size is thousands either way.
+    // Chart axis sizes precision off this — reading the promotion instead would misprice the axis.
     expect(compactScale("999999")).toBe(1);
     expect(formatCompact("999999", 1)).toBe("1.0M");
     expect(formatCompact("999999", 3)).toBe("999.999K");
@@ -128,13 +126,11 @@ describe("isNegative", () => {
   });
 });
 
-/** The one sanctioned float (DESIGN.md §4.1, guarded by numeric.test.ts's type-parser
- * override). Number() is allowed here because the result is multiplied by a pixel height and
- * rounded to a screen coordinate — pinned: that argument holds, not that the conversion is exact. */
+/** The one sanctioned float (DESIGN.md §4.1). Number() is allowed here because the result is
+ * multiplied by a pixel height and rounded to a screen coordinate — pinned: that argument holds. */
 describe("toPlotValue", () => {
   it("is exact for the magnitudes a household portfolio actually reaches", () => {
-    // Well inside 2**53 (where a double stops counting by ones) — a balance exceeding this
-    // would have bigger problems than its chart.
+    // Well inside 2**53 — a balance exceeding this would have bigger problems than its chart.
     expect(toPlotValue("1248392.1400")).toBe(1248392.14);
     expect(toPlotValue("0.0000")).toBe(0);
   });
@@ -144,9 +140,8 @@ describe("toPlotValue", () => {
   });
 
   it("loses precision only far below one screen pixel", () => {
-    // Safety argument made concrete: two balances a double can't distinguish differ by less
-    // than 1e-6 of a 300px box — error can't reach a rendered coordinate. Why this must never
-    // be used for a shown, compared, or summed figure — those have no pixel to hide the error in.
+    // Two balances a double can't distinguish here differ by less than 1e-6 of a 300px box — error
+    // can't reach a rendered coordinate. Never use this for a shown, compared, or summed figure.
     const banked = toPlotValue("12345678901234567.89");
     const off = toPlotValue("12345678901234567.90");
 
@@ -155,28 +150,24 @@ describe("toPlotValue", () => {
 });
 
 /** formatDate had no test at all (finding 9) — the UTC pin (without which server-rendered and
- * hydrated markup could print different calendar days for one instant) was free to drift.
- * Pin is for hydration safety, not the household's own rule (finding 1): a passkey's date is
- * browser-local per DESIGN.md's Timezone row — formatDate's UTC string is only the
- * hydration-stable first paint LocalDate (app/routes/settings/passkeys.tsx) corrects client-side. */
+ * hydrated markup could print different calendar days for one instant) was free to drift. Pin is
+ * for hydration safety, not the household's own rule (finding 1): a passkey's date is browser-local
+ * per DESIGN.md's Timezone row; formatDateLocal corrects client-side. */
 describe("formatDate", () => {
   it("renders a short calendar date, no leading zero on the day", () => {
     expect(formatDate(new Date("2026-09-05T12:00:00Z"))).toBe("5 Sep 2026");
   });
 
   it("is pinned to UTC, not the runtime's ambient timezone — the hydration-safe first paint, never the final word on a passkey's own date", () => {
-    // 00:30 UTC New Year's Day reads as 31 Dec in any zone behind UTC (every zone a household
-    // could run in). Dropping timeZone: "UTC" (or retargeting it) would print "31 Dec 2025"
-    // here; only the pin prints "1 Jan 2026". Correcting to the household's own zone is
-    // formatDateLocal's job.
+    // 00:30 UTC New Year's Day reads as 31 Dec in any zone behind UTC. Dropping timeZone: "UTC"
+    // (or retargeting it) would print "31 Dec 2025" here; only the pin prints "1 Jan 2026".
     expect(formatDate(new Date("2026-01-01T00:30:00Z"))).toBe("1 Jan 2026");
   });
 });
 
-/** formatDate's browser-local twin (finding 1): deliberately not pinned — testable only by
- * forcing the ambient zone via process.env.TZ, which this Node build re-reads on every
- * Intl.DateTimeFormat construction (checked against Node 24). Restored in afterEach so no
- * later file inherits a changed clock. */
+/** formatDate's browser-local twin (finding 1): testable only by forcing the ambient zone via
+ * process.env.TZ, which Node re-reads on every Intl.DateTimeFormat construction (Node 24).
+ * Restored in afterEach so no later file inherits a changed clock. */
 describe("formatDateLocal", () => {
   const originalTZ = process.env.TZ;
 
@@ -186,8 +177,7 @@ describe("formatDateLocal", () => {
 
   it("reads whatever zone is actually running, not UTC", () => {
     process.env.TZ = "America/New_York";
-    // Same 00:30 UTC instant formatDate's pin reads as "1 Jan 2026" — New York, behind UTC,
-    // is still the evening before.
+    // Same 00:30 UTC instant formatDate's pin reads as "1 Jan 2026" — New York is still the evening before.
     expect(formatDateLocal(new Date("2026-01-01T00:30:00Z"))).toBe("31 Dec 2025");
   });
 

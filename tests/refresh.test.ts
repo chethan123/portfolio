@@ -1,11 +1,9 @@
 /**
- * runRefresh's own answer, apart from what it wraps: the lock (busy), the database or lock
- * itself (error), and a fake provider's counts (done) — plus that `error` is never what a
- * provider throw becomes (refreshQuotes catches that itself, prices.server.ts:824-830).
- * runRefresh reads through getDb()/getPool() rather than taking either as a parameter, so a
- * test scopes both through withDb: `db` is withDatabase's rolled-back transaction, `pool` is a
- * real connection for the advisory lock withRefreshLock takes on its own session
- * (price-poller.test.ts's precedent — it reaches the process-wide pool, which a transaction isn't).
+ * runRefresh's own answer, apart from what it wraps: the lock (busy), the database or lock itself
+ * (error), and a fake provider's counts (done) — `error` is never what a provider throw becomes
+ * (refreshQuotes catches that itself). runRefresh reads through getDb()/getPool() rather than
+ * taking either as a parameter, so a test scopes both through withDb: `db` is withDatabase's
+ * rolled-back transaction, `pool` is a real connection for the advisory lock withRefreshLock takes.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -17,14 +15,14 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/da
 
 import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
 
-// getConfig() memoises its first read — set before any test runs (price-poller.test.ts:37's precedent)
+// getConfig() memoises its first read — set before any test runs
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 // refused immediately — how "the database went away" arrives here
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-// withRefreshLock's own key (prices.server.ts), which must never change — taken from a second
-// real session, so the test holds the lock exactly as a second tab or racing tick would
+// withRefreshLock's own key, which must never change — taken from a second real session, so the
+// test holds the lock exactly as a second tab or racing tick would
 const REFRESH_ADVISORY_LOCK_KEY = "7295380114023642";
 
 afterAll(closeTestDatabase);
@@ -93,9 +91,8 @@ describe("a run that takes the lock", () => {
   it(
     "projects a done run's quotes into the outcome the control renders",
     withDatabase(async ({ db, seedInstrument, seedObservation }) => {
-      // 5 instruments, 3 quoted, 2 already observed at the quote's instant: requested 5,
-      // priced 3, stale 2, observed 1. Every count a different number on purpose — with any
-      // two equal, a crossed projection would read correctly and prove nothing.
+      // 5 instruments, 3 quoted, 2 already observed: requested 5, priced 3, stale 2, observed 1.
+      // Every count a different number — with any two equal, a crossed projection would read correctly.
       const quoted = [
         await seedInstrument({ symbol: "VTI", priceSource: "feed" }),
         await seedInstrument({ symbol: "VXUS", priceSource: "feed" }),
@@ -168,8 +165,7 @@ describe("a run that takes the lock", () => {
   it(
     "answers done with providerFailed, not error, when the provider itself throws",
     withDatabase(async ({ db, seedInstrument }) => {
-      // refreshQuotes catches this and marks every selected instrument stale (prices.server.ts:825-830)
-      // — no provider fault ever reaches runRefresh's own catch
+      // refreshQuotes catches this and marks every selected instrument stale — no provider fault reaches runRefresh's own catch
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const pool = createPool(TEST_DATABASE_URL);
 

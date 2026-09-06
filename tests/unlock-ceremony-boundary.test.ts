@@ -1,10 +1,8 @@
 /**
- * Import boundary keeping @simplewebauthn/browser out of every bundle except its own
- * lazily-loaded chunk (docs/adr/0012, spec 0019, ticket 04). Same shape as
- * masking-boundary.test.ts: npm run build proves the built output is clean, but only on that
- * run — this suite runs on every change and catches a future static import before then.
- * `import type` is exempt: verbatimModuleSyntax erases it entirely, so it adds nothing to any
- * bundle regardless of file.
+ * Import boundary keeping @simplewebauthn/browser out of every bundle except its own lazily-loaded
+ * chunk (docs/adr/0012, spec 0019, ticket 04). npm run build proves the built output is clean but
+ * only on that run — this suite runs on every change. `import type` is exempt: verbatimModuleSyntax
+ * erases it entirely.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,9 +11,8 @@ import { describe, expect, it } from "vitest";
 
 const APP = new URL("../app/", import.meta.url).pathname;
 
-// static, value-level import of the package — the one shape this boundary refuses. Matched on
-// the import statement itself (line-anchored), not any mention of the package name, so a
-// comment naming it is not a violation; import type is excluded by the negative lookahead.
+// static, value-level import of the package — matched on the import statement itself (line-anchored),
+// not any mention of the package name, so a comment naming it is not a violation.
 const STATIC_VALUE_IMPORT = /^\s*import\s+(?!type\b)[^;]*\bfrom\s*["']@simplewebauthn\/browser["']/m;
 
 // every .ts/.tsx file under app/, as paths relative to it

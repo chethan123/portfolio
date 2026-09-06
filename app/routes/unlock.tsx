@@ -1,16 +1,9 @@
 /**
- * The one screen `LOCK_EXEMPT_PATHS` (app/root.tsx) lets through, since it is what lifts the
- * refusal. docs/adr/0012, spec 0019
- *
- * A challenge is spent the moment the server reads it, so a dismissed or failed attempt — the two
- * outcomes that never reached the server — must refresh options before retrying. That refresh
- * starts when the attempt settles, never on the next press: WebKit requires each
- * `navigator.credentials.get()` inside its own user activation, and awaiting a round trip inside
- * the click that granted it produces a `NotAllowedError` no prompt was ever shown for.
- *
- * `@simplewebauthn/browser` is reachable only through dynamic `import()` here and in
- * `~/lib/unlock-ceremony.ts`. `build/server/index.js` still contains the specifier as text — that
- * is the shape, not a leak; a grep expecting no textual trace is checking the wrong thing.
+ * The one screen `LOCK_EXEMPT_PATHS` (app/root.tsx) lets through — it lifts the refusal
+ * (docs/adr/0012, spec 0019). A challenge is spent once read, so a dismissed/failed attempt must
+ * refresh options before retrying — started when the attempt settles, not the next press: WebKit
+ * needs each `navigator.credentials.get()` inside its own user activation. `@simplewebauthn/browser`
+ * loads only via dynamic `import()` here and in unlock-ceremony.ts.
  */
 import { startTransition, useEffect, useRef, useState } from "react";
 import { redirect, useRevalidator, useSubmit } from "react-router";
@@ -29,11 +22,8 @@ export function meta() {
   return [{ title: "Unlock · Portfolio" }];
 }
 
-/**
- * Redirects an instance holding no passkey and a browser already holding a live grant — neither has
- * work here. Both reads fail toward *showing* the screen, the opposite of the middleware, which
- * fails toward refusing. `unlockOptions` mints a fresh challenge on every call, revalidations too.
- */
+/** Redirects an instance with no passkey, or a browser already holding a live grant — both reads
+ * fail toward *showing* the screen (opposite the middleware). `unlockOptions` mints a fresh challenge every call. */
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const redirectTo = safeReturn(url.searchParams.get(RETURN_PARAM));
@@ -63,11 +53,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   return { options, redirectTo };
 }
 
-/**
- * `request.formData()` is inside the `try` too: this is the only route a locked browser can reach,
- * so an unreadable body must print a refusal rather than the framework's error page. An assertion
- * that fails to parse becomes `undefined`, which `verifyUnlock` already refuses in its own words.
- */
+/** `request.formData()` is inside the `try` too: this is the only route a locked browser can reach,
+ * so an unreadable body must print a refusal, not the framework's error page. A parse failure becomes `undefined`, refused by `verifyUnlock`. */
 export async function action({ request }: Route.ActionArgs) {
   let fields: Record<string, string>;
   try {
@@ -84,8 +71,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   try {
-    // Superseded rather than left live beside the new one: a stale `redirectTo` lands here with a
-    // live cookie.
+    // Superseded rather than left live beside the new one: a stale `redirectTo` lands here with a live cookie.
     const supersedes = readLockCookie(request);
     const grant = await verifyUnlock(response, undefined, supersedes);
 
@@ -100,10 +86,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-/**
- * `"confirming"` is the provider's own prompt, still cancellable; `"verifying"` is the window after
- * it answered, while the assertion is with this instance. Only the second has proved anything.
- */
+/** `"confirming"` is the provider's own prompt, still cancellable; `"verifying"` is after it answered — only the second has proved anything. */
 type Phase = "idle" | "confirming" | "verifying" | "dismissed" | "failed";
 
 /** The phases an attempt comes to rest in — the in-flight two leave nothing stale to ask about. */
@@ -147,21 +130,15 @@ function DismissedNote({ phase }: { phase: Phase }) {
   );
 }
 
-/**
- * Printed into the live region rather than swapped in where the button was: `supported` is `null`
- * until the mount check answers, so a reader can already have reached a button that then vanishes
- * announcing nothing.
- */
+/** Printed into the live region rather than swapped in where the button was: `supported` is `null`
+ * until the mount check answers, so a reader could already be at a button that then vanishes announcing nothing. */
 function UnsupportedNote({ supported }: { supported: boolean | null }) {
   if (supported !== false) return null;
   return <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>;
 }
 
-/**
- * One rule, two enforcers: the button's `disabled` and the click handler. Also refused while the
- * revalidator refreshes stale options — accepting there runs the ceremony after the click's own
- * user activation went into the network ({@link shouldRevalidateBeforeRetry}).
- */
+/** One rule, two enforcers: the button's `disabled` and the click handler — also refused while
+ * the revalidator refreshes stale options ({@link shouldRevalidateBeforeRetry}). */
 function pressIsRefused(phase: Phase, revalidatorState: "idle" | "loading" | "submitting"): boolean {
   return phase === "confirming" || phase === "verifying" || revalidatorState !== "idle";
 }
@@ -200,10 +177,8 @@ function visibleRefusal(
   return null;
 }
 
-/**
- * Started the moment an attempt settles, never on the next press: each `navigator.credentials.get()`
- * must sit inside its own user activation, and a click that first awaits a round trip has spent it.
- */
+/** Started the moment an attempt settles, never on the next press: each `navigator.credentials.get()`
+ * must sit inside its own user activation, and a click that first awaits a round trip has spent it. */
 function shouldRevalidateBeforeRetry(phase: SettledPhase): boolean {
   return phase !== "idle";
 }
@@ -216,12 +191,8 @@ function shouldRunCeremony(
   return phase === "confirming" && revalidatorState === "idle" && !alreadyStarted;
 }
 
-/**
- * Awaits `submit`, whose promise settles only once the action *and* its automatic revalidation have
- * finished — the one moment `actionData` and fresh options are both current. Setting state after an
- * unmount is inert under React 19. `revalidate` is never called on the `"ok"` branch: `submit`
- * already carried one.
- */
+/** Awaits `submit`, whose promise settles only once the action *and* its automatic revalidation finish
+ * — the one moment `actionData` and fresh options are both current. `revalidate` is never called on `"ok"`: `submit` already carried one. */
 async function runCeremony(
   optionsJSON: Parameters<typeof requestAssertion>[0],
   redirectTo: string,
@@ -236,19 +207,15 @@ async function runCeremony(
   if (outcome.status === "ok") {
     setPhase("verifying");
     await submit({ assertion: JSON.stringify(outcome.response), redirectTo }, { method: "post" });
-    // A transition, so this commits with the navigation instead of ahead of it: React 19 renders
-    // urgent lanes first, which would paint one frame of a shut padlock on the way out. Rests on
-    // the router publishing in a transition — `HydratedRouter`'s default, absent an `entry.client.tsx`
-    // passing `useTransitions={false}`.
+    // A transition, so this commits with the navigation instead of ahead of it — React 19 renders
+    // urgent lanes first, which would paint a shut-padlock frame on the way out (rests on `HydratedRouter`'s default).
     scheduleAsTransition(() => setPhase("idle"));
     return;
   }
 
   const settledPhase: SettledPhase = outcome.status === "dismissed" ? "dismissed" : "failed";
 
-  // Same lane argument: left urgent, these commit a frame ahead of `revalidate()`'s own transition,
-  // showing a live button beside a note telling the reader to press it. Scheduled before it, both
-  // land in one commit.
+  // Same lane argument: left urgent, these would commit a frame ahead of `revalidate()`'s own transition.
   scheduleAsTransition(() => {
     if (outcome.status === "failed") setClientMessage(outcome.message);
     setPhase(settledPhase);
@@ -277,8 +244,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
     };
   }, []);
 
-  // In an effect, not the click handler: this waits for *props* to carry refreshed options rather
-  // than reading `loaderData` after an await, which is the stale-closure trap.
+  // In an effect, not the click handler: waits for *props* to carry refreshed options, not `loaderData` after an await (the stale-closure trap).
   useEffect(() => {
     if (!shouldRunCeremony(phase, revalidator.state, ceremonyStarted.current)) return;
     ceremonyStarted.current = true;
@@ -294,8 +260,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
     );
   }, [phase, revalidator.state, revalidator.revalidate, options, redirectTo, submit]);
 
-  // Never revalidates: that already happened when the previous attempt settled, so this press keeps
-  // its own user activation.
+  // Never revalidates: that already happened when the previous attempt settled, so this press keeps its own user activation.
   function handleUnlock() {
     if (pressIsRefused(phase, revalidator.state)) return;
     ceremonyStarted.current = false;
@@ -325,8 +290,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
           onUnlock={handleUnlock}
         />
 
-        {/* Both live regions render empty and fill later: one first met already full is commonly
-            not announced. Held open at two lines so a sentence never moves the button. */}
+        {/* Both live regions render empty and fill later: one first met already full is commonly not announced. Held open at two lines so a sentence never moves the button. */}
         <div className="lock-message">
           <div role="status">
             <UnsupportedNote supported={supported} />
