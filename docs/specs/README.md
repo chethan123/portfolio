@@ -46,6 +46,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010) |
 | [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; proposed) |
 | [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (proposed) |
+| [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: live worker reachability and passive scheduler/fetch status without probing Yahoo (proposed) |
 
 ## The ticket directories
 
@@ -55,7 +56,8 @@ the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-g
 [`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009),
 [`owner-filter/`](owner-filter/) (0013), [`dump/`](dump/) (0014),
 [`price-backfill/`](price-backfill/) (0017), [`price-worker/`](price-worker/) (0018),
-[`lock/`](lock/) (0019), and [`lock-hardening/`](lock-hardening/) (0020).
+[`lock/`](lock/) (0019), [`lock-hardening/`](lock-hardening/) (0020), and
+[`price-health/`](price-health/) (0021).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's
