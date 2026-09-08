@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
 import { requestRefresh, startPricePoller, stopPricePoller } from "~/lib/price-poller.server";
+import * as providerSocketModule from "~/lib/provider-socket.server";
 import { createPool } from "../server/db.ts";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -469,5 +470,27 @@ describe("what the batch writes to the log", () => {
         "Price backfill: 1 attempted, 0 closes written, 0 failed.",
       ]);
     }),
+  );
+});
+
+describe("the default provider, when none is passed", () => {
+  it(
+    "is built once even when startPricePoller is called twice, since the second call is only the idempotent guard",
+    () => {
+      // Pins the lazy default (`provider ?? socketProvider()`, resolved inside the try): a default
+      // parameter would have built one on the first call's own argument evaluation regardless of
+      // this spy, and a second, unguarded build on the second call would double-count here.
+      const socketProviderSpy = vi.spyOn(providerSocketModule, "socketProvider");
+
+      try {
+        startPricePoller();
+        startPricePoller();
+
+        expect(socketProviderSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        stopPricePoller();
+        socketProviderSpy.mockRestore();
+      }
+    },
   );
 });

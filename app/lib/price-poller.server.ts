@@ -107,11 +107,14 @@ function logBackfill(report: BackfillReport): void {
 
 /**
  * Start the loop, once per process. Idempotent because the call site is a request path — there is
- * no server entry file to hook under `react-router-serve` (§9), so `app/root.tsx`'s loader starts
- * it. No immediate poll: a crash-looping container would fetch on every boot.
- * The `socketProvider()` default must not throw merely being built (`provider-socket.server.ts`).
+ * no server entry file to hook under `react-router-serve` (§9), so a root **middleware**
+ * (`app/root.tsx`) starts it: the framework runs middleware for every request, resource routes
+ * included, where a loader would not (`/healthz` has no `default`/`ErrorBoundary`, so its parent
+ * loader never runs). No immediate poll: a crash-looping container would fetch on every boot.
+ * `provider` is resolved lazily, inside the `try` below, so a middleware calling this on every
+ * request never lets a throw from building `socketProvider()` escape as an uncaught response.
  */
-export function startPricePoller(provider: PriceProvider = socketProvider()): void {
+export function startPricePoller(provider?: PriceProvider): void {
   const host = globalThis as PollerHost;
   if (host[SLOT] !== undefined) return;
 
@@ -120,7 +123,7 @@ export function startPricePoller(provider: PriceProvider = socketProvider()): vo
       running: false,
       minutes: SEEDED_CADENCE_MINUTES,
       timer: undefined,
-      provider,
+      provider: provider ?? socketProvider(),
     };
     state.timer = setInterval(() => void tick(state, false), SEEDED_CADENCE_MINUTES * 60 * 1000);
 
@@ -129,7 +132,8 @@ export function startPricePoller(provider: PriceProvider = socketProvider()): vo
 
     host[SLOT] = state;
   } catch (error) {
-    // Swallowed: the caller is a page render, and a family member must still see their net worth.
+    // Swallowed: the caller is now every request's middleware, not one page render — pricing
+    // failing to arm must never turn into a refused request.
     console.error("Price poller did not start; prices will not refresh:", error);
   }
 }

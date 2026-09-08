@@ -684,3 +684,23 @@ worker/proxy-only cases did run within that command. Typecheck and production bu
 live Yahoo call was made, which is appropriate for deterministic validation but means provider and
 Docker behavior is supported by the repository's prior platform research rather than re-probed here
 (`docs/research/2026-09-04-price-worker-platform-facts.md`).
+
+## Addendum — 2026-09-08
+
+Left as a snapshot above rather than rewritten, per `docs/research/README.md`'s convention.
+
+**P3 ("scheduled pricing is coupled to browser traffic") is fixed** — the "Bootstrap scheduling
+outside the root loader" recommendation at item 7 of §9. `startPricePoller()` is now called from a
+root `middleware`, last in `app/root.tsx`'s exported array, rather than from the root loader
+(`docs/specs/price-health/01-arm-the-poller-from-middleware.md`). React Router runs middleware for
+every request, including a resource route with no `default`/`ErrorBoundary` such as `/healthz`,
+where it does not run a parent loader — so the container's own healthcheck now arms the timer on
+boot, and a healthy instance nobody has browsed to no longer sits with scheduled pricing stopped
+forever. The §2 "Scheduled refresh" description above (`app/root.tsx` calling `startPricePoller()`
+"from its root loader") and §8's "a poller which has never started because no page loader has run"
+now describe the pre-fix state; `docs/operating.md` and `ARCHITECTURE.md` carry the corrected claim.
+
+The lazily-built default provider (`provider?: PriceProvider`, resolved as `provider ?? socketProvider()`
+inside `startPricePoller`'s own `try`) went with it: the function is now called on every request
+rather than every page render, so a throw building the default provider had to stay caught there
+rather than escape as an uncaught response.

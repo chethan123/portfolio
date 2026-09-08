@@ -1153,32 +1153,28 @@ And in `gate`'s log, which is a different program with a different vocabulary:
 - **A refusal to start**, which crash-loops the container rather than serving anything: a
   `cookie_secret` of the wrong length is the one to expect, and it names the variable.
 
-### "There is no price line in the log" has four causes
+### "There is no price line in the log" has three causes
 
 Only the last is a fault:
 
-1. **Nobody has loaded a page since the container started.** The refresh timer is started from the
-   first page render, because the app is served by the framework's own server and there is no server
-   entry file to hook it to. A booted instance nobody has visited does zero refreshes, forever. The
-   container healthcheck does not count — `/healthz` is a resource route and does not run the root
-   loader.
-2. **The market is closed.** A tick outside market hours asks for no quotes, so it writes no
+1. **The market is closed.** A tick outside market hours asks for no quotes, so it writes no
    `Price refresh` line and no `price_poll` row. It no longer returns before doing anything: it
    still reads the cadence, still asks which spines have a gap, and may write a `Price backfill`
    line and spend a request on one (ADR-0011).
-3. **Another refresh was already running or held the lock.** A tick that lands while one is still
+2. **Another refresh was already running or held the lock.** A tick that lands while one is still
    going, or while another process holds the advisory lock, is dropped silently — never queued.
-4. **The poller failed to start.** That one *does* log, once, at error level.
+3. **The poller failed to start.** That one *does* log, once, at error level.
 
 A *successful* **Refresh now** press writes no `Price refresh` line: its outcome is reported on the
 screen that pressed it. It writes no `Price backfill` line either, though it runs a batch — that
 line belongs to the tick. The attempt still lands a `price_poll` row and the batch still lands its
 `price_backfill` rows, and a currency refusal along the way still logs `Price refused`.
 
-There is also a quiet period by design: the first tick is one full interval after the first page
-view, with no immediate poll, so a freshly recreated container is silent for up to the refresh
-cadence even with somebody looking at it. (The timer boots at the seeded 15 minutes and picks up a
-different saved cadence on its first in-session tick.)
+There is also a quiet period by design: the first tick is one full interval after boot — the root
+middleware arms the poller from the container's own healthcheck traffic, not from a page view — with
+no immediate poll, so a freshly recreated container is silent for up to the refresh cadence whether
+or not anyone has opened it. (The timer boots at the seeded 15 minutes and picks up a different
+saved cadence on its first in-session tick.)
 
 What to do about any of this is [`runbook.md`](runbook.md).
 
