@@ -82,15 +82,27 @@ seconds of boot in every deployment, with no page view and no new framework surf
 `startPricePoller` is already idempotent (`price-poller.server.ts:116`) and arms a timer rather than
 fetching (`:110-111`), so a public un-gated path cannot amplify anything through it.
 
-Two caveats worth carrying into the ticket. First, this inherits the `future.v8_middleware`
-dependency (`react-router.config.ts:11`) — the same one the lock already rests on, and already
-pinned by `tests/framework-wiring.test.ts:84`. Second, **no test in this suite proves the framework
-dispatches root middleware for a resource route**: every middleware test calls the exported chain
-directly through `servedThrough` (`tests/support/routes.ts:140`), never through
-`createRequestHandler`. The evidence is the repository's own design — `app/root.tsx:130` exempting
-`/healthz` inside `lockMiddleware` would be dead code otherwise, and `crossOriginMutationMiddleware`
-exists precisely to cover resource routes (`ARCHITECTURE.md:389`) — which is strong but is not a
-test. Prove it with one request through the real handler before building on it.
+**This is verified against the framework, not inferred.** Read at tag `react-router@7.18.2`, the
+version this repo pins: `packages/react-router/lib/server-runtime/server.ts:261-274` routes a leaf
+match with no `default` and no `ErrorBoundary` to `handleResourceRequest`, which calls
+`queryRoute(request, { routeId })`; `getTargetedDataStrategyMatches`
+(`packages/react-router/lib/router/router.ts:6435`) gives every non-target match
+`shouldCallHandler: () => false`. So **parent loaders do not run** — the mechanism `not_started`
+depends on, and `docs/operating.md:1163` is right about it. But `handleResourceRequest` passes
+`generateMiddlewareResponse`, and `queryRoute` runs `runServerMiddlewarePipeline` over *all*
+matches. **Loaders no, middleware yes.** The move works.
+
+Three caveats for the ticket:
+
+- It inherits the `future.v8_middleware` dependency (`react-router.config.ts:11`) — the same one the
+  lock already rests on, already pinned by `tests/framework-wiring.test.ts:84`.
+- The resource-route dispatch turns on the leaf module having **neither** a `default` **nor** an
+  `ErrorBoundary` export. Adding an `ErrorBoundary` to `app/routes/healthz.ts` would silently make
+  it a document route, run the root loader again, and mask whichever bootstrap is in place.
+- Nothing in this suite proves framework-level middleware dispatch: every middleware test calls the
+  exported chain directly through `servedThrough` (`tests/support/routes.ts:140`), never through
+  `createRequestHandler`. The framework source settles it; a test that drives one real request
+  through the handler would settle it here.
 
 Then `not_started` means what the spec wants it to mean — a real fault — the paragraph justifying it
 as `degraded` becomes unnecessary, and `docs/operating.md`'s cause 1 gets deleted rather than
@@ -225,6 +237,23 @@ re-implementing it.
   (`compose.yaml:189-197`), and the smoke test proves the hop once, at deploy.
 - **The `quotes` vocabulary.** It maps onto what `runRefresh` already returns without touching the
   pricing path. That is the spec's strongest claim and it survives.
+
+## One alternative, and why not
+
+**Module-scope `startPricePoller()` in an ejected `app/entry.server.tsx`.** It would work:
+`react-router-serve` does `await import(buildPath)` before `app.listen`
+(`packages/react-router-serve/cli.ts`), and the server virtual module statically imports
+`entry.server` and every route (`packages/react-router-dev/vite/plugin.ts:824`), so module scope
+runs once at boot.
+
+Rejected on cost. React Router documents no startup hook — `entry.server.tsx`'s exports are
+`default`, `streamTimeout`, `handleDataRequest`, `handleError` — and `docs/api/other-api/serve.md`
+carries a caution *against* module side effects whose stated remedy is owning a server via
+`@react-router/express`, which this repo deliberately does not do. Ejecting also means owning the
+default streaming `handleRequest` forever. And under `react-router dev` the build is loaded inside
+the request middleware and re-evaluated on every invalidation, so module scope runs on first request
+and again on every change — different from production in both timing and count. The middleware move
+costs one line and no new surface.
 
 ## The shorter fork
 
