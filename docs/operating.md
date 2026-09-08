@@ -1018,8 +1018,11 @@ or retimes it, and never spends a provider call to answer. `on_schedule` means a
 late — nothing stronger. **A fresh container reports `on_schedule` for up to one full refresh
 cadence** (Settings → Prices; seeded to 15 minutes), because there is deliberately no immediate first
 tick on boot (see [Logs](#logs)'s quiet-period note); `on_schedule` there does not mean a tick has
-ever run. `not_started` means this process holds no poller slot at all — the poller failed to arm, or
-the process is between a restart and its next request. `overdue` means the timer has not begun a tick
+ever run. `not_started` means this process holds no poller slot at all, and on this endpoint that has exactly
+one cause: `startPricePoller` threw. The middleware that arms it runs ahead of every request the app
+serves, `/healthz` included (`app/root.tsx`), so a response carrying `not_started` has already had
+the call made in that same request — there is no "hasn't started yet" left to rule out. Grep the stem
+`Price poller did not start`, which that failure always logs. `overdue` means the timer has not begun a tick
 in more than the cadence plus a five-minute grace, measured from when a tick last *started* — it
 covers both a stopped timer and a tick that started and never returned, on purpose, since a hung tick
 would otherwise pin this at `running` forever (see [the runbook](runbook.md#prices-have-stopped-updating)
@@ -1154,7 +1157,7 @@ wording:
   ten seconds, and on an idle instance that is essentially the whole log.
 - **One line per refresh the poller actually runs** — stem `Price refresh`. Informational when
   everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
-  line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
+  line at all — [below](#there-is-no-price-line-in-the-log-has-three-causes) lists which silences
   are ordinary.
 - **One line per backfill batch a tick ran that attempted or failed something** — stem
   `Price backfill`: instruments attempted, closes written, and how many calls failed. Informational

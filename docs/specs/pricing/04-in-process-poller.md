@@ -35,9 +35,12 @@ briefly overlaps a shutdown does not poll twice.
       nothing about the poller and never contacts the price provider, so a third-party outage cannot
       make Compose restart a healthy app
 
-_Superseded in part_ ([price-health/02](../price-health/02-worker-reachability.md)): the checklist
-item above no longer holds as written. `/healthz` now also reports `pricing.worker`, a bounded,
-cached check of whether this app process can reach the worker's own listener over its socket — still
-not a price-provider check (Yahoo is never reached from `/healthz`, still), and still never a change
-to the HTTP status, which `database`/`migrations` alone continue to decide. A third-party outage —
-Yahoo's, or the worker's own — still cannot make Compose restart a healthy app.
+_Superseded in part_ ([price-health/02](../price-health/02-worker-reachability.md),
+[price-health/03](../price-health/03-scheduler-and-fetch-status.md)): the checklist item above no
+longer holds as written, in both of its halves. `/healthz` now also reports `pricing.worker`, a
+bounded, cached check of whether this app process can reach the worker's own listener over its
+socket; and `pricing.scheduler`/`pricing.quotes`, read passively off this poller's own slot — so
+"says nothing about the poller" is precisely what stopped being true. It is still not a
+price-provider check (Yahoo is never reached from `/healthz`), and still never a change to the HTTP
+status, which `database`/`migrations` alone continue to decide. A third-party outage — Yahoo's, or
+the worker's own — still cannot make Compose restart a healthy app.
