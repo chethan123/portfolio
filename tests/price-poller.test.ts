@@ -578,10 +578,16 @@ describe("the healthz snapshot the poller slot now carries (spec price-health/03
         const tickAt = new Date(armedAt.getTime() + 60_000);
         vi.setSystemTime(tickAt);
 
+        // The stamp is taken synchronously at the top of `tick`, before its first await, so it is
+        // already observable here — no polling under a frozen clock, whose `Date.now()` would leave
+        // `waitFor`'s own deadline unreachable and turn a failure into a hang.
         requestRefresh();
-        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
-
         expect(readPollerSnapshot()?.lastTickStartedAt).toEqual(tickAt);
+
+        // Real timers back before waiting on anything, then drain the tick this test set going
+        // rather than leaving it running against a transaction about to roll back.
+        vi.useRealTimers();
+        await waitFor(() => readPollerSnapshot()?.running === false);
       } finally {
         stopPricePoller();
         vi.useRealTimers();
