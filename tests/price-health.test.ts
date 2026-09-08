@@ -42,6 +42,19 @@ describe("pricingHealth's scheduler category", () => {
     );
   });
 
+  it("puts a fifteen-minute poller's boundary at exactly twenty wall-clock minutes", () => {
+    // The five-minute grace is a figure docs/operating.md and docs/runbook.md both print for an
+    // operator, so it is pinned in wall-clock minutes here. Every other boundary test derives its
+    // arithmetic from OVERDUE_GRACE_MINUTES and moves with it, pinning nothing. Straddling the
+    // boundary by a millisecond is what pins the figure from both sides: a shorter grace makes the
+    // first assertion overdue, a longer one makes the second still on_schedule.
+    const at = (msSinceLastTick: number) =>
+      pricingHealth(snapshot({ msSinceLastTick }), "available", NOW).scheduler;
+
+    expect(at(20 * 60_000)).toBe("on_schedule");
+    expect(at(20 * 60_000 + 1)).toBe("overdue");
+  });
+
   it("is on_schedule four minutes into a fifteen-minute cadence", () => {
     const late = snapshot({ msSinceLastTick: 4 * 60_000 });
     expect(pricingHealth(late, "available", NOW).scheduler).toBe("on_schedule");

@@ -340,10 +340,14 @@ lives in module scope of a server module that the application imports, started o
   already documents why: a health check that fails on a third-party outage would make Compose
   restart a perfectly healthy app. A stopped poller is a logging problem, not a liveness one.
 
-  _Superseded in part_ ([price-health/02](price-health/02-worker-reachability.md)): `/healthz` now
-  reports `pricing.worker`, an app-to-worker socket reachability check — not a provider check, and
-  never a change to the HTTP status, which `database`/`migrations` alone still decide. The claim
-  that stands is narrower than written above: not "says nothing," but "never gates on it."
+  _Superseded in part_ ([price-health/02](price-health/02-worker-reachability.md),
+  [price-health/03](price-health/03-scheduler-and-fetch-status.md)): both halves of the sentence
+  above have since gone. `/healthz` reports `pricing.worker`, an app-to-worker socket reachability
+  check — not a provider check — and `pricing.scheduler`/`pricing.quotes`, read passively off the
+  poller's own slot, so `scheduler: not_started` now says exactly the thing the last line here
+  called a logging problem. None of it changes the HTTP status, which `database`/`migrations` alone
+  still decide. The claim that stands is narrower than written above: not "says nothing," but
+  "never gates on it."
 
 ### Manual prices write both tiers
 

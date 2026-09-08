@@ -2,7 +2,7 @@
 // output into the real component — because a unit test of Amount alone says nothing about the twenty files that must
 // route through it. Every screen renders twice, masked and unmasked, so "no amounts" can't pass on a screen that
 // rendered nothing at all. Screens: Overview, Holdings, and the upload diff (largest figure set on one page, story 18).
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import Holdings, { loader as holdingsLoader } from "../../app/routes/holdings.tsx";
 import Overview, { loader as overviewLoader } from "../../app/routes/overview.tsx";
@@ -15,7 +15,6 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/d
 import { renderRoute } from "../support/render.tsx";
 import { args, get } from "../support/routes.ts";
 
-import { stopPricePoller } from "~/lib/price-poller.server";
 
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
@@ -23,7 +22,6 @@ import type { StatementMapping } from "~/lib/statement";
 // getConfig() memoises its first read — set before any loader runs (as root.test.ts, routes/masking.test.ts do).
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-afterEach(stopPricePoller); // the shell's loader starts the refresh loop; root.test.ts explains.
 
 afterAll(closeTestDatabase);
 

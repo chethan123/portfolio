@@ -2,7 +2,7 @@
 // cookie shape as pure functions; this covers the shell's loader actually asking the resolver, and Set-Cookie's lifetime coming
 // from the *stored* policy (the database-backed half no pure test can reach).
 // getConfig() memoises its first read — DATABASE_URL is set before the import below, as in root.test.ts.
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post, responseOf } from "../support/routes.ts";
@@ -13,10 +13,6 @@ const { loader: rootLoader } = await import("../../app/root.tsx");
 const { action: toggle } = await import("../../app/routes/masking.ts");
 const { MASKED, MASKING_COOKIE, UNMASKED } = await import("~/lib/masking");
 const { saveMaskingPolicy } = await import("~/lib/settings.server");
-const { stopPricePoller } = await import("~/lib/price-poller.server");
-
-/** The shell's loader starts the refresh loop; `root.test.ts` explains. */
-afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
 

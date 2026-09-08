@@ -10,6 +10,7 @@ import {
   startPricePoller,
   stopPricePoller,
 } from "~/lib/price-poller.server";
+import * as dbModule from "~/lib/db.server";
 import * as workerReachabilityModule from "~/lib/worker-reachability.server";
 
 import { closeTestDatabase, TEST_DATABASE_URL, withDatabase } from "../support/database.ts";
@@ -68,6 +69,37 @@ describe("a healthy instance", () => {
         pendingMigrations: [],
         pricing: { ok: false, worker: "unavailable", scheduler: "not_started", quotes: "not_attempted" },
       });
+    }),
+  );
+
+  it(
+    "still answers 503 for a pending migration, and still carries pricing while it does",
+    withDatabase(async () => {
+      // The 503 branch is unreachable through the real pool here (see the file header), and until
+      // this test nothing proved the route passes the composed status through at all — hardcoding
+      // `status: 200` in the loader passed the whole suite. health-response.test.ts owns the
+      // database x worker matrix; this owns the one wire between it and the response.
+      const healthSpy = vi.spyOn(dbModule, "checkHealth").mockResolvedValue({
+        database: true,
+        pendingMigrations: ["0099_not_applied.sql"],
+        healthy: false,
+      });
+
+      try {
+        const response = await loader();
+
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          status: "unhealthy",
+          database: true,
+          migrations: "pending",
+          pendingMigrations: ["0099_not_applied.sql"],
+          // Present on the 503 too: every key on every response, whatever pricing says.
+          pricing: { ok: false, worker: "unavailable", scheduler: "not_started", quotes: "not_attempted" },
+        });
+      } finally {
+        healthSpy.mockRestore();
+      }
     }),
   );
 

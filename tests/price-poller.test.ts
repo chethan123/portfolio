@@ -561,6 +561,40 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 // to control wall-clock time run on real timers instead — `pricingHealth`'s own `now`-as-parameter
 // cases are pure and live in tests/price-health.test.ts, with no clock to fake at all.
 describe("the healthz snapshot the poller slot now carries (spec price-health/03)", () => {
+  it(
+    "stamps the phase overdue is measured from on every tick, not only when the timer is armed",
+    withDatabase(async () => {
+      // The one field `scheduler` is computed against, and until this test nothing read it off the
+      // real slot — deleting the stamp in `tick` left the whole suite green. A tick that runs
+      // without moving it leaves a healthy poller reporting `overdue` one grace period after it
+      // armed, on the endpoint the slice exists for.
+      const armedAt = new Date("2026-09-08T14:00:00Z");
+      vi.useFakeTimers({ toFake: ["Date"], now: armedAt });
+
+      try {
+        startPricePoller(fakeProvider());
+        expect(readPollerSnapshot()?.lastTickStartedAt).toEqual(armedAt);
+
+        const tickAt = new Date(armedAt.getTime() + 60_000);
+        vi.setSystemTime(tickAt);
+
+        // The stamp is taken synchronously at the top of `tick`, before its first await, so it is
+        // already observable here — no polling under a frozen clock, whose `Date.now()` would leave
+        // `waitFor`'s own deadline unreachable and turn a failure into a hang.
+        requestRefresh();
+        expect(readPollerSnapshot()?.lastTickStartedAt).toEqual(tickAt);
+
+        // Real timers back before waiting on anything, then drain the tick this test set going
+        // rather than leaving it running against a transaction about to roll back.
+        vi.useRealTimers();
+        await waitFor(() => readPollerSnapshot()?.running === false);
+      } finally {
+        stopPricePoller();
+        vi.useRealTimers();
+      }
+    }),
+  );
+
   it("makes the next read not_started once stopped", () => {
     startPricePoller(fakeProvider());
     expect(readPollerSnapshot()).not.toBeUndefined();
