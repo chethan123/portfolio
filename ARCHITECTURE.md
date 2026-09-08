@@ -1338,8 +1338,15 @@ the row, re-arming when the value moved — which is the entire propagation mech
 cross-process signal, every process converges within one old cadence because every process's next
 tick reads the same row.
 
-`/healthz` deliberately reports none of this. A health check that failed during a third-party outage
-would make Compose restart a perfectly healthy app.
+`/healthz` now reads this same slot for `pricing.scheduler` and `pricing.quotes` (spec
+price-health/03) — the derivation itself lives in `price-health.ts`, and the loader only reads a
+snapshot; it never starts, stops or retimes the poller. This slot is the one status owner: scoped to
+this process alone, and the snapshot resets to `not_started` on a restart or an HMR disposal exactly
+as the poller's own live state does — a second app replica would report its own, and nothing here
+merges the two. What still goes unreported is timestamps and counts — logs, `price_poll`,
+`price_backfill` and Settings → Prices keep the detailed diagnosis. A health check that failed during
+a third-party outage would make Compose restart a perfectly healthy app, which `pricing.ok` never
+does (§7.4).
 
 ### 6.3 Read path — dashboards
 
@@ -1611,7 +1618,7 @@ one household's instance and the operator reads `docker compose logs`.
 
 | Signal | Where |
 |---|---|
-| `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener — but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses |
+| `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener — but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses. `pricing.scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `pricing.quotes` (`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) read the price poller's own live state passively (spec price-health/03) — no Yahoo call, no database heartbeat — and `pricing.ok` is a boolean conjunction over all three; none of the three ever gates the status either |
 | Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
@@ -2170,8 +2177,9 @@ still live in the current code:
 | `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above — never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below — this module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
 | `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02) — extracted, not hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
 | `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener — never Yahoo, never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |
+| `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03) — the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
-| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
+| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03) — `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome — read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
 | `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
 | `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |

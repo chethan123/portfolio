@@ -290,10 +290,13 @@ at the first hop, and nothing in `docker compose ps` says why. And `/healthz` an
 exactly:
 
 ```json
-{"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
+{"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"not_attempted"}}
 ```
 
 Any other body on that endpoint means something, and [Monitoring](#monitoring) says what.
+`pricing.scheduler` reading `on_schedule` and `pricing.quotes` reading `not_attempted` right after a
+fresh `up -d` is the ordinary shape, not a fault — there is deliberately no immediate first tick, so
+nothing has run yet; see [Monitoring](#monitoring) for what the rest of `pricing` means.
 
 `pricing.worker` is `app`'s own bounded, cached check of the hop across the socket (spec
 price-health/02) — it proves this process's own read-only mount reaches the worker's listener, not
@@ -987,10 +990,10 @@ pinned by a test (`tests/routes/healthz.test.ts` asserts it key for key, precise
 break your dashboard silently), which is why it is quoted here rather than described:
 
 ```json
-200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
-200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"unavailable"}}
-503  {"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
-503  {"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["…","…"],"pricing":{"worker":"available"}}
+200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
+200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"ok":false,"worker":"unavailable","scheduler":"on_schedule","quotes":"not_attempted"}}
+503  {"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
+503  {"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["…","…"],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
 ```
 
 Alert on `status` for app/database failure — non-`200` is the only thing worth paging on. Read
@@ -998,14 +1001,54 @@ Alert on `status` for app/database failure — non-`200` is the only thing worth
 ledger lives *in* the database, so when the database is unreachable there is nothing to read and the
 field still says `current`. **`migrations` is meaningless whenever `database` is false**, and the
 third line above is what that looks like. The second line above is the ordinary shape of a healthy
-instance whose worker container is down, restarting, or unreachable over the socket: `pricing.worker`
-never turns `200` into `503`, by design (spec price-health/02), so read it as its own signal — worth
-its own alert rule, not folded into the one for `status` — rather than expecting it to explain a
-non-`200` response. `worker: "available"` proves only that this process reached the worker's own
-`GET /healthz` over the socket; it proves neither `egress-proxy` nor Yahoo, both of which fail while
-`worker` still answers `200` (see [Logs](#logs)). It is also cached for up to five seconds per app
-process, so a monitor polling faster than that can see a transition lag behind the real state by that
-much.
+instance whose worker container is down, restarting, or unreachable over the socket: `pricing`, all
+four of its keys together, never turns `200` into `503`, by design (spec price-health/02 and /03), so
+read it as its own signal — worth its own alert rule, not folded into the one for `status` — rather
+than expecting it to explain a non-`200` response.
+
+**`pricing.worker`** — `available`/`unavailable`. `"available"` proves only that this process reached
+the worker's own `GET /healthz` over the socket; it proves neither `egress-proxy` nor Yahoo, both of
+which fail while `worker` still answers `200` (see [Logs](#logs)). It is also cached for up to five
+seconds per app process, so a monitor polling faster than that can see a transition lag behind the
+real state by that much.
+
+**`pricing.scheduler`** — `not_started`/`running`/`on_schedule`/`overdue` (spec price-health/03),
+read passively off the in-process price poller's own live state: this endpoint never starts, stops
+or retimes it, and never spends a provider call to answer. `on_schedule` means armed and not yet
+late — nothing stronger. **A fresh container reports `on_schedule` for up to one full refresh
+cadence** (Settings → Prices; seeded to 15 minutes), because there is deliberately no immediate first
+tick on boot (see [Logs](#logs)'s quiet-period note); `on_schedule` there does not mean a tick has
+ever run. `not_started` means this process holds no poller slot at all — the poller failed to arm, or
+the process is between a restart and its next request. `overdue` means the timer has not begun a tick
+in more than the cadence plus a five-minute grace, measured from when a tick last *started* — it
+covers both a stopped timer and a tick that started and never returned, on purpose, since a hung tick
+would otherwise pin this at `running` forever (see [the runbook](runbook.md#prices-have-stopped-updating)
+for telling the two apart). None of this is durable: it resets to `not_started` on every restart and
+every dev-server hot reload, and a multi-replica deployment would show each replica's own value.
+
+**`pricing.quotes`** — `not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown` (spec
+price-health/03), the last tick that observed a provider outcome — scheduled, or the one an upload
+requests once its transaction commits; a direct **Refresh now** press does not update it, since that
+route calls the refresh machinery directly rather than through the poller. `not_attempted` means no
+poller slot, or a slot that has not yet recorded one. **A weekend, or any hour the market is shut,
+reports `market_closed`** — the tick still ran, and still spent a request on the backfill batch, but
+asked for no quotes; this is not a fault either. `ok` covers a run that priced everything it asked
+for, the valid zero-instrument case included. `partial` is usually one bad ticker, answered on
+**Settings → Prices** rather than here — this response carries no symbol. `failed` with
+`pricing.worker: "available"` means only that the listener answered *this* health probe while the
+*last tick's* quote attempt did not succeed end to end — not the same shape as `partial`, but not
+proof the socket hop was fine at the time of that attempt either: `worker` is a five-second-cached
+snapshot of right now, `quotes` is carried from up to a full cadence ago, and the worker can have
+failed and recovered in between. Worth investigating either way (`egress-proxy`, Yahoo, or the
+worker's own rate limiting; see [Logs](#logs)), just not narrowed past the socket by this combination
+alone. `unknown` means the tick's own database or lock work failed, not the provider.
+
+**`pricing.ok`** is one boolean, `true` exactly when `worker` is `available`, `scheduler` is
+`running` or `on_schedule`, and `quotes` is `not_attempted`, `market_closed` or `ok`. It never gates
+`status` or the HTTP code; it exists so a monitor that cannot express a compound predicate still has
+one field to watch, with the three attributes above answering every richer question. Neither a fresh
+container's `on_schedule`/`not_attempted`/`ok: true` nor a weekend's `market_closed`/`ok: true` should
+page anyone.
 
 ### What `/healthz` does not catch
 
@@ -1025,7 +1068,10 @@ every upload returns a 500.
 healthy app. Stale prices are a UI signal — the "as of" line — not a health signal. `pricing.worker`
 narrows this by exactly one hop — this process can or cannot reach the worker's own listener — and
 still says nothing about `egress-proxy` or Yahoo, so a healthy `worker: "available"` next to stale
-prices still means the fault is further out: see [Logs](#logs).
+prices still means the fault is further out: see [Logs](#logs). `pricing.quotes` narrows further —
+`failed` beside `worker: "available"` says the last real attempt did not succeed end to end — but it
+still cannot say whether the fault is `egress-proxy` or Yahoo itself: the worker protocol collapses
+both into the same `502`/`504`, and neither this endpoint nor the app behind it can tell them apart.
 
 **Whether anybody can actually get in.** `/healthz` is the one path Caddy does not put to the gate,
 which is what lets a monitor probe it without a Google account — and means a gate that is down,

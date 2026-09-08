@@ -135,9 +135,11 @@ Why: [Environment variables](operating.md#environment-variables), [Security](ope
 ## `/healthz` returns 503
 
 The body says which fault it is. Read `database` first — `migrations` still reads `"current"` when
-the database is unreachable. `pricing.worker` is never the cause: it is `available` or `unavailable`
-in every body below exactly as it would be on a healthy `200`, because nothing about the worker ever
-changes this status (spec price-health/02) — do not chase it here.
+the database is unreachable. `pricing` — all four of its keys, `worker`/`scheduler`/`quotes`/`ok` —
+is never the cause: it reads exactly the same in every body below as it would on a healthy `200`,
+because nothing about pricing ever changes this status (spec price-health/02 and /03) — do not chase
+it here. [Prices have stopped updating](#prices-have-stopped-updating) is the entry for `pricing`
+itself; the bodies below quote it as `worker: "available"` only for brevity.
 
 **Confirm.**
 
@@ -148,19 +150,19 @@ curl -s localhost/healthz
 Database unreachable:
 
 ```json
-{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
+{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
 ```
 
 Migrations pending — it names the files:
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"],"pricing":{"worker":"available"}}
+{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
 ```
 
 And the trap: the ledger read itself threw. This body is the healthy body except for `status`.
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
+{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"ok":true,"worker":"available","scheduler":"on_schedule","quotes":"ok"}}
 ```
 
 **Do.**
@@ -282,42 +284,72 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 
 ## Prices have stopped updating
 
-Rule out these before suspecting the provider.
+Start from `/healthz`'s `pricing` object (spec price-health/02 and /03) — it names which of `worker`,
+`scheduler` and `quotes` is the fault before you read a single log line — then use Compose state and
+the log stems below to locate it.
 
 **Confirm.**
 
 ```sh
 docker compose ps                                    # app, worker and egress-proxy — all healthy?
-curl -s localhost/healthz | grep -o '"worker":"[a-z]*"'
-docker compose logs --tail=500 app | grep "Price refresh"
+curl -s localhost/healthz | grep -o '"pricing":{[^}]*}'
+docker compose logs --tail=500 app | grep -E "Price refresh|Price backfill|Price poller did not start"
 ```
 
-`pricing.worker` on `/healthz` is a five-second-cached check of exactly one hop — this process's own
-socket mount reaching the worker's listener (spec price-health/02). `"worker":"unavailable"` narrows
-straight to that hop: `docker compose ps` and the worker's own logs are next. `"available"` rules
-*that* hop out, nothing more — it says nothing about the market being closed, the poller never having
-started, a tick still in flight, `egress-proxy`, or Yahoo, all of which still answer `200` here. Read
-the log grep below regardless of which it reports.
+Read the four keys in `pricing` in this order — the same order `pricing.ok`'s own conjunction reads
+them in, and the order that keeps you from chasing `quotes` while `worker` is the actual fault:
+
+- **`worker`: `"unavailable"`** narrows straight to the socket hop — `docker compose ps` and the
+  worker's own logs are next (spec price-health/02). **`"available"`** rules *that* hop out, nothing
+  more: it says nothing yet about the market being closed, the poller never having started, a tick
+  still in flight, `egress-proxy`, or Yahoo.
+- **`scheduler`: `not_started`** — this process holds no poller slot at all. The root middleware that
+  arms it runs ahead of every request the app serves, `/healthz` included (`app/root.tsx`), so a
+  response carrying `not_started` has already had `startPricePoller()` called in that same request —
+  there is no "hasn't run yet" left to rule out. Grep for the stem `Price poller did not start`,
+  which `startPricePoller` always logs on the failure that leaves this state; the line names the
+  build failure and a restart is the fix.
+- **`scheduler`: `overdue`** is two different faults the endpoint deliberately can't tell apart on its
+  own, because both are "no tick has *begun* in longer than the cadence plus five minutes": **the
+  timer stopped firing**, or **a tick started and never returned**. The log does not tell them apart
+  either, and it is worth saying plainly rather than guessing: `Price refresh`/`Price backfill` are
+  written only after a tick's own `runRefresh` call returns, while the timestamp `overdue` is measured
+  from is stamped at tick entry, before that call — so a tick that hangs inside it logs exactly
+  nothing, the same silence a stopped timer leaves. There is no line whose presence or absence tells
+  the two apart. `docker compose restart app` is the fix either way. Before restarting, `docker
+  compose logs db` for a long-running or blocked query is worth a look regardless of which cause this
+  is — free if the timer simply stopped, and the one thing that would explain a hung tick and be worth
+  fixing before the next one wedges the same way.
+- **`scheduler`: `running`** with no other symptom is ordinary — a tick is in flight. Poll again; if
+  it is still `running` well past when a tick should have finished, treat it the same as `overdue`'s
+  second case above.
+- **`quotes`: `not_attempted`** is ordinary on a fresh container (no tick has recorded an observation
+  yet) and otherwise means the scheduler itself is the thing to chase, not this key.
+- **`quotes`: `market_closed`** means the tick ran and deliberately asked for no quotes — check for a
+  `Price backfill` line instead (ADR-0011); this is not a fault.
+- **`quotes`: `partial`** is usually one bad ticker, not a pipeline fault — read **Settings → Prices**,
+  which names it; this response never carries a symbol.
+- **`quotes`: `failed`** beside **`worker`: `"available"`** means the last tick's quote attempt did
+  not succeed end to end while *this* probe, taken separately and up to five seconds old, found the
+  listener answering — not proof the socket hop was fine at the time of that attempt, since `quotes`
+  can be carried from up to a full cadence ago and the worker can have failed and recovered since.
+  Grep `Price provider failed` below regardless. `quotes`: `failed` beside **`worker`: `"unavailable"`**
+  is consistent with the fault you already found from `worker` above, though still not proof by
+  itself — the same log grep settles it either way.
+- **`quotes`: `unknown`** means the tick's own database or lock work failed, not the provider — grep
+  `Price refresh failed`.
+
+`pricing.ok` is the one-field rollup of all three (`worker`/`scheduler`/`quotes`) — read it to decide
+whether to look further, never as a diagnosis in itself; the runbook entry lives in the three
+attributes above.
 
 One line per refresh the poller actually runs — a `Price refresh` line with a count of what was
-priced and what was left stale. A tick that runs nothing writes nothing: the market closed, a tick
-landing while one still runs, or the advisory lock held by another process are all silent and all
-ordinary. So:
+priced and what was left stale. A tick that runs nothing writes nothing (the market closed, or a
+tick landing while one still runs or the advisory lock is held elsewhere — all silent, all ordinary,
+and all already named above by `quotes` and `scheduler`), so the log's remaining job is the one fault
+the JSON above can only point at, not describe:
 
-- **No lines at all, and the market is closed.** A tick outside market hours asks for no quotes, so
-  it writes no `Price refresh` line. Expected. It is not idle, though: it still runs the backfill
-  batch, so a `Price backfill` line at three in the morning is also expected (ADR-0011).
-- **Less than one refresh cadence since the last restart, and the market is open.** The poller arms
-  itself from the container's own healthcheck traffic within ten seconds of boot, but there is
-  deliberately no immediate first tick — wait one full cadence (Settings → Prices; seeded to 15
-  minutes) before treating silence as a fault.
-- **The poller failed to start.** Grep for the stem `Price poller did not start`. Restart `app`.
-
-  ```sh
-  docker compose logs --tail=500 app | grep -i "Price poller did not start"
-  ```
-
-- **The provider is unreachable, or `worker` or `egress-proxy` is.** Grep for the stem
+- **`quotes: "failed"` with `worker: "available"`.** Grep for the stem
   `Price provider failed`, or for `Price refresh` lines reporting stale instruments. Last-known
   prices are kept and marked stale — never zeroed — and `/healthz` deliberately stays `200`, because
   a third-party outage must not make Compose restart a healthy app. `app` has no egress of its own
