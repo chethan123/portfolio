@@ -493,4 +493,37 @@ describe("the default provider, when none is passed", () => {
       }
     },
   );
+
+  it(
+    "swallows a throw from building the default provider, logs it, and leaves the poller unarmed — the failure the lazy resolve inside the try exists to catch",
+    () => {
+      // Reproduces the defect this ticket fixes: were `provider ?? socketProvider()` still a default
+      // parameter (evaluated before the `try`), this throw would escape `startPricePoller` — a 500 on
+      // every request once a middleware is the caller, `/healthz` included, rather than the swallowed
+      // failure asserted below.
+      stopPricePoller();
+      const buildFailure = new Error("no worker listening at /run/price-worker/worker.sock (ENOENT)");
+      const socketProviderSpy = vi
+        .spyOn(providerSocketModule, "socketProvider")
+        .mockImplementation(() => {
+          throw buildFailure;
+        });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+
+      try {
+        expect(() => startPricePoller()).not.toThrow();
+        expect(host[POLLER_SLOT]).toBeUndefined();
+        expect(errorSpy).toHaveBeenCalledWith(
+          "Price poller did not start; prices will not refresh:",
+          buildFailure,
+        );
+      } finally {
+        stopPricePoller();
+        socketProviderSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    },
+  );
 });

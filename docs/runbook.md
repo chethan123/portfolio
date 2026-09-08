@@ -352,8 +352,9 @@ above it — and a house proxy that cuts an idle request at 60 s shows its own `
 the refresh keeps running behind it regardless. Reload the page rather than pressing the button
 again. The as-of stamp alone is not a verdict: it is the *oldest* fetched quote, so a press that
 worked can leave it still, and outside market hours it usually will. Beyond that, nothing
-destructive is ever warranted here: `docker compose restart app` is the remaining action, and it
-needs a page render afterwards to start the loop again.
+destructive is ever warranted here: `docker compose restart app` is the remaining action — the
+poller rearms itself from the container's own healthcheck traffic within ten seconds, with no page
+render required.
 
 Why: [Monitoring](operating.md#monitoring).
 
