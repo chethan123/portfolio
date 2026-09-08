@@ -7,10 +7,11 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWorkerHealthProbe } from "~/lib/worker-reachability.server";
 
+import * as configModule from "../server/config.ts";
 import { startWorker } from "../server/price-worker.ts";
 
 import type { YahooClient } from "../server/yahoo-client.ts";
@@ -194,6 +195,28 @@ describe("createWorkerHealthProbe().check", () => {
 
     now += 4_100; // past that window too
     expect(await probe.check(now)).toBe("available");
+  });
+
+  it("answers unavailable rather than rejecting when reading the configuration itself throws", async () => {
+    // getConfig() validates the whole configuration and throws naming every bad variable
+    // (server/config.ts) — reproduces a misconfigured environment so this stays "unavailable"
+    // rather than rejecting straight through check()'s cache into the route's Promise.all, which
+    // would replace the established JSON/503 response with a framework error page.
+    const getConfigSpy = vi.spyOn(configModule, "getConfig").mockImplementation(() => {
+      throw new Error("PRICE_WORKER_SOCKET must be an absolute path");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(createWorkerHealthProbe().check()).resolves.toBe("unavailable");
+      expect(errorSpy).toHaveBeenCalledWith(
+        "Worker reachability probe did not run:",
+        expect.any(Error),
+      );
+    } finally {
+      getConfigSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it("spends no quotes or history admission across many probes, even past the worker's own rate caps", async () => {

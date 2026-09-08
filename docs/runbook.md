@@ -292,11 +292,12 @@ curl -s localhost/healthz | grep -o '"worker":"[a-z]*"'
 docker compose logs --tail=500 app | grep "Price refresh"
 ```
 
-`pricing.worker` on `/healthz` is a five-second-cached check of exactly the first hop below — this
-process's own socket mount reaching the worker's listener (spec price-health/02) — so
-`"worker":"unavailable"` narrows straight to that first bullet. `"available"` rules it out: the fault
-is `egress-proxy` or Yahoo, one of the other three, which this key proves nothing about either way, so
-still read the log grep below.
+`pricing.worker` on `/healthz` is a five-second-cached check of exactly one hop — this process's own
+socket mount reaching the worker's listener (spec price-health/02). `"worker":"unavailable"` narrows
+straight to that hop: `docker compose ps` and the worker's own logs are next. `"available"` rules
+*that* hop out, nothing more — it says nothing about the market being closed, the poller never having
+started, a tick still in flight, `egress-proxy`, or Yahoo, all of which still answer `200` here. Read
+the log grep below regardless of which it reports.
 
 One line per refresh the poller actually runs — a `Price refresh` line with a count of what was
 priced and what was left stale. A tick that runs nothing writes nothing: the market closed, a tick
@@ -306,10 +307,10 @@ ordinary. So:
 - **No lines at all, and the market is closed.** A tick outside market hours asks for no quotes, so
   it writes no `Price refresh` line. Expected. It is not idle, though: it still runs the backfill
   batch, so a `Price backfill` line at three in the morning is also expected (ADR-0011).
-- **No lines at all since the last restart, and the market is open.** The poller starts from a page
-  render, not from boot — `/healthz` does not start it. Load any page in a browser, then wait one
-  full refresh cadence (Settings → Prices; seeded to 15 minutes); there is deliberately no
-  immediate first tick.
+- **Less than one refresh cadence since the last restart, and the market is open.** The poller arms
+  itself from the container's own healthcheck traffic within ten seconds of boot, but there is
+  deliberately no immediate first tick — wait one full cadence (Settings → Prices; seeded to 15
+  minutes) before treating silence as a fault.
 - **The poller failed to start.** Grep for the stem `Price poller did not start`. Restart `app`.
 
   ```sh

@@ -41,13 +41,24 @@ function isExactlyOk(value: unknown): boolean {
 }
 
 async function probeOnce(): Promise<WorkerReachability> {
-  const result = await socketRequest({
-    socketPath: getConfig().PRICE_WORKER_SOCKET,
-    method: "GET",
-    path: "/healthz",
-    deadlineMs: DEADLINE_MS,
-    capBytes: BODY_CAP_BYTES,
-  });
+  let result;
+  try {
+    // getConfig() validates the whole configuration on its first call in a process and throws
+    // naming every bad variable — same as checkHealth()'s own read reaching it through getPool().
+    // Caught here too, or a misconfigured environment would reject this promise straight through
+    // check()'s cache into the route's Promise.all, replacing the established JSON/503 response
+    // with a framework error page.
+    result = await socketRequest({
+      socketPath: getConfig().PRICE_WORKER_SOCKET,
+      method: "GET",
+      path: "/healthz",
+      deadlineMs: DEADLINE_MS,
+      capBytes: BODY_CAP_BYTES,
+    });
+  } catch (error) {
+    console.error("Worker reachability probe did not run:", error);
+    return "unavailable";
+  }
 
   if (!result.ok) return "unavailable";
 
