@@ -162,7 +162,24 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
   return withNoStore(await next());
 };
 
-export const middleware: Route.MiddlewareFunction[] = [crossOriginMutationMiddleware, lockMiddleware];
+/**
+ * Arms the scheduled price refresh (§6.2, `price-poller.server.ts`). Last in the array: the lock
+ * above already throws for a locked, grant-less request before `next()`, so a refusal never carries
+ * this side effect, while `/healthz` and `/unlock` — the lock's own exemptions — still reach it.
+ * That is the middleware pipeline, not this loader below: it is the one server path every *request*
+ * passes through, resource routes included, where a document render is not the point. Synchronous
+ * and cannot throw, so it is not awaited and wraps nothing.
+ */
+const pricePollerMiddleware: Route.MiddlewareFunction = (_args, next) => {
+  startPricePoller();
+  return next();
+};
+
+export const middleware: Route.MiddlewareFunction[] = [
+  crossOriginMutationMiddleware,
+  lockMiddleware,
+  pricePollerMiddleware,
+];
 
 /** Neutral values, telling a browser that has proven nothing no fact about the household. */
 const UNLOCK_SCREEN_ROOT_DATA = {
@@ -175,9 +192,6 @@ const UNLOCK_SCREEN_ROOT_DATA = {
 
 /** Masking is resolved server-side: a page that drew the amounts and then hid them is the one failure this feature cannot have (story 30); every read fails toward masked. */
 export async function loader({ request }: Route.LoaderArgs) {
-  // §6.2. Root's loader is the only server path every render passes through, including while locked; idempotent, not awaited, cannot throw.
-  startPricePoller();
-
   const url = new URL(request.url);
   // Skipped deliberately, not just for shape: this is the one request an un-granted browser can hammer.
   if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;

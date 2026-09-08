@@ -51,12 +51,13 @@ graph TB
 
 - **Google learns who signs in and when.** That is what the sign-in gate is. It never sees a figure.
 - **Yahoo learns which tickers you hold**, every fifteen minutes by default — a setting in
-  Settings → Prices. Once anyone has loaded a page since the last restart, that timer runs whether
-  or not anyone is still looking. Its own ticks skip the quote fetch outside market hours, but
-  pressing Refresh now or committing an upload fetches at any hour, and any tick may fill in missing
-  daily history — a few instruments per tick, and only ones missing prices. Yahoo never learns how
-  many shares, or what they are worth to you. It does learn, for a ticker whose history is being
-  filled, a date a week before the earliest you have held it.
+  Settings → Prices. The timer arms itself from the container's own healthcheck traffic within ten
+  seconds of boot, not from anyone loading a page, so it runs whether or not anyone has ever opened
+  the site. Its own ticks skip the quote fetch outside market hours, but pressing Refresh now or
+  committing an upload fetches at any hour, and any tick may fill in missing daily history — a few
+  instruments per tick, and only ones missing prices. Yahoo never learns how many shares, or what
+  they are worth to you. It does learn, for a ticker whose history is being filled, a date a week
+  before the earliest you have held it.
 - **Nothing else.** No analytics, no error reporting, no CDN, no third-party script of any kind in
   the page — and no web font from anyone else's server: the one typeface is a file this box serves
   itself. The service worker stores nothing on the device — no Cache Storage, no IndexedDB. That is

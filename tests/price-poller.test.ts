@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
 import { requestRefresh, startPricePoller, stopPricePoller } from "~/lib/price-poller.server";
+import * as providerSocketModule from "~/lib/provider-socket.server";
 import { createPool } from "../server/db.ts";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -469,5 +470,60 @@ describe("what the batch writes to the log", () => {
         "Price backfill: 1 attempted, 0 closes written, 0 failed.",
       ]);
     }),
+  );
+});
+
+describe("the default provider, when none is passed", () => {
+  it(
+    "is built once even when startPricePoller is called twice, since the second call is only the idempotent guard",
+    () => {
+      // Pins the lazy default (`provider ?? socketProvider()`, resolved inside the try): a default
+      // parameter would have built one on the first call's own argument evaluation regardless of
+      // this spy, and a second, unguarded build on the second call would double-count here.
+      const socketProviderSpy = vi.spyOn(providerSocketModule, "socketProvider");
+
+      try {
+        startPricePoller();
+        startPricePoller();
+
+        expect(socketProviderSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        stopPricePoller();
+        socketProviderSpy.mockRestore();
+      }
+    },
+  );
+
+  it(
+    "swallows a throw from building the default provider, logs it, and leaves the poller unarmed — the failure the lazy resolve inside the try exists to catch",
+    () => {
+      // Reproduces the defect this ticket fixes: were `provider ?? socketProvider()` still a default
+      // parameter (evaluated before the `try`), this throw would escape `startPricePoller` — a 500 on
+      // every request once a middleware is the caller, `/healthz` included, rather than the swallowed
+      // failure asserted below.
+      stopPricePoller();
+      const buildFailure = new Error("no worker listening at /run/price-worker/worker.sock (ENOENT)");
+      const socketProviderSpy = vi
+        .spyOn(providerSocketModule, "socketProvider")
+        .mockImplementation(() => {
+          throw buildFailure;
+        });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+
+      try {
+        expect(() => startPricePoller()).not.toThrow();
+        expect(host[POLLER_SLOT]).toBeUndefined();
+        expect(errorSpy).toHaveBeenCalledWith(
+          "Price poller did not start; prices will not refresh:",
+          buildFailure,
+        );
+      } finally {
+        stopPricePoller();
+        socketProviderSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    },
   );
 });

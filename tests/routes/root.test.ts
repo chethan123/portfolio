@@ -33,8 +33,8 @@ const { stopPricePoller } = await import("~/lib/price-poller.server");
 /** Refused immediately, which is how "the database is down" arrives here. */
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-// This loader also starts the refresh loop (§6.2) — a real 15-minute interval, unref'd but otherwise outliving this
-// file. Stopped after every test.
+// The middleware array's last member also starts the refresh loop (§6.2) — a real 15-minute
+// interval, unref'd but otherwise outliving this file. Stopped after every test.
 afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
@@ -128,20 +128,6 @@ describe("the shell's loader on /unlock — the household's setup state must not
         await unreachable.destroy();
       }
     },
-  );
-
-  it(
-    "still starts the price poller on a request to /unlock — the one route every render passes through before anyone has unlocked anything",
-    withDatabase(async () => {
-      // Symbol.for registry key (price-poller.server.ts) names the identical global without importing anything internal or forcing a real tick.
-      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
-      const host = globalThis as unknown as Record<symbol, unknown>;
-      expect(host[POLLER_SLOT]).toBeUndefined();
-
-      await loader(args(get("/unlock")));
-
-      expect(host[POLLER_SLOT]).toBeDefined();
-    }),
   );
 });
 
@@ -537,6 +523,54 @@ describe("the lock middleware", () => {
       // /healthz sets its own no-store today, masking a removed withNoStore here — /unlock has no such fallback, the bfcache hole the ADR names.
       const response = await servedThrough(middleware, get("/unlock"));
       expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }),
+  );
+});
+
+// Last in the exported array (app/root.tsx) — arms only once the lock above has either exempted
+// or admitted a request, never ahead of a refusal. `servedThrough` runs the whole array, so these
+// prove the shipped placement rather than the middleware in isolation.
+describe("the price poller middleware", () => {
+  it(
+    "arms the poller for a request to /healthz while the household is locked and the browser holds no grant — the shipped healthcheck's own situation",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+      expect(host[POLLER_SLOT]).toBeUndefined();
+
+      await servedThrough(middleware, get("/healthz"));
+
+      expect(host[POLLER_SLOT]).toBeDefined();
+    }),
+  );
+
+  it(
+    "arms the poller for a request to /unlock, the other exempt path, before anyone has unlocked anything",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+      expect(host[POLLER_SLOT]).toBeUndefined();
+
+      await servedThrough(middleware, get("/unlock"));
+
+      expect(host[POLLER_SLOT]).toBeDefined();
+    }),
+  );
+
+  it(
+    "does not arm the poller when a locked, grant-less request to a non-exempt path is refused, pinning the middleware's placement last in the array",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+
+      const response = await responseOf(() => servedThrough(middleware, get("/holdings")));
+
+      expect(response.status).toBeGreaterThanOrEqual(300);
+      expect(response.status).toBeLessThan(400);
+      expect(host[POLLER_SLOT]).toBeUndefined();
     }),
   );
 });
