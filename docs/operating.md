@@ -290,16 +290,20 @@ at the first hop, and nothing in `docker compose ps` says why. And `/healthz` an
 exactly:
 
 ```json
-{"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
+{"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
 ```
 
 Any other body on that endpoint means something, and [Monitoring](#monitoring) says what.
 
-That still proves nothing about `worker` — the `/healthz` above is `app`'s own and never crosses the
-socket. Prove that hop too, once, right after this `up -d` and again after any change to the host's
-engine or container runtime: an SELinux-enforcing host, `userns-remap`, or rootless Docker can each
-leave the worker's socket permissions different from what this stack assumes, and none of it is
-proven anywhere in this repo's CI, because its runner is none of those.
+`pricing.worker` is `app`'s own bounded, cached check of the hop across the socket (spec
+price-health/02) — it proves this process's own read-only mount reaches the worker's listener, not
+only that the worker's own healthcheck is green from inside its own container. It never crosses to
+`egress-proxy` or Yahoo, it never changes the `200` above, and it is cached for up to five seconds, so
+a transition (the worker dying or coming back) can lag by that much. For an uncached answer right now
+— right after this `up -d`, and again after any change to the host's engine or container runtime: an
+SELinux-enforcing host, `userns-remap`, or rootless Docker can each leave the worker's socket
+permissions different from what this stack assumes, and none of it is proven anywhere in this repo's
+CI, because its runner is none of those — dial the same hop by hand:
 
 ```sh
 docker compose exec -T app node -e "
@@ -311,7 +315,11 @@ echo $?
 `0` means `app` reached `worker` over the shared socket end to end; anything else — including a
 silent hang, which the `timeout` above turns into a `1` within five seconds instead of blocking
 forever, the same guard `worker`'s own healthcheck in `compose.yaml` carries — see
-[Monitoring](#monitoring).
+[Monitoring](#monitoring). That `5000` is a once-only, socket-inactivity timer on a probe that only
+ever runs by hand or at deploy — worth keeping straight from `pricing.worker`'s own deadline, a much
+stricter 500 ms covering the **whole exchange** (connection, headers and body together), because that
+one answers on a live, unauthenticated request path and has to fail fast rather than wait out a slow
+peer the way a one-shot check can afford to.
 
 `/healthz` is the one path the gate does not challenge, so a `200` there proves nothing about
 sign-in. Check the front door separately:
@@ -979,15 +987,25 @@ pinned by a test (`tests/routes/healthz.test.ts` asserts it key for key, precise
 break your dashboard silently), which is why it is quoted here rather than described:
 
 ```json
-200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
-503  {"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[]}
-503  {"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["…","…"]}
+200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
+200  {"status":"ok","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"unavailable"}}
+503  {"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
+503  {"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["…","…"],"pricing":{"worker":"available"}}
 ```
 
-Alert on `status`. Read `database` before `migrations`, and read `migrations` only when `database` is
-true: the migration ledger lives *in* the database, so when the database is unreachable there is
-nothing to read and the field still says `current`. **`migrations` is meaningless whenever `database`
-is false**, and the second line above is what that looks like.
+Alert on `status` for app/database failure — non-`200` is the only thing worth paging on. Read
+`database` before `migrations`, and read `migrations` only when `database` is true: the migration
+ledger lives *in* the database, so when the database is unreachable there is nothing to read and the
+field still says `current`. **`migrations` is meaningless whenever `database` is false**, and the
+third line above is what that looks like. The second line above is the ordinary shape of a healthy
+instance whose worker container is down, restarting, or unreachable over the socket: `pricing.worker`
+never turns `200` into `503`, by design (spec price-health/02), so read it as its own signal — worth
+its own alert rule, not folded into the one for `status` — rather than expecting it to explain a
+non-`200` response. `worker: "available"` proves only that this process reached the worker's own
+`GET /healthz` over the socket; it proves neither `egress-proxy` nor Yahoo, both of which fail while
+`worker` still answers `200` (see [Logs](#logs)). It is also cached for up to five seconds per app
+process, so a monitor polling faster than that can see a transition lag behind the real state by that
+much.
 
 ### What `/healthz` does not catch
 
@@ -1004,7 +1022,10 @@ grant — all of them leave that succeeding. The container is healthy, the dashb
 every upload returns a 500.
 
 **The price provider, deliberately.** A third-party outage must not make Compose restart a perfectly
-healthy app. Stale prices are a UI signal — the "as of" line — not a health signal.
+healthy app. Stale prices are a UI signal — the "as of" line — not a health signal. `pricing.worker`
+narrows this by exactly one hop — this process can or cannot reach the worker's own listener — and
+still says nothing about `egress-proxy` or Yahoo, so a healthy `worker: "available"` next to stale
+prices still means the fault is further out: see [Logs](#logs).
 
 **Whether anybody can actually get in.** `/healthz` is the one path Caddy does not put to the gate,
 which is what lets a monitor probe it without a Google account — and means a gate that is down,

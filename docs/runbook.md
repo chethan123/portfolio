@@ -135,7 +135,9 @@ Why: [Environment variables](operating.md#environment-variables), [Security](ope
 ## `/healthz` returns 503
 
 The body says which fault it is. Read `database` first — `migrations` still reads `"current"` when
-the database is unreachable.
+the database is unreachable. `pricing.worker` is never the cause: it is `available` or `unavailable`
+in every body below exactly as it would be on a healthy `200`, because nothing about the worker ever
+changes this status (spec price-health/02) — do not chase it here.
 
 **Confirm.**
 
@@ -146,19 +148,19 @@ curl -s localhost/healthz
 Database unreachable:
 
 ```json
-{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[]}
+{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
 ```
 
 Migrations pending — it names the files:
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"]}
+{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"],"pricing":{"worker":"available"}}
 ```
 
 And the trap: the ledger read itself threw. This body is the healthy body except for `status`.
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[]}
+{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
 ```
 
 **Do.**
@@ -286,8 +288,16 @@ Rule out these before suspecting the provider.
 
 ```sh
 docker compose ps                                    # app, worker and egress-proxy — all healthy?
+curl -s localhost/healthz | grep -o '"worker":"[a-z]*"'
 docker compose logs --tail=500 app | grep "Price refresh"
 ```
+
+`pricing.worker` on `/healthz` is a five-second-cached check of exactly one hop — this process's own
+socket mount reaching the worker's listener (spec price-health/02). `"worker":"unavailable"` narrows
+straight to that hop: `docker compose ps` and the worker's own logs are next. `"available"` rules
+*that* hop out, nothing more — it says nothing about the market being closed, the poller never having
+started, a tick still in flight, `egress-proxy`, or Yahoo, all of which still answer `200` here. Read
+the log grep below regardless of which it reports.
 
 One line per refresh the poller actually runs — a `Price refresh` line with a count of what was
 priced and what was left stale. A tick that runs nothing writes nothing: the market closed, a tick
@@ -297,10 +307,10 @@ ordinary. So:
 - **No lines at all, and the market is closed.** A tick outside market hours asks for no quotes, so
   it writes no `Price refresh` line. Expected. It is not idle, though: it still runs the backfill
   batch, so a `Price backfill` line at three in the morning is also expected (ADR-0011).
-- **No lines at all since the last restart, and the market is open.** The poller starts from a page
-  render, not from boot — `/healthz` does not start it. Load any page in a browser, then wait one
-  full refresh cadence (Settings → Prices; seeded to 15 minutes); there is deliberately no
-  immediate first tick.
+- **Less than one refresh cadence since the last restart, and the market is open.** The poller arms
+  itself from the container's own healthcheck traffic within ten seconds of boot, but there is
+  deliberately no immediate first tick — wait one full cadence (Settings → Prices; seeded to 15
+  minutes) before treating silence as a fault.
 - **The poller failed to start.** Grep for the stem `Price poller did not start`. Restart `app`.
 
   ```sh

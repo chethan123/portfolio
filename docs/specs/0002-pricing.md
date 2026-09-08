@@ -163,6 +163,13 @@ No migration. The schema from §4.1 already holds everything this slice writes.
     overlaps a shutdown does not double the request rate.
 35. As a self-hoster, I want the health endpoint to keep ignoring the price provider, so that a
     Yahoo outage does not make Compose restart a healthy app.
+
+    _Superseded in part_ ([price-health/02](price-health/02-worker-reachability.md)): the health
+    endpoint now reports `pricing.worker`, an app-to-worker socket reachability check — but it is
+    still not a price-provider check. Yahoo itself is still never reached from `/healthz`, a Yahoo
+    outage still cannot flip its status, and neither can the worker being unreachable. This story's
+    "so that" still holds; only "keep ignoring" narrows to "ignoring the provider specifically."
+
 36. As a self-hoster, I want a failing poll not to stop the schedule, so that the next tick still
     runs after a transient error.
 37. As a self-hoster, I want one log line per tick saying what happened, so that "prices stopped
@@ -332,6 +339,11 @@ lives in module scope of a server module that the application imports, started o
 - **`/healthz` continues to say nothing about the poller or the provider.** `app/routes/healthz.ts`
   already documents why: a health check that fails on a third-party outage would make Compose
   restart a perfectly healthy app. A stopped poller is a logging problem, not a liveness one.
+
+  _Superseded in part_ ([price-health/02](price-health/02-worker-reachability.md)): `/healthz` now
+  reports `pricing.worker`, an app-to-worker socket reachability check — not a provider check, and
+  never a change to the HTTP status, which `database`/`migrations` alone still decide. The claim
+  that stands is narrower than written above: not "says nothing," but "never gates on it."
 
 ### Manual prices write both tiers
 
