@@ -46,7 +46,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010) |
 | [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; proposed) |
 | [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (proposed) |
-| [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: live worker reachability and passive scheduler/fetch status without probing Yahoo (proposed) |
+| [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (proposed) |
 
 ## The ticket directories
 
