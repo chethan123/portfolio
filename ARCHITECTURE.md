@@ -1610,7 +1610,7 @@ one household's instance and the operator reads `docker compose logs`.
 
 | Signal | Where |
 |---|---|
-| `GET /healthz` (`app`) | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated. Never crosses the socket — silent on whether `worker` or `egress-proxy` are even running |
+| `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener — but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses |
 | Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
@@ -1632,8 +1632,14 @@ still answers it `200`. `egress-proxy`'s (`compose.yaml:221`) asks its own `127.
 deliberately not a bare TCP connect: with all eight `maxConnections` slots held by stalled tunnels the
 accept queue still completes a handshake, so only a request the HTTP server itself answers proves the
 proxy is not saturated. None restarts a container on failure — all three are for a human reading
-`docker compose ps` — and none of the three proves the hop from `app` across the socket to `worker`
-actually works; `docs/operating.md`'s "Verify it actually worked" has the one command that does.
+`docker compose ps`. `app`'s own now proves one hop none of the other two can: not "is `worker`
+accepting requests on its socket" (that's `worker`'s own check, run from inside its container, on the
+uid that owns the mount) but "can *this app process*, over its separate read-only mount, actually
+reach it" — the hop `scripts/smoke-test.sh` proved only once, at deploy, before this. It is still a
+bounded, cached probe of the worker's listener alone: it says nothing about `egress-proxy` or Yahoo,
+and a transition can lag its five-second cache. `docs/operating.md`'s "Verify it actually worked" has
+the uncached, one-shot version of the same check, worth running by hand right after any change to the
+host's engine or container runtime.
 
 ### 7.5 The provider seam
 
@@ -2160,7 +2166,9 @@ still live in the current code:
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
 | `price-provider.server.ts` | The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe. The library itself is reached through `server/yahoo-client.ts`, its only importer |
-| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above — never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) |
+| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above — never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below — this module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
+| `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02) — extracted, not hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
+| `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener — never Yahoo, never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |

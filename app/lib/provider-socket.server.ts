@@ -5,8 +5,6 @@
  * should not exist. Nothing is remembered between calls, so a recovery is never delayed.
  * The socket path stays an opaque string here — never stat'ed, read, or created (spec §8).
  */
-import http from "node:http";
-
 import { getConfig } from "../../server/config.ts";
 import { isWellFormedSymbol } from "../../server/symbol-pattern.ts";
 
@@ -25,6 +23,7 @@ import {
   type SymbolProbe,
 } from "./price-provider.server.ts";
 import { matchKey } from "./prices.server.ts";
+import { socketRequest } from "./socket-transport.server.ts";
 
 type AskKind = "quotes" | "history";
 
@@ -55,12 +54,12 @@ function scrubForLog(text: string): string {
 }
 
 /**
- * `POST /${kind}` over the unix socket, JSON both ways. No retry. `getConfig()` inside the call, not
- * at module scope, so a test can set `PRICE_WORKER_SOCKET` first.
+ * `POST /${kind}` over the unix socket, JSON both ways, on top of {@link socketRequest}. No retry.
+ * `getConfig()` inside the call, not at module scope, so a test can set `PRICE_WORKER_SOCKET` first.
  *
- * Rejections: `syscall === "connect"` is {@link ProviderUnreachable}, keyed on the syscall and never
- * a code list; an expired budget carries the raw abort as `cause`; a non-`200` carries the body's
- * scrubbed `error`. A `200` resolves whatever shape — the caller's Zod is the only gate.
+ * Rejections: `connect` is {@link ProviderUnreachable}, keyed on the syscall and never a code list;
+ * an expired budget carries the raw abort as `cause`; a non-`200` carries the body's scrubbed
+ * `error`. A `200` resolves whatever shape — the caller's Zod is the only gate.
  */
 export async function ask(
   kind: AskKind,
@@ -68,116 +67,70 @@ export async function ask(
   { budgetMs = BUDGET_MS[kind] }: { budgetMs?: number } = {},
 ): Promise<unknown> {
   const socketPath = getConfig().PRICE_WORKER_SOCKET;
-  const payload = JSON.stringify(body);
   const cap = BODY_CAP_BYTES[kind];
-  const signal = AbortSignal.timeout(budgetMs);
 
-  return new Promise<unknown>((resolve, reject) => {
-    // Either handler can fire after the other settled (the body-cap `destroy()` raises `error`).
-    let settled = false;
-    const settle = (thunk: () => void): void => {
-      if (settled) return;
-      settled = true;
-      thunk();
-    };
-
-    const req = http.request(
-      {
-        socketPath,
-        method: "POST",
-        path: `/${kind}`,
-        headers: { "content-type": "application/json" },
-        agent: false,
-        signal,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        let total = 0;
-
-        res.on("data", (chunk: Buffer) => {
-          total += chunk.length;
-          if (total > cap) {
-            req.destroy();
-            settle(() => reject(new Error(`${kind} response from the worker exceeded ${cap} bytes`)));
-            return;
-          }
-          chunks.push(chunk);
-        });
-
-        res.on("end", () => {
-          settle(() => {
-            const text = Buffer.concat(chunks).toString("utf8");
-
-            // Empty is legitimate only from Node's own `clientError` status line. On a `200` it is a
-            // drifted `undefined` that `JSON.stringify` wrote as nothing, reading back as an empty batch.
-            let parsed: unknown;
-            if (text.length === 0) {
-              if (res.statusCode === 200) {
-                reject(new Error(`the worker answered ${kind} with 200 and an empty body`));
-                return;
-              }
-              parsed = undefined;
-            } else {
-              try {
-                parsed = JSON.parse(text);
-              } catch (error) {
-                reject(
-                  new Error(`${kind} response from the worker was not valid JSON`, { cause: error }),
-                );
-                return;
-              }
-            }
-
-            if (res.statusCode !== 200) {
-              const reason =
-                typeof parsed === "object" &&
-                parsed !== null &&
-                typeof (parsed as { error?: unknown }).error === "string"
-                  ? // Scrubbed on the READING side: a forged or upstream-supplied `error` field
-                    // with a raw newline would forge lines under the `Price worker:` stem.
-                    scrubForLog((parsed as { error: string }).error)
-                  : String(res.statusCode);
-              reject(new Error(reason));
-              return;
-            }
-
-            resolve(parsed);
-          });
-        });
-      },
-    );
-
-    req.on("error", (error) => {
-      const err = error as NodeJS.ErrnoException;
-
-      if (err.syscall === "connect") {
-        settle(() =>
-          reject(new ProviderUnreachable(`no worker listening at ${socketPath} (${err.code})`)),
-        );
-        return;
-      }
-
-      if (signal.aborted || err.name === "AbortError") {
-        // `cause` is the raw `AbortError` wrapping the signal's `TimeoutError`, so a test can pin it.
-        settle(() =>
-          reject(
-            new Error(`the worker did not answer ${kind} within ${budgetMs}ms`, { cause: error }),
-          ),
-        );
-        return;
-      }
-
-      settle(() => reject(error));
-    });
-
-    // A socket destroyed after the headers but before the body emits neither `error` nor `end`, so
-    // without this the promise hangs. `close` always fires; on the success path `end` beats it.
-    req.on("close", () => {
-      settle(() => reject(new Error(`the worker's connection closed before the ${kind} answer completed`)));
-    });
-
-    req.end(payload);
+  const result = await socketRequest({
+    socketPath,
+    method: "POST",
+    path: `/${kind}`,
+    body: JSON.stringify(body),
+    deadlineMs: budgetMs,
+    capBytes: cap,
   });
+
+  if (!result.ok) {
+    const { failure } = result;
+
+    if (failure.kind === "connect") {
+      throw new ProviderUnreachable(`no worker listening at ${socketPath} (${failure.code})`);
+    }
+    if (failure.kind === "timeout") {
+      // `cause` is the raw `AbortError` wrapping the signal's `TimeoutError`, so a test can pin it.
+      throw new Error(`the worker did not answer ${kind} within ${budgetMs}ms`, {
+        cause: failure.cause,
+      });
+    }
+    if (failure.kind === "closed") {
+      throw new Error(`the worker's connection closed before the ${kind} answer completed`);
+    }
+    if (failure.kind === "capped") {
+      throw new Error(`${kind} response from the worker exceeded ${cap} bytes`);
+    }
+    // A mid-stream reset, e.g.: not a connect failure, so never ProviderUnreachable — the caller's
+    // own retry-vs-fail-batch logic (socketProbe) must tell it apart from a listener that's simply gone.
+    throw failure.cause;
+  }
+
+  const { status, body: raw } = result.response;
+  const text = raw.toString("utf8");
+
+  // Empty is legitimate only from Node's own `clientError` status line. On a `200` it is a
+  // drifted `undefined` that `JSON.stringify` wrote as nothing, reading back as an empty batch.
+  let parsed: unknown;
+  if (text.length === 0) {
+    if (status === 200) {
+      throw new Error(`the worker answered ${kind} with 200 and an empty body`);
+    }
+    parsed = undefined;
+  } else {
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`${kind} response from the worker was not valid JSON`, { cause: error });
+    }
+  }
+
+  if (status !== 200) {
+    const reason =
+      typeof parsed === "object" && parsed !== null && typeof (parsed as { error?: unknown }).error === "string"
+        ? // Scrubbed on the READING side: a forged or upstream-supplied `error` field
+          // with a raw newline would forge lines under the `Price worker:` stem.
+          scrubForLog((parsed as { error: string }).error)
+        : String(status);
+    throw new Error(reason);
+  }
+
+  return parsed;
 }
 
 function batchesOf(symbols: string[]): string[][] {

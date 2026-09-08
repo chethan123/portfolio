@@ -135,7 +135,9 @@ Why: [Environment variables](operating.md#environment-variables), [Security](ope
 ## `/healthz` returns 503
 
 The body says which fault it is. Read `database` first — `migrations` still reads `"current"` when
-the database is unreachable.
+the database is unreachable. `pricing.worker` is never the cause: it is `available` or `unavailable`
+in every body below exactly as it would be on a healthy `200`, because nothing about the worker ever
+changes this status (spec price-health/02) — do not chase it here.
 
 **Confirm.**
 
@@ -146,19 +148,19 @@ curl -s localhost/healthz
 Database unreachable:
 
 ```json
-{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[]}
+{"status":"unhealthy","database":false,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
 ```
 
 Migrations pending — it names the files:
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"]}
+{"status":"unhealthy","database":true,"migrations":"pending","pendingMigrations":["0004_upload_draft.sql","0005_app_setting.sql"],"pricing":{"worker":"available"}}
 ```
 
 And the trap: the ledger read itself threw. This body is the healthy body except for `status`.
 
 ```json
-{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[]}
+{"status":"unhealthy","database":true,"migrations":"current","pendingMigrations":[],"pricing":{"worker":"available"}}
 ```
 
 **Do.**
@@ -286,8 +288,15 @@ Rule out these before suspecting the provider.
 
 ```sh
 docker compose ps                                    # app, worker and egress-proxy — all healthy?
+curl -s localhost/healthz | grep -o '"worker":"[a-z]*"'
 docker compose logs --tail=500 app | grep "Price refresh"
 ```
+
+`pricing.worker` on `/healthz` is a five-second-cached check of exactly the first hop below — this
+process's own socket mount reaching the worker's listener (spec price-health/02) — so
+`"worker":"unavailable"` narrows straight to that first bullet. `"available"` rules it out: the fault
+is `egress-proxy` or Yahoo, one of the other three, which this key proves nothing about either way, so
+still read the log grep below.
 
 One line per refresh the poller actually runs — a `Price refresh` line with a count of what was
 priced and what was left stale. A tick that runs nothing writes nothing: the market closed, a tick
