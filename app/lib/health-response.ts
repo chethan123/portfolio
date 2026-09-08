@@ -1,18 +1,26 @@
-/** `pricing.worker` never gates the HTTP status here — only `database`/`migrations` do. */
+/** `pricing` never gates the HTTP status here — only `database`/`migrations` do. */
+import {
+  pricingHealth,
+  type PollerSnapshot,
+  type PricingHealth,
+  type WorkerReachability,
+} from "./price-health.ts";
+
 import type { HealthReport } from "./db.server.ts";
-import type { WorkerReachability } from "./worker-reachability.server.ts";
 
 export type HealthzBody = {
   status: "ok" | "unhealthy";
   database: boolean;
   migrations: "current" | "pending";
   pendingMigrations: string[];
-  pricing: { worker: WorkerReachability };
+  pricing: PricingHealth;
 };
 
 export function healthzResponse(
   health: HealthReport,
   worker: WorkerReachability,
+  snapshot: PollerSnapshot,
+  now: Date = new Date(),
 ): { body: HealthzBody; status: number } {
   return {
     body: {
@@ -20,7 +28,7 @@ export function healthzResponse(
       database: health.database,
       migrations: health.pendingMigrations.length === 0 ? "current" : "pending",
       pendingMigrations: health.pendingMigrations,
-      pricing: { worker },
+      pricing: pricingHealth(snapshot, worker, now),
     },
     status: health.healthy ? 200 : 503,
   };

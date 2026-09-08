@@ -704,3 +704,29 @@ The lazily-built default provider (`provider?: PriceProvider`, resolved as `prov
 inside `startPricePoller`'s own `try`) went with it: the function is now called on every request
 rather than every page render, so a throw building the default provider had to stay caught there
 rather than escape as an uncaught response.
+
+**§8 ("Health and observability") is now largely addressed, and without the durable heartbeat table
+it stopped short of recommending.** [Spec 0021](../specs/0021-price-health.md) and its three tickets
+shipped `GET /healthz`'s `pricing` object in full: `worker` (spec price-health/02) proves the
+app-to-worker socket hop; `scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `quotes`
+(`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) come from
+[ticket 03](../specs/price-health/03-scheduler-and-fetch-status.md), read passively off the same
+`globalThis` poller slot this document's §1 and §8 both describe — now flattened to a
+`PollerSnapshot` and turned into the published categories by a new pure module, `app/lib/price-health.ts`.
+`pricing.ok` is the one-field rollup §8's closing paragraph asked for ("three distinct answers instead
+of one overloaded green light" is now literally `worker`/`scheduler`/`quotes` beside a boolean
+conjunction over them) — never a fourth stored value: spec 0021's own "Rejected" section cut a
+four-value `status`, a `waiting` category and a next-due instant, each needing a "has completed a
+tick" fact the design deliberately does not keep, since a first tick that hangs would otherwise land
+in exactly that unreported state forever.
+
+This closes the specific gap this section raised — "these are post-attempt signals, not pipeline
+readiness" — for the one case that mattered most: a scheduler that was never bootstrapped is now
+visible without a page ever having been opened, and told apart from a scheduler that has bootstrapped
+but not yet had a turn. `overdue`'s own boundary, measured from when a tick last *began* rather than from a stored next-due
+instant, is deliberately not suppressed by `running` — so the sharpest risk `docs/research/README.md`'s
+own summary of spec 0021 names, a tick that never returns, is exactly what `overdue` reports, rather
+than pinning the scheduler at `running` forever. What
+stays unaddressed, deliberately: a *durable*, cross-restart heartbeat, or a per-replica identity for a
+multi-app-process deployment. The snapshot resets to `not_started` on every restart and HMR disposal,
+exactly as the poller's own live state does, and the shipped topology remains one app process.

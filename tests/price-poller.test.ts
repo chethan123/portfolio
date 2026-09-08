@@ -6,14 +6,24 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
-import { requestRefresh, startPricePoller, stopPricePoller } from "~/lib/price-poller.server";
+import {
+  readPollerSnapshot,
+  requestRefresh,
+  startPricePoller,
+  stopPricePoller,
+} from "~/lib/price-poller.server";
 import * as providerSocketModule from "~/lib/provider-socket.server";
 import { createPool } from "../server/db.ts";
 
-import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
+import { action as refreshAction } from "../app/routes/refresh.ts";
 
+import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
+import { args, post } from "./support/routes.ts";
+
+import type { Kysely, KyselyPlugin } from "kysely";
 import type pg from "pg";
-import type { PriceProvider } from "~/lib/price-provider.server";
+import type { Database } from "~/lib/db.server";
+import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
 
 // getConfig() memoises its first read — set before any test runs, as the container does before serving
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -28,6 +38,10 @@ const INTERVAL_MS = 15 * 60 * 1000;
 const TRADING_HOUR = new Date("2026-06-04T15:00:00Z");
 
 const WEEKEND = new Date("2026-06-07T15:00:00Z");
+
+// withRefreshLock's own key (refresh.test.ts's own copy, kept in step by hand) — taken from a
+// second real session, so a test holds the lock exactly as a second tab or a racing tick would.
+const REFRESH_ADVISORY_LOCK_KEY = "7295380114023642";
 
 afterAll(closeTestDatabase);
 
@@ -469,6 +483,252 @@ describe("what the batch writes to the log", () => {
         // fake answers no-history: an answer isn't a failure, the ledger names the reason
         "Price backfill: 1 attempted, 0 closes written, 0 failed.",
       ]);
+    }),
+  );
+});
+
+// A provider whose getQuotes never resolves on its own — the running-guard test's own control.
+function controllableProvider(): {
+  provider: PriceProvider;
+  resolveQuotes: (quotes: ProviderQuote[]) => void;
+} {
+  let release: ((quotes: ProviderQuote[]) => void) | undefined;
+  return {
+    provider: {
+      getQuotes: () =>
+        new Promise<ProviderQuote[]>((resolve) => {
+          release = resolve;
+        }),
+      async getDailyCloses() {
+        return { status: "no-history" };
+      },
+    },
+    resolveQuotes: (quotes) => release?.(quotes),
+  };
+}
+
+// plugin, not a Proxy (breaks on private fields); throws in JS so it aborts the transaction —
+// copied from price-backfill.test.ts's own helper, trimmed to the one shape needed here (always
+// refuses, rather than letting the first `after` attempts through).
+function refusingInsertInto(db: Kysely<Database>, table: string): Kysely<Database> {
+  const plugin: KyselyPlugin = {
+    transformQuery({ node }) {
+      if (
+        node.kind === "InsertQueryNode" &&
+        "into" in node &&
+        node.into?.table.identifier.name === table
+      ) {
+        throw new Error(`the database refused an insert into ${table}`);
+      }
+      return node;
+    },
+    async transformResult({ result }) {
+      return result;
+    },
+  };
+
+  return db.withPlugin(plugin);
+}
+
+/**
+ * Bounded polling for a condition driven by a fire-and-forget tick (`requestRefresh`, or a
+ * fake-timer-fired scheduled tick once real timers are restored) — there is no connection-handback
+ * signal to await here, unlike `tickFinished` above, since these tests read the snapshot itself
+ * rather than pool state.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition was never met");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+// The tests above fake Date (and, where a scheduled tick must fire, setInterval too) to control the
+// market-hours decision, matching this file's existing convention. The tests below that don't need
+// to control wall-clock time run on real timers instead — `pricingHealth`'s own `now`-as-parameter
+// cases are pure and live in tests/price-health.test.ts, with no clock to fake at all.
+describe("the healthz snapshot the poller slot now carries (spec price-health/03)", () => {
+  it("makes the next read not_started once stopped", () => {
+    startPricePoller(fakeProvider());
+    expect(readPollerSnapshot()).not.toBeUndefined();
+
+    stopPricePoller();
+    expect(readPollerSnapshot()).toBeUndefined();
+  });
+
+  it(
+    "is updated by requestRefresh but left alone by a direct POST /refresh, which calls runRefresh on its own",
+    withDatabase(async () => {
+      expect(readPollerSnapshot()).toBeUndefined();
+
+      // app/routes/refresh.ts's action calls runRefresh directly — it never imports price-poller.server.ts.
+      await refreshAction(args(post("/refresh", {})));
+      expect(readPollerSnapshot()).toBeUndefined();
+
+      try {
+        startPricePoller(fakeProvider());
+        requestRefresh();
+        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
+
+        expect(readPollerSnapshot()?.lastObservation).toEqual({
+          outcome: "quoted",
+          requested: 0,
+          priced: 0,
+          providerFailed: false,
+        });
+      } finally {
+        stopPricePoller();
+      }
+    }),
+  );
+
+  it(
+    "changes neither running nor the previous observation when a tick is dropped by the running guard",
+    withDatabase(async ({ seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const { provider, resolveQuotes } = controllableProvider();
+
+      try {
+        startPricePoller(provider);
+        requestRefresh();
+        await waitFor(() => readPollerSnapshot()?.running === true);
+        expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
+
+        // Dropped: `state.running` is already true, so this returns before touching anything.
+        requestRefresh();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(readPollerSnapshot()?.running).toBe(true);
+        expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
+
+        resolveQuotes([]);
+        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
+
+        expect(readPollerSnapshot()?.running).toBe(false);
+        expect(readPollerSnapshot()?.lastObservation).toEqual({
+          outcome: "quoted",
+          requested: 1,
+          priced: 0,
+          providerFailed: false,
+        });
+      } finally {
+        stopPricePoller();
+      }
+    }),
+  );
+
+  it(
+    "leaves the previous observation intact when a later tick finds the advisory lock held",
+    withDatabase(async ({ seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const lockPool = createPool(TEST_DATABASE_URL);
+      const holder = await lockPool.connect();
+
+      try {
+        startPricePoller(fakeProvider());
+        requestRefresh();
+        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
+
+        const settled = readPollerSnapshot()?.lastObservation;
+        expect(settled).toEqual({
+          outcome: "quoted",
+          requested: 1,
+          priced: 0,
+          providerFailed: false,
+        });
+
+        await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
+        try {
+          requestRefresh();
+          // No handback signal to await for a busy run — it opens a connection only to find the
+          // lock held and release it again; a short real wait is what's left.
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } finally {
+          await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
+        }
+
+        expect(readPollerSnapshot()?.running).toBe(false);
+        expect(readPollerSnapshot()?.lastObservation).toEqual(settled);
+      } finally {
+        stopPricePoller();
+        holder.release();
+        await lockPool.end();
+      }
+    }),
+  );
+
+  it(
+    "still reports market_closed for a weekend tick whose backfill batch then fails against the database",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      // held from a date the spine doesn't reach — makes this a backfill candidate, as in
+      // "the connection a tick borrows" above
+      const account = await seedAccount();
+      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument, quantity: "1.00000000" }],
+      });
+
+      const provider: PriceProvider = {
+        async getQuotes() {
+          return [];
+        },
+        async getDailyCloses() {
+          return { status: "ok", closes: [{ date: "2024-03-25", close: "10.0000" }] };
+        },
+      };
+
+      try {
+        await withDb(refusingInsertInto(db, "price_backfill"), async () => {
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
+          try {
+            startPricePoller(provider);
+            vi.advanceTimersByTime(INTERVAL_MS);
+          } finally {
+            // Real timers before waiting: the market-hours decision above already read the fake
+            // clock synchronously: switching now only affects timing this test doesn't assert on.
+            vi.useRealTimers();
+          }
+
+          await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
+          expect(readPollerSnapshot()?.lastObservation).toEqual({ outcome: "market_closed" });
+        });
+      } finally {
+        stopPricePoller();
+      }
+    }),
+  );
+
+  it(
+    "still reports market_closed for a weekend tick that then finds the advisory lock held",
+    withDatabase(async () => {
+      const lockPool = createPool(TEST_DATABASE_URL);
+      const holder = await lockPool.connect();
+
+      try {
+        await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
+
+        try {
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
+          try {
+            startPricePoller(fakeProvider());
+            vi.advanceTimersByTime(INTERVAL_MS);
+          } finally {
+            vi.useRealTimers();
+          }
+
+          await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
+          expect(readPollerSnapshot()?.lastObservation).toEqual({ outcome: "market_closed" });
+          expect(readPollerSnapshot()?.running).toBe(false);
+        } finally {
+          stopPricePoller();
+        }
+      } finally {
+        await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
+        holder.release();
+        await lockPool.end();
+      }
     }),
   );
 });

@@ -7,6 +7,10 @@
  * Hazards handled: Vite HMR strands timers, so the handle sits on `globalThis`; two processes can
  * overlap, so each tick takes an advisory lock; a tick that outruns its interval is dropped, never
  * queued — queued fetches against an unofficial API are how an instance gets rate-limited.
+ *
+ * The slot also owns `GET /healthz`'s scheduler and quote status (spec price-health/03):
+ * `lastTickStartedAt` and `lastObservation` below, read out defensively by {@link readPollerSnapshot}.
+ * The derivation itself lives in `price-health.ts`, which this module only supplies types from.
  */
 import { getConfig } from "../../server/config.ts";
 import { isMarketOpen } from "./market-hours.ts";
@@ -15,6 +19,7 @@ import { runRefresh } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
 
 import type { BackfillReport } from "./prices.server.ts";
+import type { PollerSnapshot, TickObservation } from "./price-health.ts";
 import type { PriceProvider } from "./price-provider.server.ts";
 
 /** `globalThis` slot: a module-scope binding does not survive Vite's HMR invalidation. */
@@ -30,9 +35,29 @@ type PollerState = {
   running: boolean;
   /** On the slot, not only in the tick's closure: {@link requestRefresh} reaches it from outside. */
   provider: PriceProvider;
+  /** Stamped by {@link arm} and by every tick past the running guard, scheduled or requested alike
+   * — what `scheduler` is measured from (spec price-health/03). Two fields, deliberately, and no
+   * "has completed a tick" third one; 0021's Rejected section is why. */
+  lastTickStartedAt: Date;
+  /** The last tick that observed a provider outcome; `undefined` before any has. Left untouched by
+   * a `busy` tick, which observed none — see {@link tick}'s `finally`. */
+  lastObservation: TickObservation | undefined;
 };
 
 type PollerHost = typeof globalThis & { [SLOT]?: PollerState };
+
+/**
+ * The one place a timer is created, so the interval, `minutes` and `lastTickStartedAt` can never
+ * drift out of step with each other: whatever arms the timer stamps the phase it armed, the same
+ * way replacing the interval resets its own phase.
+ */
+function arm(state: PollerState, minutes: number): void {
+  clearInterval(state.timer);
+  state.timer = setInterval(() => void tick(state, false), minutes * 60 * 1000);
+  state.timer.unref?.();
+  state.minutes = minutes;
+  state.lastTickStartedAt = new Date();
+}
 
 /**
  * Re-arm at a moved cadence; replacing the interval resets its phase, as the Settings form
@@ -41,11 +66,7 @@ type PollerHost = typeof globalThis & { [SLOT]?: PollerState };
  */
 function retime(state: PollerState, minutes: number): void {
   if ((globalThis as PollerHost)[SLOT] !== state) return;
-
-  clearInterval(state.timer);
-  state.timer = setInterval(() => void tick(state, false), minutes * 60 * 1000);
-  state.timer.unref?.();
-  state.minutes = minutes;
+  arm(state, minutes);
 }
 
 /** Every failure path warns and returns: a timer has no caller to catch a throw (§6.1). */
@@ -53,12 +74,21 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
   if (state.running) return;
 
   state.running = true;
+  state.lastTickStartedAt = new Date();
+
+  // Assigned at specific points below, never in more than one place per tick, and committed once —
+  // see the `finally`. Left `undefined` by a `busy` run: the advisory lock was held, so this tick
+  // observed no provider outcome to report.
+  let pending: TickObservation | undefined;
 
   try {
     const config = getConfig();
 
     // The calendar gates quotes only, and being wrong cannot corrupt anything (`market-hours.ts`).
     const quotes = quotesRegardless || isMarketOpen(new Date(), config.MARKET_TIMEZONE);
+    // Recorded here, before any provider or database work, so a later backfill failure in this
+    // same tick cannot overwrite what the calendar actually decided.
+    if (!quotes) pending = { outcome: "market_closed" };
 
     // Own catch: a failed read must not move the cadence — the last known value stands.
     const minutes = await readRefreshCadence().catch((error: unknown) => {
@@ -74,17 +104,35 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
       // quiet loop from a dead one. Stale > 0 warns — the line an operator greps for.
       if (run.report.quotes !== null) {
         const quoted = run.report.quotes;
+        pending = {
+          outcome: "quoted",
+          requested: quoted.requested,
+          priced: quoted.priced,
+          providerFailed: quoted.providerFailed,
+        };
+
         const summary = `Price refresh: ${quoted.priced} of ${quoted.requested} priced, ${quoted.stale} stale, ${quoted.closes} closes written, ${quoted.observed} new.`;
         if (quoted.stale > 0) console.warn(summary);
         else console.info(summary);
       }
+      // else: quotes were not asked for, and `pending` already holds the market-closed observation
+      // recorded above.
 
       logBackfill(run.report.backfill);
+    } else if (run.status === "error") {
+      pending = { outcome: "error" };
     }
+    // `busy`: no provider outcome was observed this tick, so `pending` is left exactly as it was —
+    // `undefined`, or the market-closed observation this same tick already recorded.
   } catch (error) {
     console.error("Price refresh failed; last known prices are kept:", error);
+    pending = { outcome: "error" };
   } finally {
     state.running = false;
+    // Conditional, deliberately: committing `undefined` unconditionally here would wipe the
+    // previous good observation on every `busy` tick and report `not_attempted` in its place — the
+    // opposite of the rule.
+    if (pending !== undefined) state.lastObservation = pending;
   }
 }
 
@@ -124,11 +172,14 @@ export function startPricePoller(provider?: PriceProvider): void {
       minutes: SEEDED_CADENCE_MINUTES,
       timer: undefined,
       provider: provider ?? socketProvider(),
+      // Overwritten immediately by `arm` below; a placeholder so the object is whole before then.
+      lastTickStartedAt: new Date(),
+      lastObservation: undefined,
     };
-    state.timer = setInterval(() => void tick(state, false), SEEDED_CADENCE_MINUTES * 60 * 1000);
-
-    // A pending interval holds the event loop open, keeping a container alive through shutdown.
-    state.timer.unref?.();
+    // Also stamps `lastTickStartedAt` and sets `state.timer` — see `arm`. A pending interval holds
+    // the event loop open, keeping a container alive through shutdown; `arm`'s own `unref?.()` is
+    // what stops that.
+    arm(state, SEEDED_CADENCE_MINUTES);
 
     host[SLOT] = state;
   } catch (error) {
@@ -159,6 +210,25 @@ export function requestRefresh(): void {
   }
 
   void tick(state, true);
+}
+
+/**
+ * `GET /healthz`'s read of this slot (spec price-health/03) — a defensive copy, never the live
+ * state: a fresh `Date` rather than `state.lastTickStartedAt` itself, so no caller can hold a `Date`
+ * it could later mutate back into the slot, and the observation object copied rather than shared.
+ * No timer handle, no provider, no raw error, no symbol — only what `price-health.ts`'s
+ * `pricingHealth` needs. `undefined` when this process holds no poller slot at all.
+ */
+export function readPollerSnapshot(): PollerSnapshot {
+  const state = (globalThis as PollerHost)[SLOT];
+  if (state === undefined) return undefined;
+
+  return {
+    running: state.running,
+    lastTickStartedAt: new Date(state.lastTickStartedAt.getTime()),
+    minutes: state.minutes,
+    lastObservation: state.lastObservation === undefined ? undefined : { ...state.lastObservation },
+  };
 }
 
 /** Exported for the hot-update hook and for tests — a stray timer holds vitest's process open. */
