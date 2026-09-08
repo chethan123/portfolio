@@ -75,7 +75,7 @@ The finished contract is:
 Every key is always present. The closed sets are:
 
 - `worker`: `available`, `unavailable`;
-- `scheduler`: `not_started`, `waiting`, `running`, `on_schedule`, `overdue`;
+- `scheduler`: `not_started`, `running`, `on_schedule`, `overdue`;
 - `quotes`: `not_attempted`, `market_closed`, `ok`, `partial`, `failed`, `unknown`.
 
 `pricing.ok` is a boolean, defined in "The rollup" below.
