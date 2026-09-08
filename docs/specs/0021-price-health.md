@@ -27,7 +27,7 @@ restart it without repairing the dependency (`compose.yaml`).
 The worker already has `GET /healthz` over its Unix socket, answered above both rate limiters and
 before any Yahoo call (`server/price-worker.ts:285-288`). That proves only that the listener accepts
 a request. The worker's own container healthcheck calls it from inside the worker container, so it
-cannot prove that the app's separate read-only mount can connect (`compose.yaml:189-197`, `:139`).
+cannot prove that the app's separate read-only mount can connect (`compose.yaml:189-200`, `:139`).
 `scripts/smoke-test.sh:441-454` proves that hop once, at deploy, and nothing proves it after.
 
 The poller's live state sits in a `globalThis` slot so it survives module reloads. It stores the
@@ -75,7 +75,7 @@ The finished contract is:
 Every key is always present. The closed sets are:
 
 - `worker`: `available`, `unavailable`;
-- `scheduler`: `not_started`, `waiting`, `running`, `on_schedule`, `overdue`;
+- `scheduler`: `not_started`, `running`, `on_schedule`, `overdue`;
 - `quotes`: `not_attempted`, `market_closed`, `ok`, `partial`, `failed`, `unknown`.
 
 `pricing.ok` is a boolean, defined in "The rollup" below.
@@ -110,8 +110,11 @@ deployment — with no page view, no new framework surface, and no immediate fet
 This is a behaviour fix, not a reporting choice, and it comes first for a reason. Without it
 `scheduler: not_started` is the ordinary state of a healthy container that nobody has visited yet,
 and `pricing.ok: false` is what the shipped deployment reports most of the time. With it,
-`not_started` means what it should: `startPricePoller` was never reached, or it threw — and the
-throw already logs at error level (`app/lib/price-poller.server.ts:131-134`).
+`not_started` means what it should: `startPricePoller` was never reached, or it threw. Ticket 01
+also has to make the second half true — the `try` opens at `app/lib/price-poller.server.ts:118`,
+*after* the `socketProvider()` default parameter at `:114`, so a throw from building the provider
+escapes the catch at `:131-134` today. From a middleware that would be a 500 on every request,
+`/healthz` included.
 
 ### Worker status is a bounded live probe
 
@@ -147,9 +150,8 @@ reporting path itself is passive, so what `/healthz` says is never a consequence
 having been asked.
 
 - `not_started`: this app process has no poller slot.
-- `waiting`: armed, no tick has completed yet, and not overdue.
 - `running`: a tick is in flight and not overdue.
-- `on_schedule`: a tick has completed and the next one is not overdue.
+- `on_schedule`: armed, nothing in flight, and not late.
 - `overdue`: no tick has *begun* for longer than the cadence plus five minutes.
 
 `overdue` is measured from when a tick last started, not from a stored next-due instant, and it is
@@ -182,8 +184,9 @@ Quote state describes the last tick that observed a provider outcome:
 
 Quote state is separate from the scheduler's terminal result. A tick gated by market hours records
 `market_closed` at the moment it makes that decision, so a later backfill failure in the same tick
-cannot rewrite it. Advisory-lock `busy` preserves the preceding quote result because it observed no
-provider outcome. Upload-triggered `requestRefresh()` calls use the poller's tick and therefore
+cannot rewrite it. Advisory-lock `busy` adds no observation of its own, because it saw no provider
+outcome — so the preceding result stands, except where that same tick had already recorded its own
+market-hours decision, which it did observe. Upload-triggered `requestRefresh()` calls use the poller's tick and therefore
 update the snapshot; the direct `POST /refresh` route bypasses the poller and does not. This contract
 is about the scheduled pipeline and its post-upload requests, not every interactive fetch.
 
@@ -198,7 +201,7 @@ not succeed end to end.
 
 ```
 ok  ⟺  worker    === "available"
-   and scheduler ∈ { "waiting", "running", "on_schedule" }
+   and scheduler ∈ { "running", "on_schedule" }
    and quotes    ∈ { "not_attempted", "market_closed", "ok" }
 ```
 
@@ -211,8 +214,10 @@ predicate has one field to watch, and every richer question is answered by the t
 beside it. A conjunction over closed sets is exhaustive by construction; an ordered clause list over
 the sixty-cell product is not, and would be a fourth vocabulary to pin, document and keep in step.
 
-Note what this makes normal: a fresh container reports `scheduler: waiting`, `quotes: not_attempted`
-and `ok: true` for up to one cadence, because there is no immediate poll on start. A weekend reports
+Note what this makes normal: a fresh container reports `scheduler: on_schedule`,
+`quotes: not_attempted` and `ok: true` for up to one cadence, because there is no immediate poll on
+start — `on_schedule` means armed and not late, which is exactly true of a poller that has not yet
+had a turn, and `quotes` beside it already says nothing has run. A weekend reports
 `quotes: market_closed` and `ok: true`. Neither is a fault and neither should page anyone.
 
 ## What this does not do
@@ -241,6 +246,12 @@ would prove only that *some* replica is alive.
   forever. Replaced by `pricing.ok` above.
 - **A next-due instant.** See "Scheduler and quote status are passive": it marches forward during
   the hang it would need to catch.
+- **A `waiting` category, for a poller armed with no tick yet.** It needed a "has any tick
+  completed" fact on the slot — the same fact that condemned the four-value status above — for a
+  category nothing acts on: `waiting` and `on_schedule` are both `ok: true`, both HTTP 200, and
+  `quotes: not_attempted` beside them already says a tick has not run. It was also wrong in a way
+  the category hid: `requestRefresh` reaches the same `finally`, so an upload on a fresh container
+  would report a schedule that had never run as `on_schedule`.
 - **Leaving the lazy start alone and reporting it.** An alarm that is red on every fresh container
   until a human opens a page is one an operator learns to ignore, and the fix is a moved line.
 - **Module scope in an ejected `app/entry.server.tsx`.** It would run at boot — `react-router-serve`

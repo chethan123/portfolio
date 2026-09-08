@@ -39,8 +39,12 @@ away:
   `providerFailed === false`.
 - `{ status: "error" }` is the database or the lock, never the provider — `runRefresh` says so at
   `refresh.server.ts:49-50`, and it never throws (`:46-52`).
-- `{ status: "busy" }` is `pg_try_advisory_lock` returning false (`prices.server.ts:48-50`): no body
-  ran, so no provider outcome was observed.
+- `{ status: "busy" }` is `withRefreshLock` returning `null` when `pg_try_advisory_lock` says no
+  (query at `prices.server.ts:48-50`, the `return null` at `:52`): no body ran, so no provider
+  outcome was observed.
+- The tick's own outer catch (`price-poller.server.ts:84-85`) is in practice reachable only from
+  `getConfig()` at `:58` — i.e. *before* the market-hours decision — because `runRefresh` never
+  throws and the cadence read has its own catch at `:64-67`. Do not hunt for other cases.
 
 **No change to the pricing path is required.** Everything below reads values that already exist.
 
@@ -52,28 +56,40 @@ away:
       guard at `:53`, and when the timer is armed. This is what `overdue` is measured from. Stamp it
       for every tick, including `requestRefresh`'s: the field means *pricing work last began in this
       process*, and 0021 records why gating it to scheduled ticks would be worse.
-- [ ] `lastObservation: TickObservation | undefined` — the last tick that saw a provider outcome, or
-      `undefined` before any has.
-- [ ] `completedATick: boolean` — set in the tick's `finally`. It is the only thing separating
-      `waiting` from `on_schedule`, and a `busy` tick did complete even though it wrote no
-      observation.
+- [ ] `lastObservation: TickObservation | undefined` — the last tick that saw something worth
+      recording, or `undefined` before any has.
+- [ ] **Two fields, and no third.** There is deliberately no "has a tick completed" flag: see
+      0021's **Rejected**, which cut the `waiting` category that would have needed one.
 - [ ] **Fold the two `setInterval` call sites into one `arm(state, minutes)`.** `retime` (`:42-49`)
-      and `startPricePoller` (`:125`) currently duplicate the same four lines. `arm` sets the handle,
-      calls `unref?.()`, sets `minutes`, and stamps `lastTickStartedAt` — whatever arms the timer
-      stamps the phase it armed, so a cadence change resets the clock the way replacing the interval
-      resets its phase. Keep `retime`'s identity guard at `:43` ahead of the call.
-- [ ] Record the observation inside the tick like this, and no other way:
-      `market_closed` is written **at the moment the market-hours decision is made** (`:61`), before
-      any provider or database work, so a later backfill failure in the same tick cannot rewrite it;
-      a `done` run with `report.quotes !== null` overwrites it with the quoted observation; a `done`
-      run with `report.quotes === null` leaves it (that is the market-closed case, already recorded);
-      `error` writes the error observation; **`busy` writes nothing**; and the tick's own outer catch
-      (`:84-85`) writes the error observation. Commit the pending observation, `completedATick` and
-      `running = false` together in the `finally`.
+      does four things — `clearInterval` `:45`, `setInterval` `:46`, `unref?.()` `:47`, `minutes`
+      `:48` — and `startPricePoller` does two of them (`:125`, `:128`), setting `minutes` in the
+      object literal at `:121` and never clearing. `arm` does all of it in one place and also stamps
+      `lastTickStartedAt`: whatever arms the timer stamps the phase it armed, so a cadence change
+      resets the clock the way replacing the interval resets its phase. Keep `retime`'s identity
+      guard at `:43` ahead of the call.
+- [ ] Record the observation with a `let pending: TickObservation | undefined` declared before the
+      `try`, assigned at four points and committed once:
+      `market_closed` at the moment the market-hours decision is made (`:61`), before any provider or
+      database work, so a later backfill failure in the same tick cannot rewrite it;
+      a `done` run with `report.quotes !== null` overwrites `pending` with the quoted observation;
+      a `done` run with `report.quotes === null` leaves it — that is the market-closed case, already
+      recorded; `error` and the outer catch write the error observation; and **`busy` assigns
+      nothing of its own**.
+- [ ] **Commit conditionally.** `if (pending !== undefined) state.lastObservation = pending;` in the
+      `finally`, beside `state.running = false`. An unconditional assignment would wipe the previous
+      observation on every `busy` tick and report `not_attempted`, which is the opposite of the rule.
+- [ ] Note what this makes true of a market-closed tick that then finds the lock held: `pending` is
+      `market_closed` and it *is* committed. That is correct and is not an exception to the `busy`
+      rule — `busy` means the tick observed no provider outcome, and the market-hours decision is a
+      thing this tick observed before it ever reached the lock.
 - [ ] A state-bookkeeping failure must not reject a page render, and must not turn a completed price
       transaction into a reported failure.
-- [ ] Export one reader that copies values out. No timer handle, no provider, no `Date` the caller
-      could mutate into the slot, no raw error, no symbol, no count.
+- [ ] Export one reader that copies values out — including `new Date(state.lastTickStartedAt)`, so
+      no caller holds a `Date` it could mutate back into the slot. No timer handle, no provider,
+      no raw error, no symbol, no count.
+- [ ] `stopPricePoller` needs no change: it deletes the whole slot (`:161-168`), so the new fields
+      go with it and the next read is `not_started`. Do not "clear" fields instead — that would
+      make `not_started` unreachable.
 
 ## The pure module
 
@@ -83,7 +99,7 @@ whole state table lives, so that testing it needs no Postgres, no fake timers an
 
 ```ts
 export type WorkerReachability = "available" | "unavailable";
-export type SchedulerStatus = "not_started" | "waiting" | "running" | "on_schedule" | "overdue";
+export type SchedulerStatus = "not_started" | "running" | "on_schedule" | "overdue";
 export type QuoteStatus =
   | "not_attempted" | "market_closed" | "ok" | "partial" | "failed" | "unknown";
 
@@ -101,7 +117,6 @@ export type PollerSnapshot =
       lastTickStartedAt: Date;
       /** Cadence the current timer was armed with. */
       minutes: number;
-      completedATick: boolean;
       lastObservation: TickObservation | undefined;
     };
 
@@ -126,8 +141,9 @@ export function pricingHealth(
       no snapshot → `not_started`;
       `now − lastTickStartedAt > (minutes + OVERDUE_GRACE_MINUTES) × 60_000` → `overdue`;
       `running` → `running`;
-      `!completedATick` → `waiting`;
       otherwise `on_schedule`.
+      The comparison is strict, so exactly `minutes + 5` is **not** overdue; a millisecond past it
+      is. Pin both.
 - [ ] **`overdue` is tested before `running`, deliberately.** `state.running` is cleared only in the
       tick's `finally` (`price-poller.server.ts:87`) and nothing else clears it, and the tick is not
       bounded: `ask` has 15/35-second budgets but the cadence read and the whole price transaction do
@@ -135,14 +151,20 @@ export function pricingHealth(
       `query_timeout`. A tick that never returns would otherwise report `running` forever. Put that
       reason in the code as a comment; it is the one ordering a later reader would "simplify" away.
 - [ ] `quotes`: no snapshot or no observation → `not_attempted`; `market_closed` → `market_closed`;
-      `error` → `unknown`; and for `quoted`: `providerFailed` → `failed`; `requested === 0` → `ok`;
-      `priced === requested` → `ok`; `priced === 0` → `failed`; otherwise `partial`.
-      The zero-instrument case is `ok`, not a category of its own — a separate value would report
-      household shape and answers no question about pipeline health.
+      `error` → `unknown`; and for `quoted`: `providerFailed` → `failed`; `priced === requested` →
+      `ok`; `priced === 0` → `failed`; otherwise `partial`.
+      The zero-instrument case needs no clause of its own — `requested === 0` implies
+      `providerFailed === false` (the provider is not called on an empty feed,
+      `prices.server.ts:486`, which guards the only assignment at `:492`) and then `0 === 0` takes
+      the `ok` branch. It stays `ok` deliberately: a separate value would report household shape and
+      answers no question about pipeline health.
 - [ ] `ok` is one conjunction, not an ordered clause list:
-      `worker === "available"`, and `scheduler` in `{ waiting, running, on_schedule }`, and `quotes`
-      in `{ not_attempted, market_closed, ok }`. Exhaustive by construction.
+      `worker === "available"`, and `scheduler` in `{ running, on_schedule }`, and `quotes` in
+      `{ not_attempted, market_closed, ok }`. Exhaustive by construction.
 - [ ] `now` is a parameter. Nothing in this module reads a clock, a config, or a global.
+- [ ] `price-poller.server.ts` imports the types from here, not the reverse. This module is plain
+      `.ts` and ships to the browser, so nothing browser-reachable may import the poller
+      (`CLAUDE.md`, the `.server.ts` bundle boundary).
 
 ## The completed contract
 
@@ -161,18 +183,25 @@ export function pricingHealth(
 The point of the pure module is that most of this needs no database and no timers.
 
 - [ ] **Table-driven over `pricingHealth`**, covering every value of all three closed sets and the
-      `ok` conjunction: no snapshot; armed and not yet due; exactly at the due instant; four minutes
-      late; five minutes late; a tick running and not late; **a tick running and late, which must be
-      `overdue`, not `running`**; a completed tick; a retimed cadence changing when `overdue` begins.
+      `ok` conjunction: no snapshot; armed and not yet due; four minutes late; **exactly
+      `minutes + 5` late, which is not overdue**; a millisecond later, which is; a tick running and
+      not late; **a tick running and late, which must be `overdue`, not `running`**; a retimed
+      cadence changing when `overdue` begins.
       And for quotes: no observation; market closed; zero instruments; all priced; some priced; none
       priced with a positive request; `providerFailed`; error.
 - [ ] Against the real poller, the cases the pure module cannot see: a `busy` run leaves the previous
       observation intact; a tick dropped by the running guard changes neither `running` nor the
       previous observation; a market-closed tick whose backfill then fails still reports
-      `market_closed`; `requestRefresh` updates the snapshot; a direct `POST /refresh` does not;
-      `stopPricePoller` makes the next read `not_started`.
+      `market_closed`; a market-closed tick that then finds the lock held still reports
+      `market_closed`; `requestRefresh` updates the snapshot — its one production caller is
+      `app/routes/upload/review.tsx:65` — while a direct `POST /refresh` (`app/routes/refresh.ts:17`,
+      which calls `runRefresh` itself) does not; `stopPricePoller` makes the next read
+      `not_started`.
 - [ ] Route tests pin the whole body with `toEqual` and cover `ok: true` and `ok: false` for at least
       one cause each of worker, scheduler and quotes — while asserting the HTTP status did not move.
+- [ ] Route tests read a process-wide slot in a serial suite (`fileParallelism` off). A poller armed
+      by an earlier file would make `scheduler` non-deterministic — stop it in the fixture, the way
+      `tests/framework-wiring.test.ts:22-25` already does.
 - [ ] `tests/price-poller.test.ts` fakes `Date` globally at `:122`, `:231`, `:303`, `:333` and `:365`.
       Decide once whether those stay as they are and the new tests use the injected `now`, and say so
       in a comment; do not leave two conventions in one file unexplained.
@@ -180,10 +209,13 @@ The point of the pure module is that most of this needs no database and no timer
 ## Documents
 
 - [ ] `ARCHITECTURE.md`: the poller slot is the status owner, the scope is one process, and the
-      snapshot resets on restart or HMR disposal.
+      snapshot resets on restart or HMR disposal. Add the Appendix A row for
+      `app/lib/price-health.ts` — Appendix A maps every module (`CLAUDE.md`).
 - [ ] `docs/operating.md`: what each category means for an operator and what it does not prove.
-      Say plainly that a fresh container reports `waiting` / `not_attempted` / `ok: true` for up to
-      one cadence, and a weekend reports `market_closed` / `ok: true` — neither should page anyone.
+      Say plainly that a fresh container reports `on_schedule` / `not_attempted` / `ok: true` for up
+      to one cadence — `on_schedule` means armed and not late, and `quotes` beside it says whether
+      anything has run — and that a weekend reports `market_closed` / `ok: true`. Neither should page
+      anyone.
       Say that `partial` is usually one bad ticker and is answered on **Settings → Prices**, while
       `failed` with `worker: available` is a pipeline fault.
 - [ ] `docs/runbook.md`: start each pricing symptom from the JSON categories, then use Compose state
