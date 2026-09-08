@@ -51,8 +51,16 @@ probe needs, and it contains five mechanics that a hand-written second copy gets
 | `close`-before-`end` guard | `:175-177` | **without it the probe hangs** — the exact failure it exists to detect |
 
 - [ ] Move the transport into its own module — a request function taking a socket path, method, path,
-      optional body, a whole-exchange deadline, and a byte cap, returning the status, content-type
-      and body bytes without interpreting them.
+      optional body, a whole-exchange deadline, and a byte cap.
+- [ ] **It must return a discriminated failure, not just bytes.** A transport returning only
+      `{ status, contentType, body }` cannot satisfy the next bullet, because `ask`'s pinned messages
+      are built from failure *kinds* only the transport can tell apart:
+      `tests/provider-socket.test.ts:218` and `:243` need the `connect` errno (`ENOENT`, `ENOTDIR`);
+      `:296` needs the deadline distinguished ("did not answer quotes within 200ms"); `:343` needs
+      close-before-end ("connection closed before the quotes answer completed"); `:314` and `:326`
+      need cap-exceeded ("exceeded 524288 bytes"). Return a success case plus
+      `connect` / `timeout` / `closed` / `capped` with the errno where there is one, and leave every
+      word of the operator-facing wording in `ask`.
 - [ ] Rewrite `ask` to use it, keeping every provider-specific behaviour where it is: the budgets,
       the caps, the `ProviderUnreachable` / error-text mapping, and the `getConfig()`-per-call read.
 - [ ] **`tests/provider-socket.test.ts` must pass untouched.** That is the proof the extraction
@@ -94,9 +102,11 @@ probe needs, and it contains five mechanics that a hand-written second copy gets
 - [ ] Worker available with an unhealthy database or a pending migration: HTTP `503`, top-level
       `status: "unhealthy"`.
 - [ ] `database`, `migrations`, `pendingMigrations` and `Cache-Control: no-store` are unchanged.
-- [ ] Extract a narrow seam — a pure body-composition helper, or an injected reachability argument —
-      so the four database × worker cases are tested without module mocking and without fighting the
-      process-wide test pool. `tests/routes/healthz.test.ts:5-6` explains why the unhealthy database
+- [ ] Extract a pure body-composition helper — given a health report and a reachability, return the
+      body object and the HTTP status — so the four database × worker cases are tested without module
+      mocking and without fighting the process-wide test pool. Not an injected argument on the
+      loader: React Router owns that signature (`Route.LoaderArgs`), and
+      `tests/routes/healthz.test.ts:17` calls `loader()` with none. `tests/routes/healthz.test.ts:5-6` explains why the unhealthy database
       branch is not reachable there today.
 
 ## Tests
@@ -121,6 +131,12 @@ probe needs, and it contains five mechanics that a hand-written second copy gets
       easy to misread: the probe is a *listener* check, not a provider check. Say which.
 - [ ] `ARCHITECTURE.md:1613` — "Never crosses the socket — silent on whether `worker` or
       `egress-proxy` are even running" is now false for `worker` and still true for `egress-proxy`.
+- [ ] `ARCHITECTURE.md:1627-1628` — "Three healthchecks now, and no two of them prove the same
+      thing" is the paragraph this ticket most directly changes: the app's own now proves one hop
+      the worker's cannot.
+- [ ] `ARCHITECTURE.md` Appendix A — this ticket adds up to two modules (the transport and the
+      probe). Appendix A maps every module (`CLAUDE.md`), and `provider-socket.server.ts` sits at
+      `:2163`; the new rows go beside it.
 - [ ] `docs/operating.md:298` — "the `/healthz` above is `app`'s own and never crosses the socket".
 - [ ] `docs/operating.md` and `docs/runbook.md`: tell a monitor to alert on HTTP non-200 for
       app/database failure and to read `pricing.worker` separately. Say explicitly that
