@@ -303,22 +303,23 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   worker's own logs are next (spec price-health/02). **`"available"`** rules *that* hop out, nothing
   more: it says nothing yet about the market being closed, the poller never having started, a tick
   still in flight, `egress-proxy`, or Yahoo.
-- **`scheduler`: `not_started`** — this process holds no poller slot at all. Grep for the stem
-  `Price poller did not start`; a hit names the build failure and a restart is the fix. No hit, on a
-  container that has taken more than a few requests, means the root middleware simply hasn't run yet
-  — check the container is actually receiving traffic (`docs/operating.md`'s quiet-period note: the
-  poller arms from the first request, healthcheck traffic included, with no immediate first tick).
+- **`scheduler`: `not_started`** — this process holds no poller slot at all. The root middleware that
+  arms it runs ahead of every request the app serves, `/healthz` included (`app/root.tsx`), so a
+  response carrying `not_started` has already had `startPricePoller()` called in that same request —
+  there is no "hasn't run yet" left to rule out. Grep for the stem `Price poller did not start`,
+  which `startPricePoller` always logs on the failure that leaves this state; the line names the
+  build failure and a restart is the fix.
 - **`scheduler`: `overdue`** is two different faults the endpoint deliberately can't tell apart on its
   own, because both are "no tick has *begun* in longer than the cadence plus five minutes": **the
-  timer stopped firing**, or **a tick started and never returned**. The log tells them apart. A
-  `Price refresh` or `Price backfill` line within the last cadence, beside `overdue`, means a *later*
-  scheduled tick simply hasn't landed yet — the timer is firing, wait one more cadence. No such line
-  at all, and no `Price poller did not start` either, means the timer fired but its tick is still
-  running past the grace window — nothing in the pricing path times a tick out (`ask` has 15/35-second
-  budgets, but the cadence read and the whole price transaction do not), so a hang here does not
-  resolve on its own. `docker compose restart app` is the fix either way; a hung tick specifically
-  means the connection it was holding is worth checking for first (`docker compose logs db`), since
-  restarting `app` without addressing a wedged database only hangs the next tick too.
+  timer stopped firing**, or **a tick started and never returned**. The log does not tell them apart
+  either, and it is worth saying plainly rather than guessing: `Price refresh`/`Price backfill` are
+  written only after a tick's own `runRefresh` call returns, while the timestamp `overdue` is measured
+  from is stamped at tick entry, before that call — so a tick that hangs inside it logs exactly
+  nothing, the same silence a stopped timer leaves. There is no line whose presence or absence tells
+  the two apart. `docker compose restart app` is the fix either way. Before restarting, `docker
+  compose logs db` for a long-running or blocked query is worth a look regardless of which cause this
+  is — free if the timer simply stopped, and the one thing that would explain a hung tick and be worth
+  fixing before the next one wedges the same way.
 - **`scheduler`: `running`** with no other symptom is ordinary — a tick is in flight. Poll again; if
   it is still `running` well past when a tick should have finished, treat it the same as `overdue`'s
   second case above.
@@ -328,9 +329,13 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   `Price backfill` line instead (ADR-0011); this is not a fault.
 - **`quotes`: `partial`** is usually one bad ticker, not a pipeline fault — read **Settings → Prices**,
   which names it; this response never carries a symbol.
-- **`quotes`: `failed`** beside **`worker`: `"available"`** is a pipeline fault past the socket — grep
-  `Price provider failed` below. `quotes`: `failed` beside **`worker`: `"unavailable"`** is the same
-  fault you already found from `worker` above; nothing more to learn here.
+- **`quotes`: `failed`** beside **`worker`: `"available"`** means the last tick's quote attempt did
+  not succeed end to end while *this* probe, taken separately and up to five seconds old, found the
+  listener answering — not proof the socket hop was fine at the time of that attempt, since `quotes`
+  can be carried from up to a full cadence ago and the worker can have failed and recovered since.
+  Grep `Price provider failed` below regardless. `quotes`: `failed` beside **`worker`: `"unavailable"`**
+  is consistent with the fault you already found from `worker` above, though still not proof by
+  itself — the same log grep settles it either way.
 - **`quotes`: `unknown`** means the tick's own database or lock work failed, not the provider — grep
   `Price refresh failed`.
 

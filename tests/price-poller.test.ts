@@ -488,21 +488,33 @@ describe("what the batch writes to the log", () => {
 });
 
 // A provider whose getQuotes never resolves on its own — the running-guard test's own control.
+// `entered` settles the instant getQuotes() is actually called, so a caller can wait past the
+// cadence read and lock acquisition that precede it rather than guessing at a sleep long enough to
+// outlast them: too short and resolveQuotes() below fires before a resolver exists to receive it,
+// leaving the tick — and the poller's own timer — hanging for good.
 function controllableProvider(): {
   provider: PriceProvider;
+  entered: Promise<void>;
   resolveQuotes: (quotes: ProviderQuote[]) => void;
 } {
   let release: ((quotes: ProviderQuote[]) => void) | undefined;
+  let markEntered: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
   return {
     provider: {
-      getQuotes: () =>
-        new Promise<ProviderQuote[]>((resolve) => {
+      getQuotes: () => {
+        markEntered?.();
+        return new Promise<ProviderQuote[]>((resolve) => {
           release = resolve;
-        }),
+        });
+      },
       async getDailyCloses() {
         return { status: "no-history" };
       },
     },
+    entered,
     resolveQuotes: (quotes) => release?.(quotes),
   };
 }
@@ -587,7 +599,7 @@ describe("the healthz snapshot the poller slot now carries (spec price-health/03
     "changes neither running nor the previous observation when a tick is dropped by the running guard",
     withDatabase(async ({ seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const { provider, resolveQuotes } = controllableProvider();
+      const { provider, entered, resolveQuotes } = controllableProvider();
 
       try {
         startPricePoller(provider);
@@ -595,9 +607,13 @@ describe("the healthz snapshot the poller slot now carries (spec price-health/03
         await waitFor(() => readPollerSnapshot()?.running === true);
         expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
 
+        // Only once getQuotes() has actually been called is a resolver in place to receive
+        // resolveQuotes() below — waiting on `running` alone races the cadence read and lock
+        // acquisition that still separate it from this point.
+        await entered;
+
         // Dropped: `state.running` is already true, so this returns before touching anything.
         requestRefresh();
-        await new Promise((resolve) => setTimeout(resolve, 20));
         expect(readPollerSnapshot()?.running).toBe(true);
         expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
 
@@ -640,9 +656,13 @@ describe("the healthz snapshot the poller slot now carries (spec price-health/03
         await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
         try {
           requestRefresh();
-          // No handback signal to await for a busy run — it opens a connection only to find the
-          // lock held and release it again; a short real wait is what's left.
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          // Wait for the busy tick to return — state.running flips true synchronously inside
+          // requestRefresh's own call to tick(), then back to false once the attempt finds the
+          // lock held and gives up — all while `holder` still has it. Releasing on a blind sleep
+          // instead risks the unlock landing before the attempt: the tick would then acquire the
+          // lock itself and run an ordinary refresh, which happens to leave the same observation
+          // behind and could pass without ever exercising the busy path this test is named for.
+          await waitFor(() => readPollerSnapshot()?.running === false);
         } finally {
           await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
         }

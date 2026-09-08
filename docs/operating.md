@@ -1035,10 +1035,13 @@ reports `market_closed`** — the tick still ran, and still spent a request on t
 asked for no quotes; this is not a fault either. `ok` covers a run that priced everything it asked
 for, the valid zero-instrument case included. `partial` is usually one bad ticker, answered on
 **Settings → Prices** rather than here — this response carries no symbol. `failed` with
-`pricing.worker: "available"` means the listener answered but the last real quote attempt did not
-succeed end to end — a pipeline fault worth investigating (`egress-proxy`, Yahoo, or the worker's own
-rate limiting; see [Logs](#logs)), not the same shape as `partial`. `unknown` means the tick's own
-database or lock work failed, not the provider.
+`pricing.worker: "available"` means only that the listener answered *this* health probe while the
+*last tick's* quote attempt did not succeed end to end — not the same shape as `partial`, but not
+proof the socket hop was fine at the time of that attempt either: `worker` is a five-second-cached
+snapshot of right now, `quotes` is carried from up to a full cadence ago, and the worker can have
+failed and recovered in between. Worth investigating either way (`egress-proxy`, Yahoo, or the
+worker's own rate limiting; see [Logs](#logs)), just not narrowed past the socket by this combination
+alone. `unknown` means the tick's own database or lock work failed, not the provider.
 
 **`pricing.ok`** is one boolean, `true` exactly when `worker` is `available`, `scheduler` is
 `running` or `on_schedule`, and `quotes` is `not_attempted`, `market_closed` or `ok`. It never gates
