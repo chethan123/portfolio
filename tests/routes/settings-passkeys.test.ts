@@ -13,6 +13,7 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/d
 import type { Fixtures } from "../support/fixtures.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, post, responseOf, servedThrough } from "../support/routes.ts";
+import { stopPricePoller } from "~/lib/price-poller.server";
 import {
   assertionResponse,
   backupEligible,
@@ -70,6 +71,11 @@ const { middleware } = await import("../../app/root.tsx");
 const { CHALLENGE_TTL_MS } = await import("~/lib/lock");
 
 afterAll(closeTestDatabase);
+
+// This file drives root's real `middleware` array on admitted requests, and its last member arms the
+// price poller (spec price-health/01) with the real socket provider. A process-wide slot in a serial
+// suite: left running, it is a live timer and a live provider for every file after this one.
+afterEach(stopPricePoller);
 
 /** A passkey nobody signs for — good for a row that is only ever a removal *target*, never an authoriser. */
 const BYSTANDER_PUBLIC_KEY = new Uint8Array([1, 2, 3, 4]);

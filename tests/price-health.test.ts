@@ -42,6 +42,19 @@ describe("pricingHealth's scheduler category", () => {
     );
   });
 
+  it("calls a fifteen-minute poller late at twenty-one minutes and not at nineteen", () => {
+    // The five-minute grace is a published figure (docs/operating.md, docs/runbook.md), so it is
+    // pinned in wall-clock minutes here. Every other boundary test derives its arithmetic from
+    // OVERDUE_GRACE_MINUTES and therefore moves with it — set the constant to 50 and they all stay
+    // green. This one does not.
+    const at = (minutesSince: number) =>
+      pricingHealth(snapshot({ msSinceLastTick: minutesSince * 60_000 }), "available", NOW)
+        .scheduler;
+
+    expect(at(19)).toBe("on_schedule");
+    expect(at(21)).toBe("overdue");
+  });
+
   it("is on_schedule four minutes into a fifteen-minute cadence", () => {
     const late = snapshot({ msSinceLastTick: 4 * 60_000 });
     expect(pricingHealth(late, "available", NOW).scheduler).toBe("on_schedule");
