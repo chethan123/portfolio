@@ -1,8 +1,8 @@
 /**
  * The refresh loop (DESIGN.md §6.2), in the app's own process (§10). Cadence is a row
  * (`0008_refresh_cadence.sql`), re-read each tick and re-armed — a save needs no restart.
- * Market hours gate only quotes (ADR-0011): a weekend tick still runs the backfill batch, and
- * writes no `price_poll` row because it attempted no quotes.
+ * The scheduled quote window gates only quotes (ADR-0011): a weekend tick still runs the backfill
+ * batch, and writes no `price_poll` row because it attempted no quotes.
  *
  * Hazards handled: Vite HMR strands timers, so the handle sits on `globalThis`; two processes can
  * overlap, so each tick takes an advisory lock; a tick that outruns its interval is dropped, never

@@ -1,7 +1,8 @@
 /**
- * `isMarketOpen` is a cost optimisation (§10): nothing downstream trusts it, so a stale holiday
- * table only wastes requests. `marketDateOf` is correctness — it decides which `price_daily` row a
- * quote becomes (§6.2) — and never consults the calendar; it reads the provider's own stamp.
+ * `isMarketOpen` and `isScheduledQuoteWindow` (the poller's own gate, padded ±15 minutes around the
+ * session, §6.2) are both a cost optimisation (§10): nothing downstream trusts either, so a stale
+ * holiday table only wastes requests. `marketDateOf` is correctness — it decides which `price_daily`
+ * row a quote becomes (§6.2) — and never consults the calendar; it reads the provider's own stamp.
  */
 
 /** A calendar date as Postgres hands one back — `YYYY-MM-DD`. */

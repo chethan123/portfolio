@@ -1033,10 +1033,11 @@ every dev-server hot reload, and a multi-replica deployment would show each repl
 price-health/03), the last tick that observed a provider outcome — scheduled, or the one an upload
 requests once its transaction commits; a direct **Refresh now** press does not update it, since that
 route calls the refresh machinery directly rather than through the poller. `not_attempted` means no
-poller slot, or a slot that has not yet recorded one. **A weekend, or any hour the market is shut,
-reports `market_closed`** — the tick still ran, and still spent a request on the backfill batch, but
-asked for no quotes; this is not a fault either. `ok` covers a run that priced everything it asked
-for, the valid zero-instrument case included. `partial` is usually one bad ticker, answered on
+poller slot, or a slot that has not yet recorded one. **A weekend, or any hour outside the scheduled
+quote window (§6.2, market hours padded ±15 minutes), reports `market_closed`** — the tick still ran,
+and still spent a request on the backfill batch, but asked for no quotes; this is not a fault either.
+`ok` covers a run that priced everything it asked for, the valid zero-instrument case included.
+`partial` is usually one bad ticker, answered on
 **Settings → Prices** rather than here — this response carries no symbol. `failed` with
 `pricing.worker: "available"` means only that the listener answered *this* health probe while the
 *last tick's* quote attempt did not succeed end to end — not the same shape as `partial`, but not

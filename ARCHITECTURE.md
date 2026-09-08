@@ -1172,7 +1172,7 @@ sequenceDiagram
 
     T->>T: state.running?
     Note right of T: In-process serialisation. An overlapping<br/>tick is DROPPED, never queued.
-    T->>T: isMarketOpen(now, MARKET_TIMEZONE)?
+    T->>T: isScheduledQuoteWindow(now, MARKET_TIMEZONE)?
     Note right of T: A cost optimisation. Nothing<br/>downstream trusts it.
     T->>PG: pg_try_advisory_lock(poller key)
     alt another process holds it
@@ -1291,7 +1291,7 @@ This is the **trust asymmetry** that is `market-hours.ts`'s real interface:
 
 | Function | Kind | If it is wrong |
 |---|---|---|
-| `isMarketOpen(instant, tz)` | cost optimisation | The poller wastes a handful of requests on Good Friday. Stored data is still correct. |
+| `isScheduledQuoteWindow(instant, tz)` | cost optimisation | The poller wastes a handful of requests on Good Friday. Stored data is still correct. |
 | `marketDateOf(instant, tz)` | **correctness mechanism** | A real price is written under the wrong date — a permanent error in the immutable spine. |
 
 `marketDateOf` never consults the holiday calendar. That is why the calendar is allowed to be a
@@ -2202,7 +2202,7 @@ still live in the current code:
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
 | `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter — narrowing to an owner is household-wide (`owner-filter.ts`) |
 | `allocation.ts` | `allocationBy` — one grouper over any figure, filed under whichever dimension `holdings-view.ts` hands it — plus unrealized gains by asset type |
-| `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
+| `market-hours.ts` | `isScheduledQuoteWindow` and `isMarketOpen` (both optimisations) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
