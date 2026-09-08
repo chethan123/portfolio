@@ -5,6 +5,49 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-08 — Pricing health on `/healthz`, before it is built
+
+One document: [Pricing health on `/healthz` — feasibility of spec 0021](./2026-09-08-price-health-feasibility.md)
+— a feasibility read of [spec 0021](../specs/0021-price-health.md) and its two tickets against
+`c633e3a`, checking every premise against the code and the React Router source at the version this
+repo pins. The verdict is buildable, ticket 01 worth doing, ticket 02 worth restructuring first.
+
+### The three things worth knowing without reading further
+
+1. **A hung tick would report healthy, forever.** `overdue` requires that no tick is running, but
+   `running` is cleared only in a `finally` — so a tick that never returns pins the scheduler at
+   `running`, preserves the previous quote result, and yields an aggregate of `ok` indefinitely.
+   That is the shape of the failure the endpoint exists to catch. One `lastTickStartedAt`, compared
+   regardless of `running`, closes it and also replaces the next-due bookkeeping the ticket places
+   "before the running guard" — a seam that does not exist, since the guard is the first line of a
+   `tick` shared with `requestRefresh`, which the same bullet says must not move the phase.
+
+2. **`not_started` would be the state of every fresh container, and the fix is one line.** The
+   poller starts from the first page render and `/healthz` is a resource route — confirmed from
+   `react-router@7.18.2`'s own dispatch, where every non-target match is handed `shouldCallHandler`
+   false. But the same call runs the middleware pipeline over all matches: loaders no, middleware
+   yes. Move `startPricePoller` from the root loader into a root middleware and the healthcheck
+   already knocking every ten seconds arms it, after which `not_started` means a real fault instead
+   of a permanently-red alarm the spec proposes to ship deliberately.
+
+3. **Nothing consumes `pricing.status`.** Six ordered clauses over a sixty-cell product that by the
+   spec's own rule never changes the HTTP status. A monitor given the three attributes writes its
+   own predicate; keeping the aggregate costs a fourth vocabulary to pin, a special case that needs
+   a field no other rule needs, and three documents to hold in step. What is worth keeping is the
+   opposite: the derivation belongs in a pure module, which turns eight scheduler states crossed
+   with eight quote outcomes from integration tests against a process-wide slot into a table.
+
+### Status
+
+Nothing here is approved work; the spec is [0021](../specs/0021-price-health.md), which is
+authoritative for the design. The document's strongest confirmation is that the spec's central
+technical claim survives — `runRefresh` already returns `requested`, `priced` and `providerFailed`
+and already separates `busy` from `error`, so the whole `quotes` vocabulary is derivable without
+touching the pricing path. What it rejects is recorded with the reason: a durable heartbeat table
+(right to refuse for one process), a Yahoo call from `/healthz` (right to refuse), and module scope
+in an ejected `entry.server.tsx` as the bootstrap fix (works, but the framework documents no startup
+hook and the remedy it names is owning a server this repo deliberately does not own).
+
 ## 2026-09-05 — The lock slice, reviewed before launch
 
 One document: [The lock slice, reviewed before launch](./2026-09-05-lock-slice-launch-review.md) —
