@@ -53,7 +53,8 @@ graph TB
 - **Yahoo learns which tickers you hold**, every fifteen minutes by default — a setting in
   Settings → Prices. The timer arms itself from the container's own healthcheck traffic within ten
   seconds of boot, not from anyone loading a page, so it runs whether or not anyone has ever opened
-  the site. Its own ticks skip the quote fetch outside market hours, but pressing Refresh now or
+  the site. Its own ticks fetch quotes from 15 minutes before through 15 minutes after regular
+  market hours, but pressing Refresh now or
   committing an upload fetches at any hour, and any tick may fill in missing daily history — a few
   instruments per tick, and only ones missing prices. Yahoo never learns how many shares, or what
   they are worth to you. It does learn, for a ticker whose history is being filled, a date a week

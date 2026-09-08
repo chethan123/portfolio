@@ -13,7 +13,7 @@
  * The derivation itself lives in `price-health.ts`, which this module only supplies types from.
  */
 import { getConfig } from "../../server/config.ts";
-import { isMarketOpen } from "./market-hours.ts";
+import { isScheduledQuoteWindow } from "./market-hours.ts";
 import { socketProvider } from "./provider-socket.server.ts";
 import { runRefresh } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
@@ -85,7 +85,7 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
     const config = getConfig();
 
     // The calendar gates quotes only, and being wrong cannot corrupt anything (`market-hours.ts`).
-    const quotes = quotesRegardless || isMarketOpen(new Date(), config.MARKET_TIMEZONE);
+    const quotes = quotesRegardless || isScheduledQuoteWindow(new Date(), config.MARKET_TIMEZONE);
     // Recorded here, before any provider or database work, so a later backfill failure in this
     // same tick cannot overwrite what the calendar actually decided.
     if (!quotes) pending = { outcome: "market_closed" };

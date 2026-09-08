@@ -364,14 +364,14 @@ happens to need it.
 | `AUTH_GATE` | No | `none` | Whether the app has been *told* that something in front of it authenticates. `external` silences the unprotected-instance banner; `none` draws it. `compose.yaml` hardcodes `external` because the `gate` service is right there, so you do not set this — a developer running the app with nothing in front of it does. It is a description of the deployment, not a switch: setting it protects nothing. |
 | `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:8080` in [`compose.yaml`](../compose.yaml). Moving the host side means editing the left half of that line; the right half is Caddy's listener and is also the `Caddyfile`'s site address, so those two only ever move together. |
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
-| `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
+| `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for the scheduled quote window around regular market hours, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
 | `PRICE_WORKER_SOCKET` | No | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only** — `compose.yaml` sets it for neither `worker` nor `app`, so both run this same fixed default, meeting at the mount inside the shared `price-worker-sock` volume. Set it only for a checkout running the worker outside Compose, under `/tmp`. |
 
 **One variable this table used to carry is gone.** How often quotes are refreshed is the
 household's dial rather than the deployment's, so it moved into the application: set it at
 Settings → Prices (whole minutes, 1–1440, default 15; the automatic poll still runs in the app
-process; its *quotes* are asked for only while the market is open, while the backfill batch beside
+process; its *quotes* are asked for from 15 minutes before through 15 minutes after regular market hours, while the backfill batch beside
 them rides a tick at any hour and only while some spine still has a gap. The **Refresh now** control
 on any figure screen spends a request at any hour either way). An environment that still sets the old
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
@@ -1227,7 +1227,7 @@ And in `gate`'s log, which is a different program with a different vocabulary:
 
 Only the last is a fault:
 
-1. **The market is closed.** A tick outside market hours asks for no quotes, so it writes no
+1. **Outside the scheduled quote window.** A tick outside the window around regular market hours asks for no quotes, so it writes no
    `Price refresh` line and no `price_poll` row. It no longer returns before doing anything: it
    still reads the cadence, still asks which spines have a gap, and may write a `Price backfill`
    line and spend a request on one (ADR-0011).

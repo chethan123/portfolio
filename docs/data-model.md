@@ -477,7 +477,7 @@ numbers, not deployment configuration — deployment settings are environment va
 | `id` | `boolean` | no | primary key, CHECK `(id)` — always `true`, exactly one row |
 | `capital_gains_rate` | `numeric(9,6)` | no | default `23.8`; a *percentage stored as the percentage* (`23.800000`, not `0.238`), CHECK 0–100; applied by the Analysis screen to unrealized gains in taxable accounts |
 | `masking_policy` | `text` | no | default `'masked'`; `masked` \| `unmasked` \| `as_last_left` (CHECK) — what a browser nobody has toggled yet opens in ([ADR-0002](adr/0002-masking-is-a-display-state.md)) |
-| `refresh_cadence_minutes` | `integer` | no | default `15`, CHECK 1–1440; how often prices refresh — quotes while the market is open, and a backfill batch beside them at any hour while some spine still has a gap |
+| `refresh_cadence_minutes` | `integer` | no | default `15`, CHECK 1–1440; how often prices refresh — quotes from 15 minutes before through 15 minutes after regular market hours, and a backfill batch beside them at any hour while some spine still has a gap |
 
 **`schema_migrations`** — the ledger, created by the runner
 ([`server/migrations.ts`](../server/migrations.ts)) rather than by a migration, since it must exist

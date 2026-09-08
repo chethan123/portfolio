@@ -136,8 +136,9 @@ Type a new rate and save. The box then shows what is stored, which is the confir
 Two things: the **refresh cadence**, and a list of what the price history does not cover yet.
 
 The cadence is how often prices are fetched, in whole minutes from 1 to 1440. It starts at **15**.
-Fresh *quotes* are only asked for while the market is open, so a lower number costs more requests
-during trading hours and none on evenings, weekends and market holidays.
+Fresh *quotes* are asked for from 15 minutes before through 15 minutes after regular market hours,
+so a lower number costs more requests in that window and none on evenings, weekends and market
+holidays.
 
 Type a new cadence and save. The box then shows what is stored, which is the confirmation — and the
 change is picked up when the next refresh runs, so it can take up to one old cadence to apply. No

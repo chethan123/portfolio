@@ -447,9 +447,11 @@ foreign-listed instrument cannot silently sum GBP into a USD total.
 
 ### 6.2 Freshness and storage
 
-Background polling on the **household's refresh cadence during market hours** — a whole number of
-minutes set at Settings → Prices, seeded to 15 (§8.4) — plus **Refresh now**, a control beside the
-as-of line on every figure screen, which spends one provider request on demand (spec `pricing/06`).
+Background polling on the **household's refresh cadence from 15 minutes before through 15 minutes
+after regular market hours** — a whole number of minutes set at Settings → Prices, seeded to 15
+(§8.4) — plus **Refresh now**, a control beside the as-of line on every figure screen, which spends
+one provider request on demand (spec `pricing/06`). The padding can recover the prior close before
+open and a delayed close afterward without introducing a separate boundary-aligned scheduler.
 The press calls the refresh directly rather than waking the poller, so it works outside market
 hours — which is how a position added on a Saturday gets its first price. What the pricing UI still
 owes is `pricing/05`: the page-level stale summary and the Settings → Instruments tab.
@@ -749,7 +751,7 @@ mutation. Everything else that writes lives behind Settings.
 | Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
-| Prices | The refresh cadence — how often the poller (§6.2) asks the feed, quotes only while the market is open — and the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
+| Prices | The refresh cadence — how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours — and the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
 | Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
 
 Classifications, Instruments and History are not built yet: the strip today is People, Accounts,

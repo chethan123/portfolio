@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isMarketOpen, marketDateOf } from "~/lib/market-hours";
+import { isMarketOpen, isScheduledQuoteWindow, marketDateOf } from "~/lib/market-hours";
 
 const NEW_YORK = "America/New_York";
 
@@ -71,5 +71,22 @@ describe("whether the session is running", () => {
     // catches an off-by-one holiday entry, the real failure mode of a hand-maintained table
     expect(isMarketOpen(at("2026-04-02T14:30:00Z"), NEW_YORK)).toBe(true);
     expect(isMarketOpen(at("2026-11-27T15:00:00Z"), NEW_YORK)).toBe(true);
+  });
+});
+
+describe("the scheduled quote window", () => {
+  it("starts fifteen minutes before the opening bell", () => {
+    expect(isScheduledQuoteWindow(at("2026-06-05T13:14:00Z"), NEW_YORK)).toBe(false);
+    expect(isScheduledQuoteWindow(at("2026-06-05T13:15:00Z"), NEW_YORK)).toBe(true);
+  });
+
+  it("ends fifteen minutes after the closing bell", () => {
+    expect(isScheduledQuoteWindow(at("2026-06-05T20:15:00Z"), NEW_YORK)).toBe(true);
+    expect(isScheduledQuoteWindow(at("2026-06-05T20:16:00Z"), NEW_YORK)).toBe(false);
+  });
+
+  it("still excludes weekends and holidays", () => {
+    expect(isScheduledQuoteWindow(at("2026-06-06T14:30:00Z"), NEW_YORK)).toBe(false);
+    expect(isScheduledQuoteWindow(at("2026-11-26T15:00:00Z"), NEW_YORK)).toBe(false);
   });
 });
