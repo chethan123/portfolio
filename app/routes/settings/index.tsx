@@ -45,7 +45,7 @@ export default function SettingsIndex() {
               <Link to="/settings/prices">Prices</Link>
             </dt>
             <dd>
-              How often quotes are refreshed from the price feed while the market is open.
+              How often quotes are refreshed from the price feed around regular market hours.
             </dd>
 
             <dt>

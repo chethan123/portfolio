@@ -577,7 +577,7 @@ graph LR
     app --> db
     app -->|unix socket| worker
     worker --> egressProxy
-    egressProxy -.->|quotes in market hours,<br/>history while a gap is open,<br/>or Refresh now| yahoo
+    egressProxy -.->|quotes in the scheduled window,<br/>history while a gap is open,<br/>or Refresh now| yahoo
 ```
 
 ### Who gets in, and where that is decided
@@ -715,8 +715,9 @@ first upload (DESIGN.md §7).
 Prices refresh on a cadence set at Settings → Prices (seeded to every 15 minutes), timed by a
 scheduler inside the app — but the fetch itself runs in a separate `worker` container, reached
 over a private socket, that holds no database credential and can reach nothing but the price feed.
-*Quotes* are asked for only while the market is open. Riding the same refresh at any hour is a
-bounded **backfill** batch: whenever a holding's history reaches further back than its prices do,
+*Quotes* are asked for only from 15 minutes before through 15 minutes after regular market hours.
+Riding the same refresh at any hour is a bounded **backfill** batch: whenever a holding's history
+reaches further back than its prices do,
 the feed's own daily history fills the missing days in — inserted where absent, never over a close
 the instance recorded itself, and un-adjusted for splits because a statement records the shares as
 held on the day.

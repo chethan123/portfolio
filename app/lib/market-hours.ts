@@ -1,7 +1,8 @@
 /**
- * `isMarketOpen` is a cost optimisation (§10): nothing downstream trusts it, so a stale holiday
- * table only wastes requests. `marketDateOf` is correctness — it decides which `price_daily` row a
- * quote becomes (§6.2) — and never consults the calendar; it reads the provider's own stamp.
+ * `isMarketOpen` and `isScheduledQuoteWindow` (the poller's own gate, padded ±15 minutes around the
+ * session, §6.2) are both a cost optimisation (§10): nothing downstream trusts either, so a stale
+ * holiday table only wastes requests. `marketDateOf` is correctness — it decides which `price_daily`
+ * row a quote becomes (§6.2) — and never consults the calendar; it reads the provider's own stamp.
  */
 
 /** A calendar date as Postgres hands one back — `YYYY-MM-DD`. */
@@ -10,6 +11,7 @@ export type IsoDate = string;
 // Regular NYSE session, market-local minutes from midnight. Pre/post-market excluded (§6.2).
 const SESSION_OPENS = 9 * 60 + 30;
 const SESSION_CLOSES = 16 * 60;
+const QUOTE_WINDOW_PADDING_MINUTES = 15;
 
 /**
  * NYSE full-day closures, market-local. Hardcoded five years (DESIGN.md §10); past the last year
@@ -84,12 +86,26 @@ export function marketStampOf(instant: Date, timeZone: string): string {
   return `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} ${parts.dayPeriod} ${parts.timeZoneName}`;
 }
 
-export function isMarketOpen(instant: Date, timeZone: string): boolean {
+function sessionMinute(instant: Date, timeZone: string): number | null {
   const parts = partsIn(instant, timeZone);
 
-  if (parts.weekday === "Sat" || parts.weekday === "Sun") return false;
-  if (NYSE_HOLIDAYS.has(`${parts.year}-${parts.month}-${parts.day}`)) return false;
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") return null;
+  if (NYSE_HOLIDAYS.has(`${parts.year}-${parts.month}-${parts.day}`)) return null;
 
-  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
-  return minutes >= SESSION_OPENS && minutes < SESSION_CLOSES;
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+export function isMarketOpen(instant: Date, timeZone: string): boolean {
+  const minutes = sessionMinute(instant, timeZone);
+  return minutes !== null && minutes >= SESSION_OPENS && minutes < SESSION_CLOSES;
+}
+
+/** Pads the regular session to recover the prior close before open and a delayed close after it. */
+export function isScheduledQuoteWindow(instant: Date, timeZone: string): boolean {
+  const minutes = sessionMinute(instant, timeZone);
+  return (
+    minutes !== null &&
+    minutes >= SESSION_OPENS - QUOTE_WINDOW_PADDING_MINUTES &&
+    minutes <= SESSION_CLOSES + QUOTE_WINDOW_PADDING_MINUTES
+  );
 }

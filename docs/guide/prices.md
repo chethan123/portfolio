@@ -4,8 +4,9 @@ Prices mostly look after themselves, so this page is three short answers.
 
 ## "My total is the same as yesterday"
 
-Prices refresh on their own, in the background: fresh quotes while the market is open, and past
-closes for anything held further back than the price history reaches, at any hour. Every screen with
+Prices refresh on their own, in the background: fresh quotes from 15 minutes before through 15
+minutes after regular market hours, and past closes for anything held further back than the price
+history reaches, at any hour. Every screen with
 a figure carries the same **As of** line in its header — the age of the oldest fetched price on
 anything the household owns, whichever screen or owner you are looking at — and a **Refresh now**
 button beside it. One press spends one request for fresh quotes and says underneath
@@ -15,7 +16,7 @@ press that worked.
 
 So a total that has not moved usually means the market has not moved it:
 
-- **Outside trading hours, no new quote arrives on its own.** Evenings, weekends and market
+- **Outside the scheduled quote window, no new quote arrives on its own.** Evenings, weekends and market
   holidays hold the last close. This is working correctly. What does still happen at those hours is
   filling in *past* closes for a holding recorded further back than the price history reaches — so a
   statement uploaded on a Saturday is valued properly by Monday rather than after it. Refresh now

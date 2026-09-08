@@ -94,10 +94,16 @@ _Avoid_: current value, latest value, ending balance, final value.
 
 **Refresh cadence**:
 How often the app refreshes prices — the household's dial, in whole minutes. Quotes are asked for
-only while the market is open; a backfill may ride a refresh at any hour, and only while some
-instrument's closes are still missing. The term speaks of refreshes rather than of the timer that
-drives them.
+only inside the scheduled quote window; a backfill may ride a refresh at any hour, and only while
+some instrument's closes are still missing. The term speaks of refreshes rather than of the timer
+that drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
+
+**Scheduled quote window**:
+Regular market hours padded ±15 minutes (`app/lib/market-hours.ts`), so a backfill can recover the
+prior close before open and a delayed close after it. What the poller checks before asking for
+quotes on a tick; a person's **Refresh now** ignores it and asks at any hour.
+_Avoid_: market hours, trading hours (for what gates the poller — those still name the session itself).
 
 **Observation**:
 A price the feed reported for one instrument, filed under the instant the provider says it was
@@ -109,8 +115,8 @@ _Avoid_: tick, snapshot, price point, intraday price.
 One attempt to refresh quotes for every feed-priced instrument, recorded whether or not any new
 observation resulted — the cadence's own attempts and a person's press of Refresh now alike, since
 both are the same attempt at the same instruments. What tells a quiet market apart from a server
-that was not running: a gap during market hours is the deployment's silence, and a row outside them
-is somebody asking.
+that was not running: a gap inside the scheduled quote window is the deployment's silence, and a row
+outside it is somebody asking.
 _Avoid_: refresh run, fetch, sync.
 
 **Backfill**:

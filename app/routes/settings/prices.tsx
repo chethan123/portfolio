@@ -53,8 +53,9 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
           <h1 className="page-title">Prices</h1>
           <p className="page-subtitle">
             How often prices are fetched from the feed, and what the spine does not cover yet.
-            Quotes are asked for only while the market is open; a refresh at any hour also fills
-            in past closes for anything held further back than the price history reaches.
+            Quotes are asked for from 15 minutes before through 15 minutes after regular market
+            hours; a refresh at any hour also fills in past closes for anything held further back
+            than the price history reaches.
           </p>
         </div>
       </header>
@@ -97,11 +98,11 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
 
             <p id="refresh-cadence-note" className="field-note">
               A whole number from 1 to 1440 — the default is 15. A lower number costs more
-              requests against the feed during market hours. Outside them a refresh asks for no
-              quotes, and spends a request only on the rows below that a feed can still fill — at
-              most a handful per refresh, and none at all once there are none. A saved change is
-              picked up when the next refresh runs, so it can take up to one old cadence to
-              apply.
+              requests against the feed during the quote window, from 15 minutes before through 15
+              minutes after regular market hours. Outside it a refresh asks for no quotes, and
+              spends a request only on the rows below that a feed can still fill — at most a
+              handful per refresh, and none at all once there are none. A saved change is picked up
+              when the next refresh runs, so it can take up to one old cadence to apply.
             </p>
 
             {/* ADR-0006, story 17 */}
