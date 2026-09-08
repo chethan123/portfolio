@@ -140,8 +140,11 @@ it a second hand-written copy of that helper's transport, which is where the sub
 
 ### Scheduler and quote status are passive
 
-The existing poller slot gains two facts and a typed reader; `/healthz` reads a snapshot and does not
-start the poller, retime it, or fetch a quote.
+The existing poller slot gains two facts and a typed reader; the health **loader** reads a snapshot
+and does not start the poller, retime it, or fetch a quote. The root middleware still arms it on the
+way past — that is ticket 01, and it is the whole reason these categories mean anything — but the
+reporting path itself is passive, so what `/healthz` says is never a consequence of `/healthz`
+having been asked.
 
 - `not_started`: this app process has no poller slot.
 - `waiting`: armed, no tick has completed yet, and not overdue.
@@ -271,7 +274,8 @@ their own, and none needs a schema migration or an outbound provider probe.
 - [ ] Database or migration failure still returns `503`, whatever pricing reports
 - [ ] Worker status proves the app-side socket path, not only the worker's own mount
 - [ ] `/healthz` never reaches Yahoo or spends worker quote/history rate budget
-- [ ] `/healthz` never starts, stops or retimes the poller
+- [ ] The health loader never starts, stops or retimes the poller; arming it on the way past is the
+      root middleware's job and nothing the loader reads depends on the request that armed it
 - [ ] Scheduler absence, lateness and active work are distinguishable, and a tick that never returns
       reports `overdue` rather than `running`
 - [ ] Expected market-closed quote silence is not reported as failure
