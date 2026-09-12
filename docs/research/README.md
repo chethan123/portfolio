@@ -10,6 +10,7 @@ Keep original evidence and rejected options intact; add a dated follow-up when a
 
 ## Reports
 
+- [Useful additions to Analysis](2026-09-11-analysis-visualization-opportunities.md) — 2026-09-11.
 - [Pricing health on `/healthz` — feasibility of spec 0021](2026-09-08-price-health-feasibility.md) — 2026-09-08.
 - [Price-fetch coordination and containment audit](2026-09-07-price-fetch-coordination-audit.md) — 2026-09-07.
 - [The lock slice, reviewed before launch](2026-09-05-lock-slice-launch-review.md) — 2026-09-05.
