@@ -48,12 +48,9 @@ Some places deliberately do not follow:
 
 ## It lasts as long as the address does
 
-The whole of the filter is in the address bar, as `?owner=3` or `?owner=1&owner=3`. Nothing is stored.
-
-- **Reload, bookmark or share it** and you get the same reading. Sending the address to the other
-  person in the household shows them exactly what you were looking at.
-- **Close the tab and it is gone.** Opening the app fresh — or typing an address by hand — starts
-  with everyone, every time.
+The URL carries the full selection, such as `?owner=3` or `?owner=1&owner=3`. Reloading, bookmarking,
+sharing, or restoring that address keeps it. Opening the base address starts with everyone.
+There is no owner-filter cookie.
 
 ## It is about noise, not privacy
 

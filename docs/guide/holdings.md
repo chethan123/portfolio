@@ -113,8 +113,8 @@ recorded.
 **Annual dividend is the exception, and it never shows a dash.** A holding with no dividend rate on
 file reads `$0` — including one nobody can price, which shows a blank Value and `$0` in the same
 row. There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both
-are counted as nothing and the total is a **lower bound**: it leaves out anything unquoted, all
-interest on cash, and any interest on a loan. A holding worth nothing has an amount and no
+are counted as nothing and the projection omits missing rates, including income and loan costs. It is incomplete rather than
+a guaranteed minimum for net income. A holding worth nothing has an amount and no
 percentage, since there is nothing to be a percentage of.
 
 Something owed can show a negative figure. A loan whose note carries a rate reads as money going
@@ -178,39 +178,21 @@ Two things to know before you type:
 
 ### What saving actually does
 
-The line under the open row says it before you click:
+Saving appends the account’s full snapshot with one position changed. The date is today, or the
+current statement’s date if later. Other positions are copied and earlier snapshots remain stored.
+For any date, valuation uses the latest snapshot effective on that date.
 
-> Saving records a new statement for Fidelity Individual, dated 2026-08-23, carrying every other
-> position in it forward unchanged. The current one is kept on its own date, so nothing already
-> recorded moves.
-
-In plain terms:
-
-- Your correction is filed as **a new statement for that account**, dated today — or dated the day
-  of the statement you are correcting, if that one is dated later still. The line names the exact
-  date it will use.
-- Every other position in the account is carried across unchanged, because a statement is a
-  photograph of the whole account.
-- **Nothing already recorded moves.** Your net worth in March does not change because you fixed a
-  figure in August.
-- **To undo, correct it again.** There is no delete. A second correction is another statement, and
-  the latest one speaks.
-
-After it lands, a line under the row reads the result back out of the database: "Recorded. Fidelity
-Individual now reads 130 of Apple Inc."
+A correction today does not change an earlier day’s quantities. Same-day corrections supersede
+one another. Backdated uploads or balances can change historical values without deleting records.
+Undo a correction by recording another.
 
 ### What it will not do
 
-- **It cannot add an instrument.** A correction says "not 100 units but 120", and it can say
-  "zero", and it cannot say "and also some Apple". Adding something the account has never held is
-  what an upload is for — see [upload.md](upload.md).
-- **It cannot turn a holding into a debt.** The sign lives in the quantity, so flipping it would
-  move net worth by twice the figure while looking like an ordinary edit. The screen refuses and
-  tells you to record zero first if the position really did turn around.
-- **On a bank or loan row it takes at most two decimal places**, because that box is holding
-  money rather than units.
+The editor changes quantity and per-share basis, not instrument membership. Use an upload to add
+an instrument. Zero quantity is allowed; changing directly between positive and negative is refused.
 
-If a figure is refused, the message appears under the row and the boxes keep what you typed.
+Fixed-price cash rows accept at most two decimal places in quantity, including cash in a brokerage.
+Other quantities accept up to eight. Blank cost basis means unknown, not zero.
 
 ### The editor is an address
 

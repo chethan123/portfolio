@@ -1,5 +1,7 @@
 # Account pickers and file-to-account mapping — how established apps do it
 
+Reference captures: [the three account-picker examples](picker-2026-08-30/).
+
 *Researched 2026-08-30, against `5aa2fb2`. Sources listed at the foot; every substantive claim is
 attributed and graded. Nothing here is approved work.*
 

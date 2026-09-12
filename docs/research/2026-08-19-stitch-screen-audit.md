@@ -1,5 +1,7 @@
 # Stitch screen audit — `Portfolio Net Worth Tracker`
 
+Reference captures: [the five Stitch screens](stitch-2026-08/).
+
 *Audited 2026-08-19 against project `projects/6282864270794825736`, twelve screens.*
 
 Two passes were made. The first read each screen's **HTML**; the second viewed the **rendered

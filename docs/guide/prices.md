@@ -4,64 +4,26 @@ Prices mostly look after themselves, so this page is three short answers.
 
 ## "My total is the same as yesterday"
 
-Prices refresh on their own, in the background: fresh quotes from 15 minutes before through 15
-minutes after regular market hours, and past closes for anything held further back than the price
-history reaches, at any hour. Every screen with
-a figure carries the same **As of** line in its header — the age of the oldest fetched price on
-anything the household owns, whichever screen or owner you are looking at — and a **Refresh now**
-button beside it. One press spends one request for fresh quotes and says underneath
-what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
-how you know it ran — the stamp itself is the *oldest* fetched price, so it can stay put after a
-press that worked.
+The **As of** header shows the oldest provider timestamp among currently held feed-priced
+instruments across the household. It is not the last fetch time. A successful refresh may return
+the same timestamp and price.
 
-So a total that has not moved usually means the market has not moved it:
+Scheduled quotes run around market hours at the cadence in Settings → Prices. **Refresh now** can
+ask at any hour. Mutual funds often publish one daily price; stocks also stay unchanged while
+markets are closed. Provider failures keep the last stored price and mark it stale.
 
-- **Outside the scheduled quote window, no new quote arrives on its own.** Evenings, weekends and market
-  holidays hold the last close. This is working correctly. What does still happen at those hours is
-  filling in *past* closes for a holding recorded further back than the price history reaches — so a
-  statement uploaded on a Saturday is valued properly by Monday rather than after it. Refresh now
-  still works then too: it usually finds no new quote, but it is how a holding recorded on a weekend
-  gets its first price without waiting for Monday's open.
-- **Quantities only change when you record them.** A price moving is automatic; you holding more of
-  something is not. That comes from [an uploaded statement](upload.md) or
-  [a correction](holdings.md).
-- **How often prices refresh during the day is the refresh cadence**, set at Settings → Prices in
-  whole minutes. A change is picked up when the next refresh runs, so it can take up to one old
-  cadence to apply. If a total looks genuinely stuck beyond that, press **Refresh now** first; if
-  it reports a failure rather than "nothing new", see [operating](../operating.md).
-
-Two things you may see on a row instead of a fresh figure:
-
-- **"price is stale"** — the last refresh could not get a new quote, so the price shown is the last
-  one known. It is still a real price, just an older one. It keeps counting.
-- **"never priced"** — see below.
+Settings → Prices lists missing historical coverage, not every stale current quote. If a refresh
+fails, check the inline result and ask the operator to inspect the pricing logs.
 
 ## "This holding shows a dash"
 
-A dash is not zero. It means nothing here can put a value on that holding, and the app would rather
-show you nothing than show you a wrong number.
+A dash means no stored price is available. A failed later poll retains the previous price and marks
+it stale. An unpriced holding contributes no value to net worth. Known basis or dividend figures can
+still contribute to their own totals.
 
-That happens when the holding has no price anyone can look up. A collective investment trust inside
-a workplace plan is the usual case: it has no public ticker, so there is nothing to quote.
-
-What follows from it:
-
-- **The holding is excluded from every total, never counted as zero.** Your net worth is the value
-  of everything that *could* be priced.
-- **Every total says how much of the portfolio it covers** — "the figure and the line are 17 of 18
-  holdings; the rest have never been priced". That sentence is how you know something is missing
-  rather than worth nothing.
-- **Each column counts separately.** A workplace plan often reports a price and no cost basis at
-  all, so the value total can be complete while the unrealized total is short. The counts differ
-  because they are counting different things.
-
-Setting such a price by hand is not possible yet — Settings lists Instruments as a tab that is not
-built. Until it exists, that holding stays outside the totals and the coverage sentence keeps saying
-so.
-
-A dash on a *past* date is the same honesty about a different thing: the prices for that date have
-not arrived yet, rather than never existing. **Settings → Prices** says which it is — whether the
-history is still being filled in, or why it never can be.
+Historical valuation needs a daily close on or before the requested date. Backfill fills missing
+earlier coverage when the provider supports it; some gaps remain. The app has no manual-price
+editor yet. A stale price differs from a missing price: the last known value still counts.
 
 ## Everything is in dollars
 

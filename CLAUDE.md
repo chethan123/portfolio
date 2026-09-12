@@ -43,13 +43,13 @@ npm run dev          # needs an already-migrated database; it does NOT run migra
 Traps:
 
 - **A `-t` filter that matches nothing reports everything *skipped* and exits 0.** Confirm at least
-  one test passed before claiming green. The filter matches `it(...)` text, not `describe` names.
+  one test passed before claiming green. The filter matches the full test name, including enclosing `describe` names.
 - `npm run dev` starts fine with no database and fails on the first request — config is read lazily.
 - `npm run dev`/`build` read `.env` (via Vite); anything run directly under Node
   (`server/*.ts`, `scripts/*.ts`) needs `--env-file=.env` or the variable in the environment.
-- **Two variables have no default and nothing starts without them**: `DATABASE_URL` and
-  `PUBLIC_ORIGIN` — the latter is the origin the lock derives its relying-party id from, and
-  `http://localhost:5173` is what the dev loop wants.
+- App configuration requires `DATABASE_URL` and `PUBLIC_ORIGIN`. The lock derives its relying-party
+  ID from the origin's hostname; changing that hostname orphans enrolled passkeys.
+  Use `http://localhost:5173` as the local app origin.
 - There is **no lint script, no formatter, no pre-commit hook** — on purpose. Style means matching
   the file you are editing. `typecheck`, `test`, and `build` are the gates.
 

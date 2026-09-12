@@ -300,8 +300,8 @@ Read the four keys in `pricing` in this order — the same order `pricing.ok`'s 
 them in, and the order that keeps you from chasing `quotes` while `worker` is the actual fault:
 
 - **`worker`: `"unavailable"`** narrows straight to the socket hop — `docker compose ps` and the
-  worker's own logs are next (spec price-health/02). **`"available"`** rules *that* hop out, nothing
-  more: it says nothing yet about the market being closed, the poller never having started, a tick
+  worker's own logs are next (spec price-health/02). **`"available"`** means the recent cached listener probe succeeded. It does not prove that
+  the socket worked during an earlier failed refresh, or establish anything about the market being closed, the poller never having started, a tick
   still in flight, `egress-proxy`, or Yahoo.
 - **`scheduler`: `not_started`** — this process holds no poller slot at all. The root middleware that
   arms it runs ahead of every request the app serves, `/healthz` included (`app/root.tsx`), so a
@@ -327,8 +327,8 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   yet) and otherwise means the scheduler itself is the thing to chase, not this key.
 - **`quotes`: `market_closed`** means the tick ran and deliberately asked for no quotes — check for a
   `Price backfill` line instead (ADR-0011); this is not a fault.
-- **`quotes`: `partial`** is usually one bad ticker, not a pipeline fault — read **Settings → Prices**,
-  which names it; this response never carries a symbol.
+- **`quotes`: `partial`** means some requested quotes failed. Check stale/unpriced holdings and
+  provider logs. Settings → Prices lists historical gaps, not every stale current quote.
 - **`quotes`: `failed`** beside **`worker`: `"available"`** means the last tick's quote attempt did
   not succeed end to end while *this* probe, taken separately and up to five seconds old, found the
   listener answering — not proof the socket hop was fine at the time of that attempt, since `quotes`
@@ -352,7 +352,7 @@ the JSON above can only point at, not describe:
 - **`quotes: "failed"` with `worker: "available"`.** Grep for the stem
   `Price provider failed`, or for `Price refresh` lines reporting stale instruments. Last-known
   prices are kept and marked stale — never zeroed — and `/healthz` deliberately stays `200`, because
-  a third-party outage must not make Compose restart a healthy app. `app` has no egress of its own
+  provider failure does not fail the app’s HTTP health status; Compose restarts on process exit. `app` has no egress of its own
   by construction — every fetch crosses the shared socket to `worker`, which in turn reaches Yahoo
   only through `egress-proxy` — so this one stem now covers four different faults, told apart by the
   text it carries and by `docker compose ps`:
@@ -894,8 +894,9 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 
 **Confirm.** What is and is not at risk:
 
-- Every recorded statement, correction and balance is written in a transaction. A failed request
-  records nothing at all — there is no partly-recorded state to find.
+- Statement, correction, and balance writes are atomic. A failed transaction leaves no partial
+  snapshot. A lost HTTP response does not prove the transaction failed; inspect the account
+  before retrying. Upload mappings and instrument names may have been saved in earlier steps.
 - Migrations fail closed: a failure rolls that file back whole and the server refuses to start, so a
   half-applied schema is not a thing that exists.
 - Almost nothing in the application deletes anything: an account is closed rather than deleted, and

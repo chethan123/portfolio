@@ -18,8 +18,7 @@ duplication, named here, with the migrations the ones to believe.
 
 ## 1. The model in one page
 
-The database answers one question — *what does the household own, and what is it worth?* — from two
-kinds of fact it never edits:
+The database values dated positions using price records. Their update rules differ:
 
 - **Positions**: an account's holdings are recorded as immutable, dated photographs
   (`position_set` + `holding`), one per statement upload or manual balance entry. There is no
@@ -235,8 +234,8 @@ Rules worth knowing when reading a dump:
   different amounts of spending power (DESIGN.md §4.5). `kind` and `tax_treatment` are independent
   axes — a `401k` may be either `tax_deferred` or `tax_free`.
 - **Accounts close; they are never deleted.** A non-null `closed_at` removes the account from all
-  current figures while it still counts on every date at or before the close. Closing is one-way —
-  there is no reopen.
+  current figures. Historical eligibility uses the closing instant against the requested date at
+  midnight UTC; see §5.3. There is no reopen control.
 - Deleting a `person` is `RESTRICT`ed while they own accounts; the only person deletes that happen
   are of people owning nothing.
 
@@ -544,12 +543,11 @@ the browser holding one verifies another assertion, and deleted outright by an e
 
 ## 5. Derived objects: how the schema is read
 
-The valuation rules live in SQL, defined once, so no two screens can compute a different answer for
-the same holding (DESIGN.md §8.2). Three objects carry all of it. In application code, the only
-reader of the view and the as-of function is
-[`app/lib/valuation.server.ts`](../app/lib/valuation.server.ts) — a screen writing its own join
-over `holding` has left the design. `latest_position_set` is broader by design: any module that
-needs "the current set" calls it, which is exactly what keeps the tie-break defined once.
+Current and date-based valuation use three schema objects below. Intraday valuation uses a
+separate query in [valuation.server.ts](../app/lib/valuation.server.ts). Screens use that module
+for valued holdings and totals; [prices.server.ts](../app/lib/prices.server.ts) also reads the
+view for freshness metadata. Application valuation reads use `latest_position_set`; the upload
+receipt separately selects the preceding snapshot using the same ordering.
 
 ### 5.1 `latest_position_set(p_account_id, p_as_of default null)`
 
@@ -573,12 +571,12 @@ every open account. The rules it encodes, each a decision:
   *still appears*, carrying `is_priced = false`. Inner-joining would silently vanish it from every
   total — the understatement this design refuses everywhere. A total can therefore be labelled
   "based on 8 of 12 holdings" instead of quietly understating.
-- **Null propagates through money maths.** `value = quantity × price`, `cost_basis = quantity ×
-  cost_basis_per_share`, `unrealized = value − cost_basis`, each cast to `numeric(20,4)` exactly
-  once — and nothing coalesces a null cost basis to zero, which would report a fake gain.
+- **Round each holding before summing.** Value and cost basis are independently rounded to
+  `numeric(20,4)`. Unrealized gain subtracts those rounded figures. Null price or basis stays
+  unknown; separate totals need separate coverage counts.
 - **`is_stale` is carried through**: a stale price is used, not discarded; unpriced is not stale.
 - **`annual_dividend = quantity × coalesce(annual_dividend_per_share, 0)`** — the one deliberate
-  exception to null-propagation: a missing rate is a zero, so the figure is a lower bound
+  exception to null-propagation: a missing rate is a zero, so the projection omits unknown income and expenses
   (DESIGN.md §14, accepted limitation 9).
 
 Columns (the generated `HoldingValued` type mirrors this list): account and owner context
@@ -602,13 +600,30 @@ see the row-type warning below. Exactly three things differ from the view:
   An account with no set at or before `d` contributes **no rows — not a zero**: history starts at
   the first upload, and nothing before it is invented (the pre-app period is `manual_networth`'s
   job).
-- An account counts when `closed_at is null or closed_at > d` — it counts on the dates it was open,
-  including the calendar day it closed, and stops after.
+- An account counts when `closed_at is null or closed_at > d`, with `d` at midnight UTC.
+  A midday closure counts on that date; a closure exactly at midnight does not.
 - The price is the greatest `price_daily.close` at or before `d` (the carry-forward; LEFT lateral
   join, so a holding with no close on or before `d` still appears with `is_priced = false`).
   `is_stale` is constant `false` — a historical close is simply the close — and `annual_dividend`
   is constant `null`: the projection describes the portfolio *now*, and no historical rate is
   stored to compute one from.
+
+Historical rows join current account and instrument metadata. Changing owner, kind, tax treatment,
+or classification changes historical groupings; these attributes are not versioned.
+
+### 5.3.1 Aggregation and chart values
+
+Totals sum rounded holding values and carry priced/total coverage. A dated series values each
+requested date separately; input dates must be distinct. It does not sum wealth across dates or
+calculate investment return.
+
+The 1D series holds current positions fixed across the latest observed session. Each price change
+contributes the difference between a holding's separately rounded old and new values. The opening
+price is the previous observation or, failing that, a daily close strictly before the session.
+
+Charts omit dates with no holdings and discard coverage metadata, so a partially priced historical
+point is not individually labelled. [Architecture §6.3](../ARCHITECTURE.md#63-read-path--dashboards)
+explains the queries.
 
 ### 5.4 The row-type contract (read before adding a column)
 
@@ -684,10 +699,11 @@ flowchart LR
   `unlock_grant` rows away with it), and swept, consumed or explicitly-cleared scaffolding —
   `upload_draft` rows and `unlock_grant` rows alike (§4.8). From a `psql` session only: a bad
   upload's `position_set` — the design's undo, holdings cascading — which no screen offers yet
-  ([`importing-history.md`](importing-history.md) carries the statement). Nothing else is ever
-  deleted; accounts close via `closed_at`.
-- **Never updated**: `position_set`, `holding`, `price_observation`, and `manual_networth` rows
-  are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
+  ([`importing-history.md`](importing-history.md) carries the statement). That guide also replaces
+  `manual_networth` rows when reloading external history. Accounts close via `closed_at`.
+- **Application writes append** `position_set`, `holding`, and `price_observation` rows. There
+  is no update-blocking trigger. Retaining rows does not freeze chart answers: backdated statements,
+  price changes, and metadata edits can change them. Manual history is operator-managed, and a `price_daily` row is only ever rewritten with the provider's own
   price for its day — a finished day changes only if the provider revises its close. Overwritten
   in place: `quote`, `app_setting`, an `upload_draft` as its steps write parts back, `account`'s
   editable columns (name, institution, kind, owner, tax treatment and `external_account_number`

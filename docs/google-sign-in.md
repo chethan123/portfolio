@@ -1,16 +1,12 @@
 # Setting up Google sign-in
 
-Everything between "I have a Docker host" and "my family can open this instance": creating the
-Google Cloud project, configuring and publishing the consent screen, creating the OAuth client,
-filling in the gate's settings, and writing the list of addresses that may enter. It is written for
-whoever self-hosts the instance, it is done once, and it is done **before** the first
-`docker compose up` — the stack refuses to start until it is.
+Configure Google sign-in and the household email allowlist before the first `docker compose up`.
+The bundled deployment requires the gate credentials and allowlist file.
 
-Nothing here is optional hardening. Sign-in sits in front of the application rather than inside it:
-the `gate` service (oauth2-proxy) signs people in with Google, the bundled Caddy asks it about
-every request before forwarding one, and the application itself authenticates nobody
-([`adr/0005-auth-is-a-forward-auth-gate.md`](adr/0005-auth-is-a-forward-auth-gate.md)). There is no
-mode in which it boots open, so there is no way to postpone this and add it later.
+The `gate` service (oauth2-proxy) checks Google identity and the allowlist. Caddy enforces that
+check before forwarding app requests, except `/healthz`
+([ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md)). The app also has a separate
+[passkey lock](guide/passkeys.md).
 
 Running the instance day to day — the proxy in front, backups, upgrades, the security decisions that
 are yours — is [`operating.md`](operating.md). When something is broken and you want a procedure,
@@ -68,32 +64,21 @@ screen a person sees when they sign in. What has to be right:
   instance.
 - **A contact address.** Google needs somewhere to write about the project. Yours.
 
-Then **publish it** — move the publishing status from testing to production.
+This guide uses **Production** for the deployed client. The local email allowlist still controls
+who enters the app; publishing does not make the instance publicly accessible or approve its brand.
 
-Publishing means one thing: any Google account can reach the account picker for this client. It does
-not mean Google has reviewed or approved anything, it does not list your instance anywhere, and it
-does not put your instance within anyone's reach — an account that reaches the picker still gets
-nothing, because the address it signed in with has to be on the allowlist from step 5. **The
-allowlist is the whole of authorization, and publishing is what lets it be.**
-
-Publishing also does not require verification. Google's verification review is triggered by
-sensitive and restricted scopes — someone's calendar, their contacts, their mail. The gate asks for
-the basic sign-in scopes and nothing else: the account's address and basic profile, which Google
-classes as non-sensitive. There is nothing to submit and no "unverified app" screen for the family
-to click past.
+The pinned oauth2-proxy Google provider requests `profile email`. These basic sign-in scopes do
+not require sensitive-scope verification; Google’s app-branding requirements are separate.
+[Provider scopes](https://github.com/oauth2-proxy/oauth2-proxy/blob/v7.15.4/providers/google.go).
 
 ### Why not leave it in Testing
 
-Testing mode works — you list each family member as a test user and they are let through — and this
-project deliberately does not use it. A test-user list is a second allowlist, in someone else's UI,
-that has to be kept in step with the one file this instance actually enforces; when someone is
-removed from one and not the other, which one was wrong is a question nobody wants at that moment.
-It is also capped (Google limits a project in testing to a hundred test users) and authorizations
-granted to test users expire after seven days, so the household is pushed back through the account
-picker on a schedule in exchange for nothing.
+Testing is also possible. Google exempts basic profile, email, and OpenID sign-in from Testing’s
+test-user restriction and seven-day authorization expiry. Publishing is not needed to avoid those
+limits for this client. In the basic-scope exception, [Google’s audience rules](https://support.google.com/cloud/answer/15549945?hl=en)
+state (excerpt; accessed 2026-09-12 UTC):
 
-One list, in one place, that the thing enforcing it reads on every request. That is the file in
-step 5.
+> For such requests, your users do not need to be in the trusted user list
 
 ## Step 3 — the OAuth client
 
@@ -181,6 +166,9 @@ It has to exist before the first `up`: the mount is declared so that a missing f
 
 ## Step 6 — start it, and prove it works
 
+Complete the [installation prerequisites](operating.md#installing), including the database and dump
+directories, ownership, and non-Google `.env` settings, before starting.
+
 ```sh
 docker compose up -d
 ```
@@ -195,8 +183,8 @@ Those prove the stack. The last leg is Google, and only a browser can walk it:
 1. **Open `PUBLIC_ORIGIN` in a browser that is not signed in to this instance.** You should land on
    Google's own account chooser. If you get an error from Google here, it is the client or the
    redirect URI — see [When it does not work](#when-it-does-not-work).
-2. **Choose an account that is on the allowlist.** You should come back to the instance's Overview.
-   That is the whole of it: there is no account to create on this side.
+2. **Choose an account that is on the allowlist.** A new instance opens Overview. If a passkey has
+   already been enrolled, a new browser first shows the [unlock screen](guide/passkeys.md).
 3. **Prove the refusal, once, in a private window.** Sign in with a Google account that is *not* in
    `allowed-emails.txt` — your own work address will do. Google will succeed, and then the gate
    refuses with a `403` and its own error page. You never reach the application, and nothing about
@@ -207,17 +195,13 @@ enforced and having watched it refuse someone.
 
 ## What your family sees the first time
 
-Google's account chooser, and then the instance. That is all of it.
+The gate sends them to Google without showing its own sign-in page. They need an allowlisted
+Google address and the instance link. If the household has enrolled a passkey, they also need access
+to an enrolled passkey to unlock the app. See [Passkeys](guide/passkeys.md).
 
-The sidecar's own sign-in interstitial is switched off in [`compose.yaml`](../compose.yaml), so the
-only sign-in screen anyone in this household ever sees is Google's. There is no password to invent,
-no account to register, no invitation to accept and no profile to fill in. A family member needs
-their address on the file and the link.
-
-Signing in is close to a once-per-device event: the gate's session is an encrypted cookie in the
-browser with the sidecar's seven-day default lifetime, and it renews by bouncing through Google
-without showing anyone a screen. On a device already signed in to one Google account, that bounce is
-invisible.
+The gate keeps sign-in in an encrypted browser cookie with a seven-day lifetime. Later Google
+sign-ins may reuse the device's existing Google session. The app's passkey lock has its own idle
+timeout, separate from that cookie.
 
 ## Day two
 
@@ -250,7 +234,10 @@ is the only thing signing anybody in. Rotating it does not clear anyone's sessio
 sessions are its own encrypted cookies, and the lever that clears those is `GATE_COOKIE_SECRET`.
 
 **Changing `PUBLIC_ORIGIN`.** The registered redirect URI has to change in the same sitting, or
-nobody can sign in. Edit both, then `docker compose up -d gate`.
+nobody can sign in. Edit both, update your HTTPS proxy, then `docker compose up -d app gate`.
+The app also uses this origin for passkey verification. If the hostname changes, existing passkeys
+will not work: follow the [passkey reset procedure](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached)
+and enrol new ones at the new hostname.
 
 ## When it does not work
 
@@ -260,15 +247,17 @@ Keyed by what you actually see.
 not one of the client's authorized redirect URIs, compared character for character. Check
 `PUBLIC_ORIGIN` + `/oauth2/callback` against the list in the console for a `http`/`https` slip, a
 missing or extra trailing slash, a port, or a different hostname than the one the browser is at. Fix
-whichever is wrong; if it was `.env`, `docker compose up -d gate`.
+whichever is wrong. If `PUBLIC_ORIGIN` changes, follow [Day two](#day-two), including the app restart
+and any passkey reset.
 
 **Google refuses the client itself** (`invalid_client`, or a page saying the client is unknown).
 `GATE_CLIENT_ID` or `GATE_CLIENT_SECRET` is wrong — a partial copy, stray whitespace, credentials
 from a different project, or a secret that was replaced in the console after `.env` was written.
 Re-copy both from the client's page and `docker compose up -d gate`.
 
-**Google refuses the account before the picker**, on a screen about the app's access. The consent
-screen is still in testing and that account is not one of its test users. Publish it (step 2).
+**Google refuses access before the app opens.** Read Google’s error and check the client’s actual
+requested scopes, audience, and any Workspace administrator restrictions. Testing mode alone is
+not a sufficient diagnosis for this client’s basic sign-in scopes; see step 2.
 
 **Google succeeds, and you come back to a 403 from the gate.** The address that signed in is not on
 `allowed-emails.txt`. This is the allowlist working. If it should have been admitted, read the file

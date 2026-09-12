@@ -36,7 +36,7 @@ rule is why.
 
 This section is the third telling of the two lines — [DESIGN.md §7](../DESIGN.md) holds the rules,
 [`guide/overview.md`](guide/overview.md) reads them off the screen — and the duplication is
-deliberate, named here and in [`README.md`](README.md): an importer has to hold both in one place
+deliberate: an importer has to hold both in one place
 before deciding where anything goes. For every rule's reason, those two are the authorities.
 
 What each thing Empower holds can become here:
@@ -59,17 +59,15 @@ already hold — a handful of instruments per refresh, nobody asked, nothing to 
 
 That leaves one window worth knowing about before a backdated statement lands:
 
-**A statement dated before the spine reaches is valued without its securities until its closes
-arrive.** Positions exist for those dates, closes do not yet, so every security on them is
-unpriced — excluded from the total and counted in the coverage figures — while cash and loans still
-price at 1.00. The chart draws those partial points on the ordinary solid line with nothing beside
+**A holding without a close on or before a historical date is unpriced for that date.**
+Other holdings with price coverage still count, including cash and loans priced at 1.00. The chart draws those partial points on the ordinary solid line with nothing beside
 them saying so, which is the half of issue #83 the backfill does not answer and
 [issue #216](https://github.com/chethan123/portfolio/issues/216) carries. A
-household loading a decade over forty instruments is filled over a handful of refreshes; at the
-seeded fifteen-minute cadence that is an hour or two, and every distorted point repairs itself as the
-rows land.
+large import can take several refreshes. Provider failures, unsupported instruments, or missing
+provider history can leave gaps unresolved; check the outcomes at Settings → Prices.
 
-So the order of work is chosen to keep the era each line claims truthful at every step:
+This order reduces temporary gaps; computed cash-only history can still replace manual household
+totals before the investment history is loaded:
 
 1. Capture everything from Empower.
 2. Load the pre-app years into the manual series. Nothing computed exists there, so nothing can

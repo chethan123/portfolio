@@ -1,30 +1,14 @@
 # Where documents go
 
-This file is the layout authority for everything written down in this repository. If you are about
-to add a document and cannot tell from the table below where it belongs, that is a gap in this file
-— fix it here first, then write the document.
+This file is the layout authority. Use it to choose where a document belongs; add a missing category
+here before creating one.
 
-## Three rules that apply everywhere
+## Writing rules
 
-**State rules, not counts.** "Every route has a test" survives a commit; "35 test files, 590 cases"
-is wrong the moment someone adds one, and nothing fails when it goes wrong. The same goes for
-"three panels", "seven columns" and any other number a reader could recount. Where a count really is
-the point, say where it is counted from.
-
-**Never transcribe a string the code owns.** Refusal messages, button labels and empty-state copy
-live in `app/`, are written to be read by the household already, and change without anyone thinking
-to grep the docs. Describe what a screen refuses and why; quote it only where the exact words are
-the subject, and expect to re-check that quote.
-
-A **contract** is the exception, and the difference is whether something else already fails when it
-changes. The `/healthz` response body is pinned by a test and read by machines, so quoting it is how
-an operator knows what to match on. A log line is not a contract: describe the signal and give a
-stem worth grepping for, rather than a sentence that will drift. When in doubt, ask what breaks if
-the string changes — if the answer is "only this document", describe it instead.
-
-**Name a deliberate duplication where you make it.** Some things are worth saying twice to two
-different readers. [`operating.md`](operating.md) does this for `.env.example` and says so in place.
-An unmarked second copy is a future contradiction; a marked one is a decision.
+- State rules rather than counts that drift as code changes.
+- Describe refusals and behavior; avoid copying UI messages. Quote exact text only when it matters.
+- Keep each rule in its owning document. Where repetition helps a different audience, link to that source.
+- Current guides describe the code. Dated research and original specs record their own time and scope.
 
 ## The layout
 
@@ -55,103 +39,11 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`guide/images/`](guide/images/) | the guide | the images the guide renders | the README's images |
 | `specs/<slice>/screenshots/` | a pull request's reviewer | before/after captures proving one ticket's change, deleted once that pull request merges | anything a document renders — a lasting image is the README's or the guide's |
 
-## Two things this table names, created lazily
-
-`CONTEXT.md` at the repository root and `docs/adr/` both now exist, and both are in the table above.
-[`agents/domain.md`](agents/domain.md) describes them and [`../AGENTS.md`](../AGENTS.md) points at
-them. Neither is filled in preemptively: a term earns a glossary entry the first time it is
-genuinely resolved, and a decision earns an ADR only when it is hard to reverse, surprising without
-context, and the result of a real trade-off. The dividends work
-([`specs/0006-dividends.md`](specs/0006-dividends.md)) opened both; the slices since have grown them
-one resolved term and one hard decision at a time, which is the intended pace.
-
-## Deliberate duplications, and why
-
-- **[`../README.md`](../README.md) and [`guide/`](guide/) both walk every screen.** The README says
-  what a screen is and why it behaves as it does, to someone deciding whether to install this at
-  all. The guide says how to get something done, to someone who already has it open. Neither should
-  contain the other's sentences: when the guide needs a *why*, it links.
-- **The README's "Reading what is held" and "Recording people and accounts" sections overlap the
-  guide on user-visible rules** — nothing is deleted, closing is not deleting, an unpriced holding
-  is not a zero. The README states them at the altitude of a module seam for a contributor; the
-  guide states them as consequences for a household.
-- **[`guide/passkeys.md`](guide/passkeys.md)'s three ways back into a locked browser restate the
-  unlock screen's own list** (`app/routes/unlock.tsx`), for a reader whose browser did not offer the
-  cross-device path — a case the screen itself says nothing about, so there is nothing on screen for
-  the guide to send them to. The screen is the one to believe; re-check the guide when that list
-  changes.
-- **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
-- **[`../ARCHITECTURE.md`](../ARCHITECTURE.md) §3.3 restates [`../DESIGN.md`](../DESIGN.md) §10.1's
-  environment variable table**, for a contributor reading the code rather than an operator
-  configuring a deployment. Named there, in place, with `DESIGN.md`'s table given as the one to
-  believe.
-- **[`data-model.md`](data-model.md) retells the migrations' DDL, `DESIGN.md` §2–§8's rules, and
-  `ARCHITECTURE.md` §5's schema walk** — entity diagram included — for a reader who may have none of
-  them open: someone with only a dump. Named there, in place, with the migrations given as the ones
-  to believe: their header comments carry the reasoning, and the document describes rather than
-  replaces them.
-- **[`google-sign-in.md`](google-sign-in.md) restates the shapes of the gate's settings**, which
-  `.env.example` owns beside the blanks they fill — the cookie secret's length and the command that
-  generates one, and the origin's form. Named there, in place, with `.env.example` given as the one
-  to believe. The walkthrough itself is not duplicated: `operating.md` and `.env.example` both point
-  at that file rather than carrying a second copy of the console steps.
-- **[`importing-history.md`](importing-history.md) retells the two chart series** that `DESIGN.md`
-  §7 defines and the guide's Overview page describes, for a third reader: someone deciding where
-  outside history belongs before loading any of it. It carries the mapping and links to those two
-  for every rule's reason.
-- **[`runbook.md`](runbook.md) and [`operating.md`](operating.md) cover the same failures** at
-  different moments: one indexed by symptom and read while something is broken, the other by topic
-  and read while it is not. The seam that keeps them from drifting is that the runbook explains
-  nothing — it confirms, acts, and links.
-- **[`operating.md`](operating.md) overlaps `ARCHITECTURE.md` §7.4, §7.6 and §7.7** on
-  observability, security and the installed shell. Those sections hold the mechanism, for a
-  contributor; `operating.md` holds the decisions an operator has to make, and links rather than
-  restating.
-- **[`security.md`](security.md) retells the security story a third time, for a third reader.**
-  `ARCHITECTURE.md` §7.6 holds the control table for a contributor and `operating.md` holds the
-  decisions an operator makes; `security.md` is for someone still deciding whether to run this at
-  all, and so states the threat model, draws the segmentation, and carries the standing list of what
-  is *not* defended. It overlaps `ARCHITECTURE.md` §2's trust boundaries and §3.1's privilege
-  posture, `operating.md`'s "One thing that leaves the house" and "The lock",
-  [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md), [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md),
-  [`adr/0010`](adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md),
-  [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md) and `DESIGN.md` §14's accepted
-  limitations. **Each of those is the one to believe for its own argument** — `security.md` states
-  the consequence for someone deciding whether to run this, and links rather than re-deriving. **`compose.yaml` is the
-  one to believe** for anything about networks, published ports or container privilege — it enforces
-  them — and **`security.md`'s own "What this does not protect against" is the one to believe** for
-  which weaknesses are still open, the audit under [`research/`](research/) being a snapshot against
-  one commit, kept for the longer argument behind several of them. Its closing "what you carry" list names operator actions `operating.md` already
-  documents — pinning the image and terminating TLS among them — because someone still deciding
-  has not read that file yet; **`operating.md`'s "Upgrading" and "Reverse proxy and TLS" are the
-  ones to believe** for how each is actually done. `security.md` links for every reason rather
-  than carrying a second copy of the argument.
-- **[`developing.md`](developing.md) sits between `AGENTS.md` and `ARCHITECTURE.md`** and must not
-  become either. `AGENTS.md` says what good work looks like here; `ARCHITECTURE.md` says how the code
-  is arranged and why. `developing.md` says how to get a checkout working and what to run — it links
-  for every rule and every reason rather than carrying a second copy.
-- **[`../README.md`](../README.md)'s "Working on it" is the short version of
-  [`developing.md`](developing.md).** The README's reader may not have decided to contribute yet, so
-  it keeps a handful of commands and defers the rest.
-- **The price archive's storage figure is stated in five places**, because it is a number five
-  different readers need at five different moments: [`adr/0006-intraday-quotes-are-an-observation-log.md`](adr/0006-intraday-quotes-are-an-observation-log.md)
-  argues why the cost is worth paying, [`../DESIGN.md`](../DESIGN.md) §6 records it as part of the
-  pricing design, the header of `migrations/0009_price_observation.sql` states it where the table
-  is created, [`operating.md`](operating.md)'s "Growth and limits" carries the arithmetic and the
-  query that measures the real instance, and Settings → Prices states it at the dial, where the
-  household actually turns it. **The ADR is the one to believe**; the other four are derived from it
-  and none of them may quietly disagree. A revised figure changes all five in one commit.
-
 ## Screenshots
 
-Both image directories hold captures of the real application against the demo household in
-[`../scripts/seed-demo.ts`](../scripts/seed-demo.ts) — never a mock, never hand-edited. They are
-committed because a README has to render on GitHub for someone who has installed nothing, which
-makes them the one thing here that can go stale in silence.
+README images live in `screenshots/`; guide images live in `guide/images/`. Both show the real app
+with invented data from [seed-demo.ts](../scripts/seed-demo.ts).
 
-Retake all of them with [`../scripts/capture-screenshots.ts`](../scripts/capture-screenshots.ts).
-**A change to a screen is not finished until they are retaken.** The editorial decisions — which
-account each shot is of, why the warning strip is left in, why phone shots are not full-page —
-live in [`screenshots/README.md`](screenshots/README.md) and
-[`guide/images/README.md`](guide/images/README.md), because a script can hold the mechanics but not
-the reasons.
+Retake affected captures after a screen changes. [capture-screenshots.ts](../scripts/capture-screenshots.ts)
+retakes both sets; [Developing](developing.md#retake-screenshots-after-changing-a-screen) has the recipe.
+The image directories' README files explain the capture choices.

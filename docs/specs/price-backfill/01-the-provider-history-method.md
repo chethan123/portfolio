@@ -36,7 +36,7 @@ Its own ticket because it is the whole of the boundary between an unofficial end
       `{ status: "split-unresolved" }`. A call that fails throws; the caller records the text.
       The three refusals map one-to-one onto ticket 02's ledger outcomes (`no-history` →
       `no_history`, `non-usd` → `non_usd`, `split-unresolved` → `split_unresolved`) — a deliberate
-      duplication, named as such where each vocabulary is declared (`docs/README.md:25`): one is
+      duplication, named where each vocabulary is declared ([writing rules](../../README.md#writing-rules)): one is
       the provider's answer in the form `SymbolProbe` uses, the other a `check` constraint's
       literal, and the mapping is one object in ticket 03's batch
 - [ ] The module header's "single batched method" sentence (`:1-12`) now names two methods and says

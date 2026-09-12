@@ -6,22 +6,13 @@ What the household is worth today, and the line behind it.
 
 ## The headline and the chip beside it
 
-**Total net worth** is every open account added up, valued as of today. A loan subtracts.
+**Total net worth** adds the current value of open accounts. Loans subtract.
+The change chip compares current value with the value at the range’s start. This remains true
+for Custom ranges ending in the past: the chip is not the change between the chart’s endpoints.
+If the starting value is zero, only the amount is shown.
 
-The chip beside it is the change over the range you are looking at. It shows the percentage,
-then the amount, with an arrow and a sign — so it reads the same way with no colour at all.
-
-Change the range and the chip changes with it. It always measures from the start of the window
-on screen to today.
-
-Sometimes there is nothing to measure from. If the window reaches back before your first
-statement, the earlier figure is zero, a percentage of zero says nothing, and the chip shows the
-amount alone. That is why the All range in the next picture reads `+$687,516.13` with no
-percentage.
-
-Under the chip, the **As of** line is the age of the household's fetched prices — the oldest quote
-the feed holds for anything anyone here owns, whoever the owner filter selects — and **Refresh
-now** beside it fetches fresher ones. [Why a number did not change](prices.md) explains both.
+The **As of** line is the oldest provider timestamp among currently held feed-priced instruments,
+across the household. A successful refresh need not advance it. [Prices](prices.md).
 
 ## The range control
 
@@ -42,8 +33,7 @@ before opens here again — see below.
 
 **A greyed-out option is one your data cannot reach yet** — a household eight months old sees 5Y
 disabled rather than a click that silently does the same thing All already does. 1D greys out for a
-different reason: an instance whose price refresh has never run during market hours has no session
-to draw yet.
+different reason: an instance with no stored price observations has no session to draw yet.
 
 **Narrowing to an owner can grey more of them out**, because a narrowed chart reaches back only as
 far as the selected owners' own first recorded holdings — see the dashed line below. The options
@@ -56,97 +46,51 @@ reopens on whichever range you picked here last time, remembered in a cookie —
 household setting, so it is not in Settings and does not follow you to another browser.
 
 The owner filter, whose control sits beside this one, works the other way round on purpose: it is
-the address and nothing else, with no cookie behind it, so a fresh tab always opens on the whole
-household. A remembered range shows you the same shape of the same money; a remembered owner would
+the address and nothing else, with no cookie behind it, so opening the base address shows the whole
+household; a bookmark or restored tab keeps the selection in its URL. A remembered range shows you the same shape of the same money; a remembered owner would
 quietly show you a smaller total. See
 [reading a screen as one owner](owner-filter.md#it-lasts-as-long-as-the-address-does).
 
 ## Reading a point off the line
 
-Above the line sits a readout. Before you touch anything it names the point the line ends at — its
-date, and its value in full rather than rounded the way the axis figures are. On a range ending
-today that is the headline figure again, written the same way; on a range ending last month it is
-last month's value, which the headline is not.
-
-Point at the chart and the readout follows, naming the point nearest your pointer and marking that
-point with a vertical line. A short range holds a point for every day; a longer one thins them out
-towards its old end. Either way the nearest point answers, so no stretch of the line is dead.
+The readout names the last plotted point until you point at the chart. It then follows the nearest
+point, with a vertical guide. It describes a historical or observed price; the headline uses current
+quotes, so the figures can differ even when the range ends today.
 
 ## 1D — the latest trading session
 
 ![The Overview at the 1D range, its axis labelled by time of day](images/overview-range-1d.png)
 
-1D plots one trading session, and it is the only range measured in moments rather than in days. Open
-the app mid-session and the line runs from the open to the last price fetched; open it after the
-close and the whole session is drawn; open it on a Saturday, on a market holiday, or before the bell
-and you get the most recent session there was — Friday's, usually. It is never a blank chart and
-never a trailing twenty-four hours.
+1D shows the latest session with stored price observations, from its first recorded instant to its
+last. If fetching stopped, that session may be older than the latest market day. There must be at
+least two observations at distinct times to draw a line.
 
-Three things read differently on it:
+- The axis and readout show time on the market’s clock.
+- Every distinct observed instant is plotted; one refresh can add several points.
+- The change chip compares current value with the close before the displayed session.
+- Current quantities are used across the session, so an upload can change the whole 1D line.
 
-- **The axis and the readouts name the time of day**, on the market's clock, rather than a date.
-- **The line has one point per observed moment**, unsampled. A refresh asks about all your
-  instruments at once, and each price comes back stamped with the moment it was struck rather than
-  the moment you asked — so one refresh usually adds several points, not one. The cadence you set at
-  Settings → Prices decides how often the asking happens.
-- **The change beside the headline is measured from yesterday's close**, which is what "today's
-  change" means at a brokerage.
-
-Two honest limits. A mutual fund strikes one price a day after the close, so a workplace-plan-heavy
-household sees much of its 1D line flat — that is the fund, not the chart. And the line is drawn
-once, when the page loads: nothing updates in place, and reloading is how it advances.
+Mutual funds often report one daily price, leaving parts of the line flat. The chart does not
+stream. Reload or use **Refresh now** to read newer observations.
 
 ## The second, dashed line
 
 ![The Overview at the All range, with a dashed line ahead of the solid one](images/overview-range-all.png)
 
-Two lines, and they mean different things.
+The solid line values account snapshots on each date. The dashed prefix contains hand-entered
+household totals from before those snapshots. Computed points take precedence where they overlap.
+The readout identifies hand-entered points.
 
-- **The solid line, with the shading under it**, is computed from statements. Every point is your
-  accounts valued on that date.
-- **The dashed line ahead of it** is a hand-typed net worth history covering the years before this
-  instance existed. It is a handful of dates and figures, not a real curve, so it is drawn
-  differently rather than blended into the solid line.
-
-Where the two overlap, the computed line wins; the dashed one only fills the gap in front of it.
-You will normally see it only at the All range, because the shorter windows start after your first
-statement.
-
-Point at one of the hand-typed points and the readout says so, so a rough figure never reads as a
-priced valuation. One of them can answer for a wide stretch of chart — for months either side, it
-is the nearest thing recorded.
-
-**A narrowed chart does not draw it at all.** Those figures are a household net worth typed in as
-one number; there is no owner on them and no way to work out whose share was whose. A line read as
-one owner therefore starts at their first recorded holdings, and a note above it says so:
-
-> The hand-typed history before this instance existed is the household's and has no owner, so it is
-> not drawn here. The line begins at these owners' first recorded holdings.
-
-The note only appears on a range that would have shown those points unfiltered — a short range
-omits years-old history whether or not a filter is on, and gets no note for it.
-
-Nothing has been lost — **Show everyone** brings the dashed prefix straight back. See
-[reading a screen as one owner](owner-filter.md).
-
-**There is no screen for those points yet.** Settings lists History alongside Classifications and
-Instruments as something a later version builds. Until then the dashed prefix is whatever was
-loaded into the instance when it was set up: you can read it, and nothing on any screen changes
-it.
+An [owner-filtered](owner-filter.md) chart omits manual history because those totals have no owner.
+**Show everyone** brings it back. There is no History editor in the app yet.
 
 ## What the figure counts
 
-Above the chart you may see a line like:
+An unpriced holding contributes no value to net worth. The coverage note counts priced holdings
+against recorded holdings. A missing price is not a zero.
 
-> The figure and the line are 17 of 18 holdings. The rest have never been priced.
-
-That is the headline and the line telling you what went into them. A holding nobody can put a
-price on is left out of the total rather than counted as zero — counting it as zero would quietly
-understate the household by the whole position.
-
-The sentence appears only when something is missing. No sentence means every holding is priced.
-
-For why a holding cannot be priced, and what to do about it, see [prices.md](prices.md).
+The chart currently lacks per-point coverage labels: past points can be partial even when current
+coverage is complete. [Prices](prices.md) explains missing and stale values.
 
 ## The accounts list
 
@@ -180,18 +124,11 @@ to [Analysis](analysis.md).
 
 ## When there is nothing to draw
 
-The empty screens this page can show, and they are not the same:
-
-- **Nothing uploaded yet.** No figure at all, and a sentence saying so. A net worth of zero and an
-  empty instance look identical, and only one of them is worth worrying about. Start at
-  [upload.md](upload.md).
-- **One dated point.** The panel says a trend needs two dated points and this instance has one.
-  The line appears after the second statement.
-- **1D, early in the day.** The panel says a line needs two observed moments and this session has
-  one — the feed has reported a price at only one distinct time so far. More arrive as the market
-  trades and refreshes land.
-- **Narrowed to owners who hold nothing.** The [owner filter](owner-filter.md) is on and the
-  selection has no holdings; the control stays on screen so you can clear it.
+A line needs at least two plotted points, which can include the household’s manual history. Try **All** or let more dated samples
+accumulate; a second statement is not required. For 1D, prices must have been observed at two
+distinct times. The empty panel still says a second statement is needed; that wording is outdated
+([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)).
+An account with no records differs from one with records but no prices.
 
 ## On a phone
 

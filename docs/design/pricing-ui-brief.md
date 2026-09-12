@@ -1,5 +1,9 @@
 # Stitch brief — the pricing slice
 
+> Original UI brief, retained as design history. Proposed behavior and repository descriptions
+> may differ from the shipped app. Use the [current guide](../guide/README.md) and route source.
+
+
 *Paste this whole document into Google Stitch. It is self-contained; nothing here needs the
 repository.*
 

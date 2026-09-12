@@ -1,154 +1,76 @@
 # Recording your first statement
 
-Take a brokerage statement from a download to a recorded set of holdings, in four steps.
-
-Before you start:
-
-- **Export the CSV version** of the statement from your brokerage. A `.csv` file is the only thing
-  the upload can read, and there is no way to link a bank or brokerage directly. The first screen
-  checks that the file reads as text: a spreadsheet or a PDF is binary in practice and is refused
-  there with *"This does not read as a text file. Export the CSV version of the statement and
-  upload that instead."* An export that does read as text — OFX, QIF — gets past that check but
-  usually stops at the mapping screen, where the instrument and quantity can never come from the
-  same column.
-- **Bank accounts and loans are not recorded this way.** They are one number rather than a list of
-  positions, so you type the balance on the account's own page instead — see
-  [Account detail](account-detail.md).
-- **There is a size limit**, set by whoever runs the instance. The upload screen prints the current
-  one under the file box.
-
-Nothing is written to your data until the fourth step. A column read wrongly on step two costs you
-nothing but the walk back.
+Choose an open account and a UTF-8 CSV export. PDFs and spreadsheets are not accepted.
+Bank and loan accounts also offer [Set balance](account-detail.md#set-balance) for a single amount.
+Account positions change only when you record the statement; earlier steps can save mappings
+and instrument names.
 
 ## Step 1 — Account and file
 
-Select **Upload statement** from the navigation.
-
 ![Step one: choosing the account and the file](images/upload-1-account-and-file.png)
 
-Choose the **Account** this statement describes, choose the **Statement file**, then select
-**Continue to columns**.
-
-Only open accounts are listed. If an account you expect is missing, it has been closed — see
-[People and accounts](people-and-accounts.md#correcting-or-retiring-an-account).
-
-The strip under the title shows all four steps throughout, so you can always see where you are.
+Open **Upload statement**, choose the account and file, then **Continue to columns**.
+The file limit appears below the file box. Closed accounts are not offered.
 
 ## Step 2 — Columns
 
-This is where you tell the app which column in the file is which.
-
 ![Step two, before anything is mapped](images/upload-2-columns-blank.png)
-
-The table in the middle is your file's own header row and its first three rows of data, printed
-exactly as the file wrote them — dollar signs, commas and all. **Map by looking at those values**,
-not by guessing from the column names.
-
-Work down the selects:
-
-- **Instrument** and **Quantity** are required.
-- **Name**, **Cost basis**, **As-of date** and **Account number** are optional. Each offers
-  **Not in this file** — choose that rather than leaving it unanswered, so the app knows you meant
-  it.
-- **Cost basis is** — per share, or total for the position. It only matters when you have mapped a
-  cost basis column.
-- The checkbox about a file listing what is **owed** as a positive number is there for files that
-  state a debt without a minus sign. Leave it alone for a brokerage.
 
 ![Step two with every column mapped](images/upload-2-columns-mapped.png)
 
-If the header does not sit on the first row, pick the right one under **Header row** and select
+Check the preview against your file. If needed, select the correct header row and press
 **Re-read with this header row** before mapping.
 
-Select **Save mapping and continue**.
+- Map Instrument and Quantity to different columns.
+- Map any optional columns you have. Choose **Not in this file** for absent ones.
+- If mapping cost basis, choose per-share or total-position basis.
+- Use the debt checkbox only when the file lists amounts owed as positive quantities.
 
-**You only do this once per institution.** The mapping is remembered against the shape of the file's
-header row, so the next export from the same brokerage arrives with every select already filled in
-and a line saying where those choices came from. It is still shown to you every time, never applied
-silently — that is how a changed export gets noticed. Check the choices against the sample rows and
-continue.
-
-The full reference for what each column may contain, and what the app does with awkward files, is in
-[the CSV reference](upload.md).
+Select **Save mapping and continue**. Mappings are remembered by institution and header shape,
+but this screen remains visible on later uploads so you can check them. See the
+[CSV reference](upload.md) for supported values.
 
 ## Step 3 — New instruments
 
-This step only appears when the file names something the app has never seen before. If everything in
-the file is already known, you go straight to the review and the strip dims this entry with
-**· none**.
-
 ![Step three: resolving a name the file uses for the first time](images/upload-3-instruments.png)
 
-The screen says how many of the file's holdings are new, then asks one question about each, showing
-the name exactly as the file wrote it. Answer either:
+This step appears only for new instrument names. Otherwise the step strip shows **· none** and
+takes you straight to review. Known instrument names use saved aliases. Resolve each new name by linking an existing instrument
+or creating one with a classification and price source. A known non-USD quote is refused.
 
-- **This is an instrument already listed** — pick it from the **Instrument** list. Use this when your
-  brokerage writes a name differently from another one you already hold.
-- **This is new** — give it a **Symbol** (leave empty if it has no public ticker), a **Name**, a
-  **Price source** (**Feed** for anything with a public quote, or **Manual price** for something
-  without one — typing the price in is not built yet, so the holding shows a dash until it is; see
-  [Prices](prices.md)) and a **Classification**. Choosing **New classification…** lets you name one
-  and give it an asset class.
-
-Select **Save and continue**.
-
-Answering here writes down vocabulary — that this name means this instrument — and nothing else.
-The statement is still not recorded. The answer is remembered forever, so the same brokerage's next
-export passes through this step without asking.
+These instrument and alias choices are saved before the statement is committed. Once every name
+is resolved, continue to review.
 
 ## Step 4 — Review, then record
 
-The last step shows exactly what recording this file will do, before it does it.
-
 ![Step four: the diff, with one position added, one updated and one removed](images/upload-4-review.png)
 
-The heading counts the changes — `1 ADDED · 1 UPDATED · 1 REMOVED` — and the table below lists them
-in those three groups. An updated row prints the old figure in grey, an arrow, then the figure that
-will be true. Rows that are not changing are not listed; the line above the table counts them.
-
-For the very first statement in an account there is nothing to compare against, so the count reads
-just `14 ADDED` and a line says why.
+Review additions, changed quantities or bases, and removals against the account’s current holdings.
+A first statement has no earlier holdings to compare.
 
 ### Read the removals
 
-**A statement is one photograph of the whole account.** Anything the account holds that is not in
-this file is treated as sold. That is what makes a partial or filtered export dangerous: a file
-listing 2 of your 30 positions is a perfectly valid statement that sells the other 28.
-
-So every removal is listed individually, with its quantity and last known value, never as a count.
-Read that group before you record anything.
-
-If a file removes **more than half** of what the account holds, you cannot record it without ticking
-a sentence that states the ratio — *"This file removes 18 of the 30 positions this account holds."*
-Ticking it is you saying that is what really happened.
+A statement is the whole account snapshot. Any held instrument missing from the file is treated
+as sold. Read every listed removal. Removing more than half the current positions requires an
+explicit acknowledgement; a filtered export can otherwise remove holdings you meant to keep.
 
 ### The statement date
 
-If the file dates itself, the screen says so and there is nothing to fill in. If it does not, a
-**Statement date** box appears, starting at today. It accepts nothing later than tomorrow.
+Use the file’s date when present. Otherwise enter the date at review. Dates after tomorrow are
+refused; tomorrow accommodates households ahead of the server’s time zone.
 
 ### Record it
 
-Select **Record this statement**. You land on the account, with a confirmation of what was written.
-
-If something looks wrong — every quantity a thousand times too large, the cost basis in the wrong
-column — select **Back to columns**, fix the mapping, and come back. Nothing has been written, so
-there is nothing to undo.
+Select **Record this statement** to append the snapshot and open the account. Before committing,
+you can return to Columns to fix a mapping. A dated upload may change historical values; an older
+statement does not displace a newer current snapshot.
 
 ## Leaving an upload half-finished
 
-Every step is a real address. Bookmark it, close the laptop, and open it again later: the app puts
-you back at the step you got to. The back button and a reload both behave.
-
-An unfinished upload is kept for 24 hours and then swept. A recorded one is cleared away as soon as
-it lands. Either way, returning to the address afterwards gets you a page saying **This upload has
-expired or was already recorded** and offering to start a new one. Nothing is lost — nothing was
-written.
-
-Why the flow is shaped this way is in
-[Upload — a statement, mapped once and diffed before it lands](../../README.md#upload--a-statement-mapped-once-and-diffed-before-it-lands).
+The draft has a bookmarkable URL. Starting another upload removes unfinished drafts more than
+24 hours old; there is no exact expiry timer. Commit removes its draft immediately. Saved
+mappings and instrument vocabulary remain if a draft is abandoned or removed.
 
 ---
 
-**Next:** [Account detail](account-detail.md) — one account end to end, and how to set a bank or loan
-balance.
+**Next:** [An account](account-detail.md) — the statement you just recorded, its holdings, and history.

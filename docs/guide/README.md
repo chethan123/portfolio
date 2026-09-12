@@ -50,9 +50,9 @@ Come back to these when you want to know what something on a screen means.
 
 ## Two things to expect
 
-**Almost nothing here deletes anything.** An account is *closed*, not removed. A correction records
-a new figure rather than replacing the old one. Your net worth in March does not change because you
-fixed something in August. What does delete, immediately and with no undo: removing a person once
+**Almost nothing here deletes anything.** Accounts are closed rather than removed. Corrections
+retain earlier records. A correction dated today preserves earlier quantities; backdated uploads
+or balances can change historical values. What does delete, immediately and with no undo: removing a person once
 they own nothing at all, and removing a passkey — see [Passkeys and the lock](passkeys.md).
 
 **A number is withheld rather than guessed.** Where a holding cannot be priced it is left out of the

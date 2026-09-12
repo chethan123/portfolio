@@ -55,20 +55,12 @@ the percentages read as dashes, and the amounts are the answer.
 
 ## Unrealized gains
 
-The last panel: what has been gained and not yet sold, and what a taxable account would owe on
-it. No ring — a gain is signed, and a signed figure is not a share of anything.
+Rows group holdings as individual stocks, funds/ETFs, or other assets. Only groups with holdings
+appear. An unknown or missing provider quote type also lands in **Cash, loans and everything else**,
+even for a stock. Unrealized gain sums each computable position’s value minus cost basis.
 
-Three rows, by what the holding is: **Individual stocks**, **Funds and ETFs**, and **Cash, loans
-and everything else**. Then a Total.
-
-Three columns:
-
-- **Asset type** — the row's name. Under it, where only part of the gain is taxable, a line like
-  "$47,901.67 of it in taxable accounts", so the tax beside it can be checked.
-- **Unrealized** — value minus cost basis, for everything in that row, wherever it is held.
-- **Potential tax** — what settling the taxable part would cost at your rate.
-
-A dash means there is nothing to report: no gain, or no tax to estimate on one.
+A dash means the gain cannot be computed; zero means no gain. Coverage counts say how many
+holdings contribute. Potential tax is dashed when there is no positive taxable gain.
 
 ### Only a taxable account can owe the tax
 

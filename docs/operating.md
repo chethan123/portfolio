@@ -32,7 +32,7 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 | `dump` | The nightly dump: dumps `db`, verifies the archive decodes, prunes old ones, into `./volumes/dumps`. Not a backup — that is a copy taken *off* this machine, which this stack never makes (ADR-0009) | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
 | `worker` | Fetches quotes and historical closes from the price provider, reached from `app` over the `price-worker-sock` volume they share | none |
-| `egress-proxy` | The only route out of this stack: a forward proxy admitting `worker`'s calls to the price provider and nothing else | none |
+| `egress-proxy` | The worker's route to Yahoo: a forward proxy allowing only the hardcoded provider hosts | none |
 | `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
 | `caddy` | The ingress front door, and where the gate is enforced | **`80:8080`, on every interface** — host side still 80; 8080 is Caddy's own listener |
 
@@ -74,7 +74,7 @@ against a running stack — nothing else would notice a container quietly regain
 for `linux/amd64` and `linux/arm64` when a version tag is pushed. `compose.yaml` has no `build:`
 stanza on purpose: if the registry is unreachable or the tag does not exist, the deploy fails and
 says so, rather than starting a multi-minute Node build on this machine. Which tag it runs is
-[`APP_VERSION`](#environment-variables), and it defaults to the floating major.
+[`APP_VERSION`](#environment-variables). Set it to `2`; the Compose default still selects version 1.
 
 **`./volumes/db/data` is the whole of the state, and it is a directory you can see.** Every
 statement, every stored original CSV, every price. It reaches the container as the `db-store` volume
@@ -93,67 +93,40 @@ from it.
 
 ## Installing
 
-**Host requirements.** Docker Engine 28.0 or newer, with the Compose v2 plugin — `docker compose`,
-two words, not the older `docker-compose` script — and Docker Compose 2.31.0 or newer beside it, a
-second floor declared alongside the first. Only one of the two actually bites on this release, and
-they are worth telling apart rather than checking together as if they meant the same thing.
+Use Docker Engine 28 or newer and Docker Compose 2.31 or newer (`docker compose`).
+Check `docker version --format '{{.Server.Version}}'` before starting: Engine 26 ignores the
+isolation option; Engine 27 rejects it. Engine 28 or newer is required.
+Keep port 80 available and provide an HTTPS reverse proxy for `PUBLIC_ORIGIN`. Container images must be reachable from the host;
+the gate needs Google access and the egress proxy needs Yahoo access.
 
-**The Engine floor is load-bearing now.** It was declared when `worker` first brought a non-default
-network into this file, even though nothing wired the kernel isolation that needed it yet; this
-release is what makes it bite, with the `gateway_mode_ipv4: isolated` option `backend`, `caddy-app`
-and `caddy-gate` below all carry — Engine 26 ignores that option silently, leaving a host address
-reachable on the bridge, and Engine 27 refuses it outright, either way with `docker compose up`
-still reporting success. Check it before you replace `compose.yaml`:
-`docker version --format '{{.Server.Version}}'`; below `28.0`, upgrade the Engine first — it does
-not merely miss a feature here, it leaves the network looking locked down when it is not, and
-nothing in the output says so.
+```sh
+cp .env.example .env
+cp allowed-emails.example.txt allowed-emails.txt
+mkdir -p ./volumes/db/data ./volumes/dumps
+```
 
-**The Compose floor is not load-bearing yet.** Resolving a volume's `device:` relative to the
-Compose file has worked since Compose 1.27.4, well under it; the 2.31.0 floor exists for something
-no release has needed so far. `docker compose up` only recreates an *existing* network to match a
-changed definition when the Compose that created it stamped a config hash onto it, a comparison
-`docker/compose` added in November 2024 and first shipped in 2.31.0 — below that version there is no
-hash to compare, so a future release that redefines a network already running under an older
-Compose would see `up` leave it exactly as it found it, a successful `up` with nothing in the output
-to say the change never took. This release does not do that either, though the reason has changed
-since the last one: back then `egress-worker` was the one network here that predated the floor,
-carried over byte-identical release to release; this release deletes `egress-worker` outright
-instead of carrying it over at all, replacing it with two networks of its own, `worker-proxy` and
-`egress-proxy` — Docker cannot flip a live plain bridge to `internal` in place, which is exactly why
-the replacement needed a new name rather than reusing the old one. So every network this release
-touches is one Compose has either never seen before or will never see again, and the five it leaves
-alone — `backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — keep the definition they
-already had, with nothing about them for even a new Compose to reconcile. Either way, there is
-nothing already running under a changed definition for an old Compose to fail to compare against, so
-nothing here fails on a Compose below 2.31.0 — check it too (`docker compose version --short`), for
-whichever later release does redefine one of these networks in place, but it is not a reason to stop
-today.
+Set `APP_VERSION=2` in `.env`: this Compose file needs the version 2 worker and proxy, but its
+default still selects version 1 ([fix tracked in #279](https://github.com/chethan123/portfolio/issues/279)).
+Configure `PUBLIC_ORIGIN`, the Google gate credentials,
+`GATE_COOKIE_SECRET`, and `POSTGRES_PASSWORD`. The dump directory must be writable by a non-root
+account other than UID 1000 (used by app and worker). Create it as that account, set `DUMP_UID` and `DUMP_GID` to its `id -u` and `id -g`, then run:
 
-Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image is pulled, and to `quay.io`,
-because the gate image is. A Google account for each family member, and one Google Cloud project to
-hold the OAuth client. `linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an
-ARM NAS needs nothing special. There is no build step and therefore no build-memory requirement —
-that is the whole point of publishing the image, and it is what makes a small NAS or VPS a
-reasonable host.
+```sh
+chmod 0750 ./volumes/dumps
+```
 
-Node itself is a requirement for *working on* this, not for running it.
+See [database ownership](#where-the-database-lives) for `volumes/db/data`. It must be empty only
+when initializing a new instance; retain it during upgrades.
 
-**The worker socket's cross-container permissions are proven nowhere in this repo's CI**, because
-its runner is none of these: an SELinux-enforcing host, `userns-remap`, or rootless Docker can each
-leave them different from what this stack assumes. [Verify it actually worked](#verify-it-actually-worked)
-has the one-time check to run yourself, right after your first `up -d`.
+Complete Google setup and the allowlist below, then start:
 
-**Bringing it up is one command, and it belongs to the README:**
-[Running an instance](../README.md#running-an-instance). It is deliberately not repeated here — that
-reader has installed nothing and needs the whole shape; you are at a terminal and need what comes
-after.
+```sh
+docker compose up -d
+```
 
-**It will refuse to start until the gate is configured, and that is the design.** There is no mode
-in which this stack boots open: every variable in the gate section of `.env` is interpolated with
-Compose's `${VAR:?}` form, so a missing or empty one stops `docker compose up` before any container
-runs, with a message naming the variable. A missing `allowed-emails.txt` stops it the same way.
-Everything in this section up to [Verify it actually worked](#verify-it-actually-worked) is
-therefore prerequisite, not optional hardening.
+Missing required variables or bind-mount paths prevent a complete startup. Verify the services
+and sign-in before using the instance. CI checks socket access on its runner; SELinux, rootless
+Docker, and user-namespace configurations still need the [deployment check](#verify-it-actually-worked).
 
 ### One-time Google setup
 
@@ -164,9 +137,9 @@ character, the gate's settings, the allowlist, and how to prove that a real sign
 refusal both work. Read it before the first `up` — you need the public origin your house proxy will
 serve this instance at decided first, because the redirect URI is built from it.
 
-What it leaves here: the credentials it produces are `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`,
-`GATE_COOKIE_SECRET` and `PUBLIC_ORIGIN` in `.env` ([Environment variables](#environment-variables)),
-and none of them reaches the application — they configure the `gate` service alone.
+Set `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET`, and `PUBLIC_ORIGIN` in `.env`
+([Environment variables](#environment-variables)). The three gate credentials stay in the sidecar.
+`PUBLIC_ORIGIN` is also passed to the app.
 
 ### Who may enter
 
@@ -223,18 +196,11 @@ warning does not apply, and `docker compose down -v` is harmless for the same re
 
 ### What to put in `.env`
 
-`cp .env.example .env`, then fill in the gate section and generate `POSTGRES_PASSWORD` —
-[`google-sign-in.md`](google-sign-in.md) walks you through where the gate's own values come from;
-[Environment variables](#environment-variables) has `POSTGRES_PASSWORD`'s own recipe
-(`openssl rand -hex 32`). Both are required now: `docker compose up` refuses to start with either
-missing, naming whichever it reaches first. `POSTGRES_PASSWORD` is worth getting right before that
-first `up` specifically, because Postgres reads it only when it first initialises an empty data
-directory — setting it after is a different, more annoying operation
-([Environment variables](#environment-variables) has that recipe too). Beyond the two of them, every
-setting has a working default, `DATABASE_URL` included: Compose points it at the bundled `db` service
-unless you say otherwise.
-
-The full surface, with defaults, is the table in [Environment variables](#environment-variables).
+Generate `POSTGRES_PASSWORD` with `openssl rand -hex 32` before the first startup.
+Copy `.env.example` and set the required origin, gate credentials, database password, and dump
+UID/GID from the [installation checklist](#installing). Compose supplies `DATABASE_URL` for its
+bundled database unless you override it. Changing `POSTGRES_PASSWORD` after initialization also
+requires changing the database role’s password; see [Environment variables](#environment-variables).
 
 ### Running against your own Postgres
 
@@ -267,8 +233,8 @@ Set `DATABASE_URL` in `.env` to point at it. Four things that catch people:
 **What this mode does and does not cost you.** The worker still holds no database credential and
 still shares no network with `app` or `gate` — nothing about pointing `DATABASE_URL` elsewhere
 touches it. What it does give up is `app`'s own no-egress guarantee: `external-db`, the network
-`compose.external-db.yaml` adds so `app` can reach a host outside this Compose project, is the one
-network in this stack that carries a default route, unlike every other network here.
+`compose.external-db.yaml` adds so `app` can reach a host outside this Compose project, adds a default route to `app`. The ordinary stack already gives external routes to
+Caddy, the gate, and the egress proxy; it withholds them from `app` and `worker`.
 
 ### Verify it actually worked
 
@@ -433,10 +399,10 @@ service's password; how to set it the first time is [above](#what-to-put-in-env)
 it once the cluster already exists is a few paragraphs down in this same section — not under
 [Running against your own Postgres](#running-against-your-own-postgres), which is only about
 pointing at a Postgres this project does not manage.
-`APP_VERSION` is the published image tag the `app` service runs — it defaults to `1`, the floating
-major, which is what makes `docker compose up -d` an upgrade. Pin a full version (`APP_VERSION=1.0.3`)
-to hold this instance where it is, or to go back to a known-good image; see
-[There is no rollback](#there-is-no-rollback) first, because the image alone is not one. Neither
+`APP_VERSION` selects the image used by `app`, `worker`, and `egress-proxy`. Set it to `2` for this
+Compose file; the default `1` lacks the worker and proxy entrypoints. The floating `2` tag follows
+version 2 releases. Pin a full version (for example `APP_VERSION=2.0.3`) to hold an installed release;
+see [There is no rollback](#there-is-no-rollback) first, because the image alone is not one. Neither
 variable is validated at startup: they are resolved by Compose before a container exists, so a typo
 surfaces as a failed pull, not as the message naming the variable that the settings below get.
 
@@ -1013,8 +979,8 @@ seconds per app process, so a monitor polling faster than that can see a transit
 real state by that much.
 
 **`pricing.scheduler`** — `not_started`/`running`/`on_schedule`/`overdue` (spec price-health/03),
-read passively off the in-process price poller's own live state: this endpoint never starts, stops
-or retimes it, and never spends a provider call to answer. `on_schedule` means armed and not yet
+read from the poller's in-process state. Root middleware first runs the idempotent scheduler
+bootstrap; the loader reads its snapshot without retiming it or calling the provider. `on_schedule` means armed and not yet
 late — nothing stronger. **A fresh container reports `on_schedule` for up to one full refresh
 cadence** (Settings → Prices; seeded to 15 minutes), because there is deliberately no immediate first
 tick on boot (see [Logs](#logs)'s quiet-period note); `on_schedule` there does not mean a tick has
@@ -1037,8 +1003,9 @@ poller slot, or a slot that has not yet recorded one. **A weekend, or any hour o
 quote window (§6.2, market hours padded ±15 minutes), reports `market_closed`** — the tick still ran,
 and still spent a request on the backfill batch, but asked for no quotes; this is not a fault either.
 `ok` covers a run that priced everything it asked for, the valid zero-instrument case included.
-`partial` is usually one bad ticker, answered on
-**Settings → Prices** rather than here — this response carries no symbol. `failed` with
+`partial` means some requested quotes were not obtained. Inspect stale/unpriced holdings and
+provider logs; this response carries no symbol. Settings → Prices lists historical coverage gaps,
+so a stale quote with complete history may not appear there. `failed` with
 `pricing.worker: "available"` means only that the listener answered *this* health probe while the
 *last tick's* quote attempt did not succeed end to end — not the same shape as `partial`, but not
 proof the socket hop was fine at the time of that attempt either: `worker` is a five-second-cached
@@ -1068,29 +1035,12 @@ section, take this one, and see [Upgrading](#upgrading).
 grant — all of them leave that succeeding. The container is healthy, the dashboard is green, and
 every upload returns a 500.
 
-**The price provider, deliberately.** A third-party outage must not make Compose restart a perfectly
-healthy app. Stale prices are a UI signal — the "as of" line — not a health signal. `pricing.worker`
-narrows this by exactly one hop — this process can or cannot reach the worker's own listener — and
-still says nothing about `egress-proxy` or Yahoo, so a healthy `worker: "available"` next to stale
-prices still means the fault is further out: see [Logs](#logs). `pricing.quotes` narrows further —
-`failed` beside `worker: "available"` says the last real attempt did not succeed end to end — but it
-still cannot say whether the fault is `egress-proxy` or Yahoo itself: the worker protocol collapses
-both into the same `502`/`504`, and neither this endpoint nor the app behind it can tell them apart.
+**The price provider is not an HTTP availability check.** A provider failure can leave the app
+serving stored data with HTTP 200. Inspect `pricing` and the logs separately. An available worker
+means only its recent listener probe succeeded; it does not establish where an earlier fetch failed.
 
-**Whether anybody can actually get in.** `/healthz` is the one path Caddy does not put to the gate,
-which is what lets a monitor probe it without a Google account — and means a gate that is down,
-crash-looping on a bad secret, or holding an allowlist that no longer has anyone on it leaves this
-endpoint answering `200` while the household is locked out. Nothing watches the gate's verdict for
-you, and `gate`'s own container healthcheck only asks whether the sidecar is alive, not whether it
-would admit anyone.
-
-**Disk and memory.** Nothing here watches either. `caddy` does now carry a healthcheck — a
-`/healthz` request through its own proxy path to `app`, so an ingress that is up but cannot reach the
-app shows as unhealthy. It still says nothing about whether anybody can sign in.
-
-One shape worth being able to recognise: if the ledger read itself throws, the body comes back
-`"database":true` and `"migrations":"current"` with `"status":"unhealthy"` — the healthy body with a
-single field changed. Another reason to alert on `status` rather than on the fields.
+`/healthz` bypasses the gate and allowlist, so HTTP 200 does not prove a family member can sign in.
+It also does not monitor free disk space or memory; monitor those on the host.
 
 ### An unhealthy container is not restarted
 
@@ -1298,15 +1248,14 @@ set -e
 DUMP="portfolio-$(date +%F).dump"
 
 docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom > "$DUMP"
-docker compose exec -T db pg_restore --list < "$DUMP" | head
+docker compose exec -T db pg_restore -f /dev/null < "$DUMP"
 ```
 
-`pg_restore --list` reads the archive's table of contents without touching a database. If it prints
-the objects, the file is a real archive; if it errors, you found out today rather than on the night
-you needed it.
+This decodes the full archive without restoring it to a database. Listing the table of contents
+alone can pass for a truncated archive. A restore test is still needed to check recovery end to end.
 
-Automate it with whatever already runs on the host — cron, a systemd timer, your NAS. A daily dump
-kept for a few weeks is proportionate for a household.
+The bundled dump service already schedules daily dumps. Use this manual command before an upgrade
+or when you need an extra copy.
 
 ### The second thing to keep is `.env`, and the third is the allowlist
 
@@ -1441,7 +1390,7 @@ crossing this release.
 
 There is no `git pull` and no build. The `app` service is set `pull_policy: always`, so
 `docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
-container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
+container; with the required `APP_VERSION=2` that is the newest `v2.x.y` release. A
 checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
 `Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
 `volumes/db/data` and `volumes/dumps` directories beside them.
@@ -1450,14 +1399,10 @@ checkout of this repository is not needed to run or upgrade an instance — only
 pulled.** The release that added `worker` and the `price-worker-sock` volume was the first to need
 this, and every release since has needed it again, this one included: `compose.yaml` is one of the
 files above that `pull_policy: always` never touches, so bring the new one in yourself, in this
-order — replace `compose.yaml` with this repository's copy at the release's tag (there is no GitHub
-Release and no attached file to fetch instead, only the git tag CI built the pushed image tags from,
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)'s `publish` job) — then confirm the
-Engine: `docker version --format '{{.Server.Version}}'` at or above `28.0`. **That floor was
-declared at the release that added `worker`, as a warning for a network-lockdown release still to
-come — this is that release, so the warning is over: an Engine below 28.0 now lets `up` report
-success while the isolation below is silently ignored** ([Installing](#installing) has what each
-version short of it does instead). Then `docker compose up -d`; if this is the first time you are
+order: replace `compose.yaml` with the repository copy at the chosen
+[release tag](https://github.com/chethan123/portfolio/releases), then confirm Docker Engine is at
+least 28 with `docker version --format '{{.Server.Version}}'`. Engine 26 ignores the isolation
+option; Engine 27 rejects it. See [Installing](#installing). Then `docker compose up -d`; if this is the first time you are
 crossing the release that added `worker`, that command is also what recreates `app` for its changed
 mounts and brings `worker` up alongside it. Run [the socket check](#verify-it-actually-worked) again
 afterwards: a host whose engine or container runtime changed since the old instance was last

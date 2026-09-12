@@ -1,5 +1,7 @@
 # The lock slice, reviewed before launch
 
+> Follow-up (2026-09-11): Subsequent hardening added the return-path guard, middleware wiring tests, and grant management. See [security.md](../security.md) for current limits; the original review below is retained.
+
 A launch review of the passkey lock (spec 0019, tickets 01–07, ADR-0012) against `main` at
 `1ffdc6e` — the head that carries #227 through #241. Written to be picked up as work: §7 is an
 ordered remediation plan, each item one pull request. Nothing here is a source of truth; the spec,
