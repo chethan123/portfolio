@@ -126,7 +126,8 @@ to [Analysis](analysis.md).
 
 A line needs at least two plotted points, which can include the household’s manual history. Try **All** or let more dated samples
 accumulate; a second statement is not required. For 1D, prices must have been observed at two
-distinct times. The empty panel still says a second statement is needed; that wording is outdated.
+distinct times. The empty panel still says a second statement is needed; that wording is outdated
+([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)).
 An account with no records differs from one with records but no prices.
 
 ## On a phone

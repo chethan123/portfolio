@@ -106,7 +106,8 @@ mkdir -p ./volumes/db/data ./volumes/dumps
 ```
 
 Set `APP_VERSION=2` in `.env`: this Compose file needs the version 2 worker and proxy, but its
-default still selects version 1. Configure `PUBLIC_ORIGIN`, the Google gate credentials,
+default still selects version 1 ([fix tracked in #279](https://github.com/chethan123/portfolio/issues/279)).
+Configure `PUBLIC_ORIGIN`, the Google gate credentials,
 `GATE_COOKIE_SECRET`, and `POSTGRES_PASSWORD`. The dump directory must be writable by a non-root
 account other than UID 1000 (used by app and worker). Create it as that account, set `DUMP_UID` and `DUMP_GID` to its `id -u` and `id -g`, then run:
 

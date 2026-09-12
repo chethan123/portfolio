@@ -75,7 +75,10 @@ not require sensitive-scope verification; Google’s app-branding requirements a
 
 Testing is also possible. Google exempts basic profile, email, and OpenID sign-in from Testing’s
 test-user restriction and seven-day authorization expiry. Publishing is not needed to avoid those
-limits for this client. [Google’s audience rules](https://support.google.com/cloud/answer/15549945?hl=en).
+limits for this client. In the basic-scope exception, [Google’s audience rules](https://support.google.com/cloud/answer/15549945?hl=en)
+state (excerpt; accessed 2026-09-12 UTC):
+
+> For such requests, your users do not need to be in the trusted user list
 
 ## Step 3 — the OAuth client
 

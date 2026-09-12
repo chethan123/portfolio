@@ -40,7 +40,8 @@ account alone. All starts at its first statement; Custom uses the dates you choo
 never included. The chosen range lives in the URL and is remembered in this browser.
 
 A line needs two valued-date samples with holdings. Try All or let more days accumulate; another
-statement is not required. The empty panel's second-statement instruction is outdated.
+statement is not required. The empty panel's second-statement instruction is outdated
+([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)).
 For 1D, the latest stored session needs two observed instants.
 The readout names the selected point and can differ from the current headline.
 
