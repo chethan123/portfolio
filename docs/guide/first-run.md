@@ -57,7 +57,7 @@ A highlighted card sits above every page until the instance is set up:
 > Settings → People — every account belongs to exactly one of them.
 
 Do that, and it changes to **One more step**, pointing at Settings → Accounts. Once at least one
-person and one account exist, it disappears for good.
+person and one account exist, it disappears. The app checks these conditions on each page load.
 
 It goes away at that point, **not** after your first upload. An instance with accounts and no
 statements is set up and waiting, so there is nothing left to prompt about.

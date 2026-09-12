@@ -9,7 +9,9 @@ file per ticket, each written so an agent that has read nothing else can start f
 
 A spec records what was agreed at approval time, and is mostly not edited after its slice lands:
 the tree and `git log` are the record of what shipped, so a `ready-for-agent` label on an old spec
-is a fact about its filing, not about today. Two deliberate exceptions:
+is a fact about its filing, not about today. The same applies to original `proposed` status lines.
+Current implementation notes belong in this index; 0019–0021 are marked implemented here because
+their original status still says proposed. Two deliberate exceptions to preserving the spec body:
 
 - **A claim that turned out wrong is corrected in place, by banner rather than by rewrite** — the
   `Superseded` banners on [`foundation/01`](foundation/01-runnable-skeleton.md),
@@ -30,7 +32,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0002](0002-pricing.md) | Pricing: the provider seam, market calendar, refresh, in-process poller |
 | [0003](0003-holdings.md) | The Holdings table: filtering, grouping, subtotals, money maths |
 | [0004](0004-ingest.md) | The four-screen statement upload over a durable draft |
-| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — the date floor and the return path have landed; pool resilience, the nameless-quantity refusal and the filed-behind statement are still owed |
+| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — the date floor and the return path have landed; pool resilience has also landed; the nameless-quantity refusal and the filed-behind receipt remain owed |
 | [0006](0006-dividends.md) | The Income screen and `annual_dividend` through the valuation contract |
 | [0007](0007-masking.md) | Masking: policy row, per-browser state, the one amount renderer |
 | [0008](0008-chart-ranges.md) | The chart range presets, cookie and custom span |
@@ -41,12 +43,12 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0013](0013-owner-filter.md) | The household-wide owner filter (ADR-0008) |
 | [0014](0014-scheduled-dump.md) | The scheduled dump sidecar and the dump/backup split (ADR-0009) |
 | [0015](0015-chart-series-assembly.md) | One series assembly behind both chart surfaces, and the coverage rule off the routes |
-| [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same rows in tens of milliseconds |
+| [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same valuation rows without repeated per-instant price lookups |
 | [0017](0017-price-backfill.md) | The price spine backfilled from the feed's own history — gap-triggered, on every refresh, inserted where absent, never over a live close (ADR-0011) |
 | [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010) |
-| [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; proposed) |
-| [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (proposed) |
-| [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (proposed) |
+| [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; implemented) |
+| [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (implemented) |
+| [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (implemented) |
 
 ## The ticket directories
 

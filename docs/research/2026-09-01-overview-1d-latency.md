@@ -1,5 +1,7 @@
 # Why the Overview takes eleven seconds with 1D selected — 1 September 2026
 
+> Follow-up (2026-09-11): The running-total query is implemented in [valuation.server.ts](../../app/lib/valuation.server.ts). Timings below describe the original benchmark, not a measurement of the current build.
+
 *Diagnosed against `46d65df`, on a local PostgreSQL 16.13 (Ubuntu 24.04) with the demo household
 scaled to the reported shape. Every number below — except the covering-index measurement, whose two index definitions are given
 where it is reported — was produced by the scripts in

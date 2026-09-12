@@ -35,29 +35,14 @@ Three things it can say instead of a figure:
 
 ## The chart
 
-**Performance** draws this account alone, over the same nine ranges Overview offers — **1D**,
-**1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All** or a **Custom** span you pick yourself. It
-opens on 1Y, or on whichever range this browser last picked on either screen. **1D** plots the
-latest trading session for this account alone — one point for each distinct moment the feed
-reported a price — with times of day along the axis instead of dates.
+**Performance** uses the same ranges as [Overview](overview.md#the-range-control), but reads this
+account alone. All starts at its first statement; Custom uses the dates you choose within that history. Manual household history is
+never included. The chosen range lives in the URL and is remembered in this browser.
 
-The range is part of the address, so a chosen range survives a reload and can be bookmarked or sent
-to someone else in the household. A range this account's own history cannot reach yet — 5Y on an
-account eight months old — shows greyed out rather than doing what All already does.
-
-**All and Custom are measured from this account's own first statement, never the household's.** An
-older sibling account does not make this one's history look any longer than it is, and neither
-range ever pulls in the household's hand-typed pre-app figures — see below.
-
-A line needs two dated points. With fewer than two in the chosen range, the panel says how many it
-has — try **All**, or wait until a second statement or balance is recorded. On **1D** the same rule
-counts the session's observed moments instead: until the feed has reported prices at two distinct
-times that day, there is nothing to join into a line.
-
-The readout above the line works exactly as it does on Overview: the point the line ends at until
-you point at the chart, then whichever point is nearest. Nothing here is ever marked hand-typed,
-because the chart never draws the household's hand-typed pre-history. That figure is the
-household's net worth, not this account's.
+A line needs two valued-date samples with holdings. Try All or let more days accumulate; another
+statement is not required. The empty panel's second-statement instruction is outdated.
+For 1D, the latest stored session needs two observed instants.
+The readout names the selected point and can differ from the current headline.
 
 ## The holdings table
 
@@ -67,8 +52,7 @@ Every position this account holds, with the count in the panel header.
   the asset class and, where it applies, **price is stale** or **never priced**.
 - **Quantity**, **Price**, **Value** — a dash rather than `$0.00` wherever nothing can be priced.
 
-There is no "today's change" column, and no change figure beside the total. See [Account
-detail](../../README.md#account-detail--one-account-end-to-end) for why.
+There is no "today's change" column, and no change figure beside the total. The chart shows account value, not investment return.
 
 There is no **Annual dividend** column either, though [Holdings](holdings.md#the-columns) has one.
 What this account is projected to pay is a row of the by-account breakdown on
@@ -90,17 +74,13 @@ It goes when you navigate away.
 
 ## Set balance
 
-A bank or loan account has no statement worth mapping, so it gets a form instead. The panel sits at
-the foot of the page, and **Set balance** in the header jumps to it.
-
 ![A bank account showing the Set balance form](images/set-balance.png)
 
 ![The same account on a phone: Upload statement above Set balance and Edit details, sharing the row beneath it](images/set-balance-mobile.png)
 
-**Only bank and loan accounts are offered it.** A brokerage, IRA or workplace plan holds individual
-positions, and typing one cash figure against it would record everything else it holds as sold — so
-those accounts have no form at all, and a submission against one is refused. Use [an
-upload](upload.md) for them.
+Bank and loan accounts offer a form for recording a single USD balance. Any open account can also
+receive a CSV upload. Securities accounts have no Set balance form because one cash row would
+replace their other holdings; use an upload or a Holdings correction.
 
 ### The amount
 
@@ -118,27 +98,14 @@ instead, so re-recording a stale number is never one click.
 
 ### The date
 
-**As of** opens on today. **A date in the future is refused** — a balance is
-recorded once it is true. Only tomorrow is allowed through, which covers a household in a time zone
-ahead of the server. **A date before 1970-01-01 is refused** too — that is the first day this
-application can put a price on anything, so nothing dated earlier could be valued. It is the floor a
-mistyped millennium lands under: `1026` for `2026` is one keystroke, it is not in the future, and it
-used to be accepted.
-
-Under the box the form says which day the account is currently reading, and whether that came from a
-balance you set or from a statement.
+As of starts at today. Dates before 1970 or after tomorrow are refused. Tomorrow is allowed for
+households ahead of the server’s time zone. The form also states the current snapshot’s date.
 
 ### What saving does
 
-**Record balance** **appends a new record on its own date.** It does not overwrite anything:
-
-- Every earlier balance stays where it was, so your net worth last March does not move because you
-  recorded a figure in August.
-- Recording a second balance for a date that already has one is a correction, and the later
-  submission is the one that counts.
-- Undo is another entry, not a delete.
-
-After it saves, the form empties and a line confirms what the account now reads and as of when.
+Record balance appends a snapshot on the date you choose. A later submission for the same date
+supersedes the earlier one. A backdated balance can change values from that date until the next
+snapshot; an older record does not replace a newer current balance. Undo by recording another entry.
 
 ## On a phone
 

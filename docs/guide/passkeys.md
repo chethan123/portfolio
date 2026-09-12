@@ -156,9 +156,8 @@ A browser does not stay unlocked forever on its own say-so, even if nobody ever 
 
 **Going untouched for a while is enough by itself.** Somewhere between about seven and a half and
 fifteen minutes with nobody asking this app for anything, and it is locked again, waiting for another
-check — exactly how long depends on where in that stretch the last ask fell. Ordinary use — reading a
-screen, opening another — keeps pushing that moment further off, so a browser you are actually using
-stays unlocked; one left open and forgotten does not.
+check — exactly how long depends on where in that stretch the last ask fell. Server requests made while navigating or submitting forms can renew the grant. Leaving a page
+open, reading, or scrolling does not renew it.
 
 **Stepping away for around a minute does the same, sooner.** Switch away to another app or tab, or
 lock your phone, for about that long, and coming back to this one asks the app to lock it right

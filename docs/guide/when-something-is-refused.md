@@ -7,20 +7,12 @@ This page is for the handful where the message is clear but the *cause* is somew
 
 ## "This upload has expired or was already recorded"
 
-An upload in progress is a draft, and a draft does not live forever.
+Starting an upload clears unfinished drafts more than 24 hours old. Committing removes its draft
+immediately. A draft can also become unavailable if its account closes.
 
-- **Drafts are cleared after 24 hours.** A half-finished upload left overnight is gone in the
-  morning. Start it again; nothing was recorded, so nothing is lost but the mapping you did — and
-  the column mapping itself is remembered per institution, so the second attempt arrives prefilled.
-- **You already finished it.** The draft is deleted the moment the statement is recorded, so going
-  back to a step you completed lands here. The statement is safe. Open the account to see it.
-- **The account was closed while the draft was open.** A closed account's history does not change,
-  so the statement can never land — the draft reads as expired rather than as forbidden.
-
-  Trying to record anything new against a closed account — a fresh upload, a balance, a
-  correction — is refused with a sentence that suggests reopening it from Settings. **There is no
-  reopen control in this version** — closing is one-way. If the statement is still real, add the
-  account again under [Settings](settings.md) and upload against the new one.
+Open the account to check whether the statement landed. If it did not, start another upload;
+saved mappings and instrument names remain. For a closed account, the message suggests reopening
+it from Settings, but that control does not exist yet. See [closed-account recovery](people-and-accounts.md#correcting-or-retiring-an-account).
 
 ## A securities account will not let you type a balance
 
@@ -99,6 +91,9 @@ A statement is rejected outright, rather than partly imported, when it cannot be
 - **It is too large.** The cap is set by whoever runs the instance.
 - **A quantity makes no sense**, or rows disagree about what date the statement is. The message
   names the line, so open the file at that line.
+- **Rows disagree about the account number.** Export one account per file; commit refuses mixed numbers.
+- **Quantity multiplied by price, per-share basis, or dividend rate exceeds the money field's limit.**
+  Check the named row's quantity and basis mapping; commit refuses amounts it cannot store.
 - **The statement dates itself before 1970-01-01.** That is the earliest date this application can
   price anything, so a statement older than it could not be valued.
 

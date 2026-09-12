@@ -94,19 +94,20 @@ a debt or a debt into savings without anything being typed. Both messages appear
 and name what is in the way. An account with no statement yet can be changed to anything, and so can
 any account moving between *Brokerage*, *Workplace plan* and *IRA*.
 
-**Nothing is ever deleted here.** There is no delete button anywhere in the app. An account you have
-stopped using is *closed* instead: at the foot of its page, tick the acknowledgement that names the
+**Accounts are closed rather than deleted.** A person who owns no accounts can be removed, and so can a passkey.
+To close an account: at the foot of its page, tick the acknowledgement that names the
 account, then select **Close**, followed by the account's name. Without the tick the close is
 refused and nothing changes.
 
 Closing records today as the closing date. From then on:
 
 - The account stops counting toward current net worth.
-- It keeps counting on every date before it closed, so your history does not change.
+- Daily history includes dates whose UTC midnight is before the closing instant, usually including that day.
 - It disappears from the account list on the upload screen, because a closed account's history does
   not change.
 
-There is no reopen control in this version, so close an account only when it is genuinely finished.
+There is no reopen control in this version. If you close the wrong account, add it again and
+record future statements against the new account; the old account keeps its earlier history.
 
 The reasoning behind closing rather than deleting, and behind the three-way tax treatment, is in
 [Settings — people and accounts](../../README.md#settings--people-and-accounts).

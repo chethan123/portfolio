@@ -160,9 +160,9 @@ column_mapping (
 
 **Money and quantity are `numeric`, never floating point.** `numeric(20,8)` for quantity to handle
 fractional shares, `numeric(20,4)` for prices and money. The Postgres driver must be configured to
-return numerics **as strings**, not JS numbers — the default coercion silently rounds, and
-cent-level drift on a six-figure balance shows up as two dashboards disagreeing about net worth.
-Arithmetic belongs in SQL where possible; anything computed in JS uses a decimal library.
+preserve numerics **as strings**, not coerce them to JS numbers. The pool explicitly preserves
+`numeric`, bigint IDs, and dates as strings. Arithmetic uses SQL `numeric` or the scaled
+`bigint` helpers in `money.ts`.
 
 ### 4.2 Ownership
 
@@ -400,9 +400,9 @@ grouping and sort control closes the editor for free. §8.1's screen has no Reac
 not introduce any — it works with JavaScript off, survives a reload, and is the same grammar the
 rest of the screen is built from.
 
-> **Accepted limitation.** A correction cannot fix the *past*. Restating a figure on a date that
-> already has a statement means deleting that position set and re-recording it, which is §5.2's undo
-> and has no interface yet.
+> **Accepted limitation.** The Holdings editor cannot choose a past date. A same-date CSV reupload
+> or bank/loan balance entry can supersede an earlier snapshot without deleting it. Removing a bad
+> stored snapshot still requires operator SQL; there is no delete interface.
 
 ---
 
@@ -466,12 +466,12 @@ Three tiers, deliberately separate:
 ```
 price_observation  (instrument_id, as_of, market_date, price, fetched_at, payload)  -- append-only log
 quote              (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten
-price_daily        (instrument_id, date, close)                                     -- immutable spine
+price_daily        (instrument_id, date, close)                                     -- daily prices; live refresh may update existing rows
 ```
 
-An observation is not history and a quote is not a fact: history is finished days, an observation is
-a moment we were told about, and the quote is today's best answer. A refresh writes all three in one
-transaction, so no two of them can disagree about one fetch.
+Observations retain provider-stamped instants. Quotes hold the current answer. Daily rows supply
+dated valuation; today's row is provisional. A quote refresh writes these tiers in one transaction,
+but their selection and conflict rules differ, so their prices need not always agree.
 
 The observation log arrived with the 1D chart range ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)),
 and it is the one tier kept for a reason other than a screen: every distinct price the feed reports
@@ -492,10 +492,10 @@ price means: the currency guard above, and every check that decides whether a fe
 trustworthy enough to write, run here, in the app, after the answer is already back across the wire
 — never in the process that went and fetched it.
 
-An intraday refresh can never corrupt history, and a missed day is a visible gap rather than a wrong
-close — a gap the next backfill of that instrument fills as a side effect, since a hole is never a
-trigger on its own. `holding_valued_at` reads `price_daily` alone, so an observation can never move a
-line that has already been drawn.
+`holding_valued_at` reads daily rows, not observations. Live refresh can update a provider-dated
+daily row within its seven-day date bounds, including a revised past close. Backfill inserts only
+missing rows. Both can change historical chart values; an interior gap alone does not trigger
+backfill.
 
 **The spine is backfilled from the feed's own history**
 ([ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). It used to begin the
@@ -589,8 +589,7 @@ geometrically and anchored on the window's end, so the recent end stays dense wh
 fits ([ADR-0003](docs/adr/0003-anchored-geometric-chart-sampling.md)). 1D is the exception — it
 plots the latest observed session off the observation log, one point per distinct instant,
 unsampled (§6.2, ADR-0006). The hover/focus readout is pre-rendered: every point's date and figure
-are in the HTML and CSS reveals one at a time, because the application has no client state to draw
-one from ([ADR-0004](docs/adr/0004-pre-rendered-chart-interaction.md)).
+are in the HTML and CSS reveals one at a time, without chart-specific client state ([ADR-0004](docs/adr/0004-pre-rendered-chart-interaction.md)).
 
 Structurally, the rule is a signature: the owner filter is a required first argument with no default
 on every household-scoped reader in `valuation.server.ts`, so a new screen cannot read holdings
@@ -631,15 +630,13 @@ accounts stands, and is honoured as a rule rather than a one-off — a dimension
 only once the data holds two distinct values for it, so a filter that could only mean "everything"
 is never drawn.
 
-**Tap-to-expand is not built.** The mobile card list is, by restyling the one table rather than
-rendering a second tree, and every field is visible on the card. Collapsing one needs either client
-state, of which this application has none, or a `<details>`, which cannot wrap a `<tr>`. Recorded
-as owed rather than quietly dropped.
+**Tap-to-expand is not built.** On mobile, CSS displays each table row as a card with every field
+visible. Collapsing cards remains future work.
 
 ### 8.2 Query layer
 
-Each dashboard writes its **own SQL** against the normalised tables. There is **no materialised fact
-table and no daily rollup job**.
+`valuation.server.ts` owns valuation queries. Screens use its results and shared exact-arithmetic
+and grouping helpers. There is **no materialised fact table or daily rollup job**.
 
 The shared join is factored into a plain (non-materialised) SQL view so the screens that read it
 cannot drift on how they resolve "current holdings":
@@ -752,19 +749,14 @@ mutation. Everything else that writes lives behind Settings.
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
 | Prices | The refresh cadence — how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours — and the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
-| Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
+| Display | The masking policy; theme follows the system until §12's toggle is built |
+| Passkeys | Enrol and remove credentials used by the household browser lock |
 
 Classifications, Instruments and History are not built yet: the strip today is People, Accounts,
-Tax, Prices and Display, and the Settings index names the other three as what later slices build.
+Tax, Prices, Display and Passkeys. The Settings index names the other three as future work.
 
-**Tax is the first tab that is a preference rather than a set of domain rows.** Every other tab
-creates or edits something the portfolio is made of; this one holds a single number that describes
-the household rather than its holdings. It is not an environment variable, which is where every
-other non-domain setting lives (§10.1), because the environment configures the *deployment* — where
-the database is, which timezone a close is stamped in — and a bracket is not a deployment fact. It
-is the household's own figure, it moves when their income or their state does, and the person who
-wants it changed is the one reading the number it produced rather than the one with a shell on the
-container. Behind a redeploy it would be stale in exactly the case the panel was built for.
+Tax rate, masking policy, and refresh cadence are household preferences stored in `app_setting`.
+Environment variables configure the deployment; changing a household preference needs no redeploy.
 
 **Prices holds the refresh cadence, and it is the tab that moved a setting out of the
 environment.** The cadence began life as `PRICE_POLL_INTERVAL_MINUTES`, filed on the deployment side
@@ -820,7 +812,7 @@ since nothing else can be created until at least one of each exists.
 | Layer | Choice | Reasoning |
 |---|---|---|
 | Runtime | **Node 24 LTS** | Bun is production-viable and faster, but Node is the fewer-surprises target for software other people deploy, and `Bun.SQL` would lock the data layer to the runtime. Throughput is not a constraint here — one family, ~100 symbols every 15 minutes. Native TypeScript type stripping is stable as of v24.12.0, which lets **standalone scripts** (migration runner, seeds, one-off CLI tasks) run as `.ts` directly. It does *not* remove the app's build step: React Router builds both client and server bundles through Vite. Types are stripped, never checked — `tsc --noEmit` stays in CI. |
-| Framework | **React Router 7** | Full-stack, SSR + client routing, Vite-based, good self-host story. Single codebase, single container, shared types. Chosen over SvelteKit purely on existing familiarity, which outweighs any technical edge for a solo-maintained project. Next.js rejected as the fiddliest to self-host. |
+| Framework | **React Router 7** | Full-stack, SSR + client routing, Vite-based, good self-host story. One codebase, shared types. Chosen over SvelteKit purely on existing familiarity, which outweighs any technical edge for a solo-maintained project. Next.js rejected as the fiddliest to self-host. |
 | PWA | **Hand-rolled manifest + network-only worker** | Shipped by spec 0012, with no plugin and no precache on purpose: the worker stores nothing and stays short enough to verify by eye (ADR-0007). `vite-plugin-pwa`'s generated, caching worker is the considered-and-refused alternative |
 | Database | **Postgres** | |
 | Access | **Kysely** | Typed SQL builder, not an ORM. `kysely-codegen` derives types from the live database **including views**, so `holding_valued` is typed like a table. Drizzle was the runner-up — better migration ergonomics, but it wants the schema to live in TypeScript, and this design puts a SQL view at the centre, which is exactly where TS-schema-first tools force you to maintain a definition twice. |
@@ -1503,12 +1495,12 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    than an unknown. Three unlike things produce that null — a provider answering "no dividend
    fields" for a growth ETF, which is genuinely zero; a workplace-plan trust the refresh never asks
    about, because it has no symbol; and the seeded `USD` row, which no provider will ever quote. The
-   figure therefore understates by every unquoted holding, by all cash interest, and by any interest
-   on a loan. This is the one place the codebase departs from §8.2's "sum what is known and label the
+   projection omits unquoted income and borrowing costs. Missing positive payments lower it;
+   missing loan interest can overstate net income. This is the one place the codebase departs from §8.2's "sum what is known and label the
    coverage": applied literally here, a portfolio where most holdings correctly pay nothing would
    report "based on 4 of 23 holdings", and a caption that cries wolf on two-thirds of a table is one
-   nobody reads. Both screens label the total a **lower bound** instead, the way the unrealized panel
-   labels its tax figure an upper bound. Lifting this means deciding per row from whether the
+   nobody reads. The UI labels it a **lower bound**, but that label is not a mathematical guarantee when
+   borrowing costs are missing. Lifting this means deciding per row from whether the
    instrument was ever quoted — a refreshed `quote` row means the provider answered, and `fixed` or
    `manual` means it was never asked — which is a change to one derivation, not to the schema.
 10. **There is no sign-out control, and the gate's sign-out URL is not one.** It clears the gate's

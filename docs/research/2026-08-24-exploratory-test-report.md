@@ -1,5 +1,7 @@
 # Exploratory test report — 2026-08-24
 
+> Follow-up (2026-09-11): Pool error handling and reproducing tests now exist in [server/db.ts](../../server/db.ts) and [pool-resilience.test.ts](../../tests/pool-resilience.test.ts). The original failure evidence is retained below.
+
 An adversarial pass over the whole running application, done by driving the real app rather than by
 reading it. **Nothing was fixed when this was written**, and two entries — `SET-1` and `SET-5` —
 have since been annotated where they were fixed. Every entry is written so someone else can pick it

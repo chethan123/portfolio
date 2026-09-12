@@ -1,5 +1,10 @@
 # Intraday quotes are an observation log, not a third history tier
 
+> Current write behavior: backfill inserts missing daily rows without replacing them. Quote refreshes
+> can update daily rows dated within seven days either side of today's market date, including past closes.
+> Daily rows are not immutable. See [the data model](../data-model.md).
+
+
 The price poller has always fetched a live quote every refresh cadence during market hours and
 overwritten it in place, discarding every intermediate price. To support a 1D chart range — and
 because the owner deliberately values retaining rich data whose future use is unknown — we now

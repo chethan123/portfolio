@@ -287,6 +287,7 @@ here, in place, with DESIGN.md's table given as the one to believe.
 | `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true of the bundled database: an operator never sets it, the code never guesses it, and the password travels as `PGPASSWORD` instead. Running against a Postgres this project does not own is the exception on both counts — the operator sets it themselves, and `.env.example` shows it carrying its own password, which wins over `PGPASSWORD` when present. |
 | `PUBLIC_ORIGIN` | — | **yes** | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it — the first variable *the lock* needs shared with the sidecar, not the first shared full stop: `TZ` already reaches both `app` and `gate` below. Also read by the `gate` service, which builds its redirect from it. |
 | `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
+| `PRICE_WORKER_SOCKET` | `/run/price-worker/worker.sock` | no | Unix socket used by the app; override for local worker development |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
 | `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
@@ -1243,7 +1244,7 @@ history and a quote is not a fact):
 |---|---|---|---|
 | `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries` — the 1D line, and nothing else |
 | `quote` | one row per instrument | overwritten in place | `holding_valued` — today's figures |
-| `price_daily` | **at most** one row per instrument per trading day | the immutable spine, written by two paths: the quotes' upsert, and the backfill's insert-where-absent, which never rewrites a row the quotes wrote | `holding_valued_at(d)` — every historical figure |
+| `price_daily` | **at most** one row per instrument per trading day | dated prices: quote refreshes upsert rows; backfill inserts only missing rows | `holding_valued_at(d)` — every historical figure |
 
 `quote` is deliberately **not** a projection of the log and is not derivable from it: the seeded
 `USD` row that prices every bank balance and liability will never generate an observation, and
@@ -1292,7 +1293,7 @@ This is the **trust asymmetry** that is `market-hours.ts`'s real interface:
 | Function | Kind | If it is wrong |
 |---|---|---|
 | `isScheduledQuoteWindow(instant, tz)` | cost optimisation | The poller wastes a handful of requests on Good Friday. Stored data is still correct. |
-| `marketDateOf(instant, tz)` | **correctness mechanism** | A real price is written under the wrong date — a permanent error in the immutable spine. |
+| `marketDateOf(instant, tz)` | **correctness mechanism** | A real price is written under the wrong date — an error in dated valuation. |
 
 `marketDateOf` never consults the holiday calendar. That is why the calendar is allowed to be a
 hardcoded five-year list rather than a rule engine: it decides whether to spend a request, never what
@@ -1344,9 +1345,8 @@ snapshot; it never starts, stops or retimes the poller. This slot is the one sta
 this process alone, and the snapshot resets to `not_started` on a restart or an HMR disposal exactly
 as the poller's own live state does — a second app replica would report its own, and nothing here
 merges the two. What still goes unreported is timestamps and counts — logs, `price_poll`,
-`price_backfill` and Settings → Prices keep the detailed diagnosis. A health check that failed during
-a third-party outage would make Compose restart a perfectly healthy app, which `pricing.ok` never
-does (§7.4).
+`price_backfill` and Settings → Prices keep the detailed diagnosis. Provider failure does not fail the app’s HTTP health status. Compose restart policies act on
+process exits, not an unhealthy healthcheck result (§7.4).
 
 ### 6.3 Read path — dashboards
 
@@ -1419,8 +1419,8 @@ start", which must not depend on anything being priced. And `latestObservedSessi
 reach at all: `ValuedSource`'s two adapters both price per *date*, and a session is priced per
 instant.
 
-`netWorthSeries` deserves one note, because its SQL *shape* is load-bearing for
-correctness rather than for speed: the dates are joined laterally against `holding_valued_at(d.date)`
+`netWorthSeries` batches distinct input dates into one SQL request, evaluating
+`holding_valued_at` once per date. Its SQL shape preserves uncovered dates: the dates are joined laterally against `holding_valued_at(d.date)`
 with the narrowing pushed **inside** the lateral. A `WHERE` in the outer query would be evaluated
 after the join and would reject the all-null row a `LEFT JOIN` manufactures for an uncovered date,
 taking the uncovered date down with it. See §10.
@@ -1438,7 +1438,7 @@ the close. Their query is inline here for the same reason `readSeries`'s is, and
 for no gain. The shape is not `readSeries`'s, though. Valuing every holding at every instant is
 instants × holdings, and an instant is per *instrument* rather than per poll, so the session is
 carried instead as a running total: the holdings priced at the open, moved by each observation's
-new value less the one it replaced (spec 0016, measured in
+separately rounded new value less the rounded value it replaced (spec 0016, measured in
 [`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)).
 
 ```
@@ -1620,7 +1620,7 @@ one household's instance and the operator reads `docker compose logs`.
 |---|---|
 | `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener — but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses. `pricing.scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `pricing.quotes` (`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) read the price poller's own live state passively (spec price-health/03) — no Yahoo call, no database heartbeat — and `pricing.ok` is a boolean conjunction over all three; none of the three ever gates the status either |
 | Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
-| Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
+| Refresh outcome | `RefreshReport { requested, priced, stale, closes, observed, providerFailed }` |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
 | Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale — the one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues — stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:358`) — and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
@@ -1720,14 +1720,14 @@ allowlist does.
 | Admission policy | One flat file of addresses, mounted read-only into `gate`. Deliberately not an email-domain rule: the narrowest domain that admits this family also admits every Gmail account alive |
 | Enforcement point | This stack's `caddy`, and only there for *person* authentication. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` used to be the single list of exemptions in the deployment; the lock (ADR-0012) now keeps a second, `LOCK_EXEMPT_PATHS` in `app/root.tsx` — `/unlock` and `/healthz` again, since a locked browser still needs both — pinned by a test that fails the moment that array grows without a decision behind it. The operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
 | What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
-| Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy` and `egress-gate` are the only two that carry one, and each belongs to a single container. `app` and `worker` share none of them — a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
+| Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy`, `egress-gate`, and `ingress` carry default routes. Each is attached to its own external-facing service. `app` and `worker` share none of them — a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
 | The worker's egress | `worker`'s only route anywhere is `egress-proxy` (`server/egress-proxy.ts`), a `CONNECT`-only forward proxy admitting exactly the five hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host it was opened to. A compromised worker can still open a tunnel to an admitted host and send it whatever it likes — the allowlist is on the host, never on the bytes |
 | The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:139`), so it can dial the socket but cannot `chmod` the directory or unlink the file — a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
 | Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
 | Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres — a minted unlock grant, addressed by the grant cookie above — never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in. Not one row per browser: `mintGrant` inserts unconditionally, so a browser that loses its cookie and unlocks again leaves the old row live beside the new one until its own expiry sweeps it |
 | Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own** — the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
-| TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
+| TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — Google’s registered redirect URI is that origin plus `/oauth2/callback` |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
 | Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field — or its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
@@ -2012,13 +2012,10 @@ living unexported in a route module's body — `describe(filters)` in `holdings.
 untestable not by framework limitation but by where it was put. That is a stronger argument for thin
 routes than "routes cannot be tested", and it is the one this repo actually supports.
 
-Tests against `app/root.tsx` are a separate case: `tests/routes/root.test.ts` calls its loader
-directly, and the `.test.tsx` files render `root.tsx`'s `Layout` through `createRoutesStub` and
-`renderToStaticMarkup` — shell behaviour rather than isolated components, and deliberately so,
-because the rule being protected is "every page carries the banner", which a component test would
-not notice the shell dropping. The middleware that used to be tested alongside them is gone with the
-in-app gate; what is left to pin on this seam is whether the banner is drawn, which is a fact about
-the shell.
+`tests/routes/root.test.ts` exercises the root loader, lock middleware, and middleware ordering.
+Shell render tests use `createRoutesStub` and `renderToStaticMarkup`; framework-wiring tests pin
+the router middleware configuration. Keep route logic exported or in domain modules so these
+boundaries can be tested directly.
 
 ---
 
@@ -2120,10 +2117,6 @@ still live in the current code:
 - **Logic stranded in route module bodies** — `describe(filters)` in `holdings.tsx` among it —
   untestable where it currently sits (§9.3).
 - **`<FieldError>` is open-coded at roughly fifteen sites.**
-- **The poller's advisory-lock skip path has no test.** `tests/price-poller.test.ts` verifies the
-  connection lifecycle, the market-hours gate, drop-not-queue and the cadence re-arm, but the
-  cross-process case — a second holder of the lock making a tick skip — is still argued rather
-  than verified.
 
 **Found while writing this document**, not from the review:
 
@@ -2260,10 +2253,10 @@ there.
 
 ### `app/components/`
 
-Server-rendered throughout — there is no React state anywhere in the application. A component
-exists here when the rule it keeps is one no single screen can be trusted to keep alone; three of
-them (`breakdown.tsx`, `net-worth-chart.tsx`, `owner-filter-control.tsx`) also export pure
-functions rather than only a component, so this tree is not purely presentational.
+Components share rendering rules across screens. Charts and query controls mostly use rendered
+HTML, URLs, and forms. `masking-toggle.tsx` and `price-freshness.tsx` use fetchers; React state for
+passkey ceremonies lives in the `settings/passkeys.tsx` and `unlock.tsx` routes. Several components
+also export pure helpers for testing.
 
 | File | Role |
 |---|---|

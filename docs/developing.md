@@ -169,8 +169,8 @@ TEST_DATABASE_URL=postgres://user:pass@127.0.0.1:5432/portfolio_test npm test
 
 Vitest reports every file and every test as `skipped`, and exits 0. A typo in the filter therefore
 looks exactly like a pass, and "I ran the test and it was green" is a claim you cannot make from that
-output. Check that the run reports at least one test *passed*. The filter matches the text of
-`it(...)` — not a `describe` name, and not a message inside an assertion.
+output. Check that the run reports at least one test *passed*. The filter is a regular expression matched against the full test name, including enclosing
+`describe` names. It does not match assertion messages. See [Vitest 4](https://v4.vitest.dev/config/testnamepattern).
 
 **If Postgres is not up,** the failure names the fix rather than making you infer it from a
 connection error — it tells you the URL it tried and the `compose.test.yaml` command that starts one,
@@ -320,13 +320,13 @@ each is [§8.2](../ARCHITECTURE.md#82-ci).
 stanza, so building from source means layering the development override:
 
 ```sh
-mkdir -p ./volumes/db/data      # once: the database directory the stack binds
+mkdir -p ./volumes/db/data ./volumes/dumps
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-The directory has to exist and, the first time, be empty — `docs/operating.md` has why. That second
-command is what the smoke test does — it sets `COMPOSE_FILE` to both files — and what you want whenever
-the change under test is to the `Dockerfile`, the entrypoint or `compose.yaml` itself. A plain
+Complete the [installation prerequisites](operating.md#installing), including `.env`, the allowlist,
+directory permissions, and dump UID/GID, before starting this build. Use this override when changing
+the image, entrypoint, or Compose configuration. A plain
 `docker compose up -d` in a checkout runs the **last published release**, not your working tree.
 
 ---
@@ -652,9 +652,8 @@ database exactly as it found it, including after a failure.
   see a query, log it at the call site, or turn on Postgres's own statement logging in the throwaway
   container.
 - **No debug or verbose flag** anywhere in the application. Everything an *operator* configures is an
-  environment variable, and they are all in [`../.env.example`](../.env.example). The one setting that
-  is not an operator's is the household's capital gains rate, which is a database row edited at
-  Settings → Tax.
+  environment variable, documented in [`../.env.example`](../.env.example). Household tax rate,
+  masking policy, and refresh cadence are database settings edited in the app.
 - **No REPL or console.** Use `psql`, or a scratch script run with `node --env-file=`.
 - **No migration rollback.** Migrations are forward-only and there are no `down` files. To undo one in
   development, drop the database and recreate it. On a real instance, that is

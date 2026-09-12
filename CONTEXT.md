@@ -17,8 +17,8 @@ current per-share rate. Forward-looking and current-only: there is no such figur
 _Avoid_: dividend income, payout, projected income, distribution.
 
 **Weighted yield**:
-A group's annual dividend as a fraction of that group's value. Stated for the whole portfolio and
-per breakdown row; never stored.
+A group's annual dividend divided by the sum of its positive holding values. Debt does not
+reduce this denominator. A computed figure, never stored.
 _Avoid_: average yield, blended yield, portfolio yield.
 
 ### How money is taxed, and where it sits
@@ -61,8 +61,9 @@ _Avoid_: classification to mean the rollup, security type, sector.
 ### How an account ends
 
 **Closed**:
-The retired state of an account, recorded as the date it stopped being used. A closed account
-contributes nothing to current figures and still counts on every date before its closing date.
+The retired state of an account, recorded with its closing instant. A closed account
+contributes nothing to current figures. For daily history, it counts when the start of that UTC
+date precedes the closing instant, usually including the closing day.
 Closing is the only way an account ends — nothing is deleted — it must be acknowledged before it
 happens, and it is one-way in this version: there is no reopen.
 _Avoid_: deleted, removed, archived, deactivated, inactive.
@@ -78,16 +79,14 @@ narrower: the resolved start/end span a range produces, which is what `chart-ran
 never a synonym for the named range a reader picks.)
 
 **1D**:
-The chart range that plots the most recent trading session's observations, open to close — or to
-now while the session is running. Always the latest session (a weekend shows Friday's), never an
-older one, and never a trailing twenty-four hours.
+The chart range showing the latest session with stored price observations, from its first
+observed instant to its last. It may be older than the latest market session when no new observations arrive.
+It is not a trailing twenty-four-hour window.
 _Avoid_: today, intraday range, last 24 hours, daily chart.
 
 **Range end value**:
-The value a plotted line actually ends at — the last point inside the chosen chart range. It equals
-current net worth only when the range ends today; a range ending in the past ends at a past value,
-and stating today's figure for it is simply wrong. A fact about one line over one range, not about
-the household now.
+The value at the last plotted point in the chosen chart range. It uses that point's price source
+and can differ from current net worth, even when the range ends today.
 _Avoid_: current value, latest value, ending balance, final value.
 
 ### How prices stay fresh
@@ -138,8 +137,8 @@ _Avoid_: queue, job table, sidecar API, RPC.
 ### Who gets in
 
 **Gate**:
-The Google sign-in step enforced at the instance's front door, before any request reaches the app.
-The app authenticates no one: a request that arrives at all is a family member's.
+The Google sign-in check that admits allowlisted family members at the instance's front door.
+The browser lock is a separate check.
 _Avoid_: login, log-in screen, SSO, auth wall, password gate.
 
 **Allowlist**:

@@ -63,22 +63,13 @@ all. Map by looking at those values rather than at column names.
 
 ![Step two with every column mapped](images/upload-2-columns-mapped.png)
 
-- **Instrument** — required. The ticker or fund name identifying the position.
-- **Quantity** — required. How much is held.
-- **Name** — optional. A longer description, used when a new instrument has to be created.
-- **Cost basis** — optional.
-- **As-of date** — optional. The day the statement is true for.
-- **Account number** — optional. Checked, never used to choose the account.
+Instrument and Quantity are required and must use different columns. Name, Cost basis, As-of date,
+and Account number are optional. Choose **Not in this file** for an absent column; an unchosen
+optional field is also saved as absent.
 
-Every optional one can be marked **Not in this file**, which is a different answer from leaving it
-unchosen — only the deliberate one saves.
-
-One column cannot be two things at once. Mapping the same column to two roles is refused, naming
-both.
-
-**Cost basis is:** choose **Per share** or **Total for the position**. Brokerages split about evenly
-between the two, and getting it wrong is wrong by the size of the position. It only matters when a
-cost basis column is mapped.
+For cost basis, specify whether the file gives a per-share figure or the whole position’s total.
+The app stores per-share basis to four decimals, so dividing a total by quantity can lose precision.
+Use the preview values rather than relying on column names alone.
 
 ### No export? Copy the template
 
@@ -124,16 +115,9 @@ the next export with that same header arrives with every choice already filled i
 
 ## Dates
 
-Three spellings are read: `YYYY-MM-DD`, `MM/DD/YYYY` and `M/D/YYYY`.
-
-- **If the file dates itself**, the review screen states that date and offers no date box. The
-  statement's own date is not something to override with an opinion.
-- **If it does not**, the review screen asks. It opens on today; a date in the future is refused,
-  and so is one before 1970-01-01 — the first day this application can put a price on anything.
-- **A file that dates itself before 1970-01-01 is refused**, by the same rule a typed date faces.
-- **Rows disagreeing about the date refuse the file**, naming both lines — a statement is one day,
-  and the app will not pick between two. The same date written two ways in one file is one date.
-- A date that is not on the calendar is refused as such.
+File dates accept ISO or US date notation. Dates on retained rows must agree. If no date is
+provided, review asks for one. Dates before 1970 or after tomorrow are refused; tomorrow allows
+for households ahead of the server’s time zone.
 
 ## What happens to your rows
 
@@ -177,9 +161,8 @@ There is no skip. A string left unanswered would be a holding silently missing f
 **The answer is remembered permanently**, so that spelling passes straight through on every later
 export.
 
-**This is the flow's one early write, and it is kept even if you abandon the draft.** Resolving
-records vocabulary, not the statement. Walking away after this step leaves the app knowing the name
-and holding no position — which is the right outcome, and makes the next attempt quieter.
+Resolving saves the instrument name even if you abandon the draft. It does not add a position;
+positions are recorded at commit.
 
 **Non-USD is refused, never converted.** Creating an instrument that quotes in another currency is
 refused naming the currency; the instance holds dollars only.
@@ -188,70 +171,35 @@ refused naming the currency; the instance holds dollars only.
 
 ![Step four: what the statement changes, grouped into added, updated and removed](images/upload-4-review.png)
 
-**A statement is one photograph of the whole account.** Anything the account currently holds that
-the file does not list counts as **sold**. A filtered export showing 2 of 30 positions is a perfectly
-valid statement that sells 28 holdings.
+The review compares the resolved file against current holdings, listing additions, updates, and
+every removal. Missing rows mean sold. More than half removed requires acknowledgement.
 
-So the review screen is where the reading happens:
+Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
+cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
+change history without becoming current. A page left open while another tab changes data may
+show an older preview—review again before committing.
 
-- **Added**, **Updated** and **Removed**, in that order. Updated rows show before → after on
-  whatever changed.
-- **Unchanged rows are counted, not listed.**
-- **Every removal is listed individually**, with its quantity and its last known value — never as a
-  count. A dash rather than `$0.00` where nothing ever priced it.
-- **A file removing more than half of what the account holds cannot be recorded until you tick a
-  sentence stating the ratio.** Half or less draws no tick at all. Before ticking, check you
-  exported everything rather than a filtered page.
-- A first statement for an account reads as additions only.
-
-**Nothing is recorded until you commit here.** The first three screens write only to the draft (and
-the vocabulary above). A misread column caught on this screen costs you a walk back to the columns
-step and nothing else.
-
-A few things are only caught at the moment of recording, and each refuses the whole file with
-nothing written: rows disagreeing about which account number the file describes, a file whose
-account number contradicts the one recorded on the account, an account closed while the draft sat
-open, and a figure so large the app could not hold it.
+Only account positions wait until commit. Drafts, mappings, and resolved instrument names are
+saved earlier and can survive an abandoned upload.
 
 ## Drafts
 
-An upload in progress is a draft with its own address.
-
-- **Every step is a real URL.** The back button, a reload, and a half-finished upload reopened later
-  all behave. It works with JavaScript turned off.
-- **Bare draft addresses resume** at whichever step still needs an answer.
-- **Drafts are swept after 24 hours.** One left overnight is gone in the morning; nothing was
-  recorded, and the column mapping is remembered anyway.
-- **A draft is deleted the moment its statement is recorded**, so returning to a finished step lands
-  on the expired page.
-- **A draft whose account has since been closed reads as expired**, not as forbidden.
+Draft URLs can be bookmarked. Starting an upload removes drafts more than 24 hours old; commit
+removes its own draft immediately. A removed draft cannot resume, but saved mappings and
+instrument vocabulary remain. Closed accounts cannot accept a draft’s statement.
 
 ## On a phone
 
 ![Step one on a phone: the four-step strip wrapped as plain text above the form](images/upload-1-account-and-file-mobile.png)
 
-The four-step strip wraps onto a second line rather than scrolling out of view — unlike the chip
-strips elsewhere in this guide, it is plain text rather than buttons, and keeping all four steps
-visible together matters more here than keeping the line short.
-
 ![Step two on a phone: the sample rows scrolled sideways to their first three columns](images/upload-2-columns-mapped-mobile.png)
-
-The sample-rows table — the one to map by looking at values, not names — scrolls sideways rather
-than reflowing, so on a phone you are checking a couple of columns at a time rather than the whole
-row at once.
 
 ![Step three on a phone: the new-instrument form, one field per line](images/upload-3-instruments-mobile.png)
 
-Resolving a new instrument is the same form, stacked: **Symbol** and **Name** each get their own
-line instead of sharing a row, and **Price source** and **Classification** follow underneath rather
-than beside them.
-
 ![Step four on a phone: the added/updated/removed counts above the start of the diff](images/upload-4-review-mobile.png)
 
-The table is already one column on a wider screen, so nothing here reflows — the counts, then
-**Added**, **Updated** and **Removed** in that order, each a heading above its own rows. A phone
-screen just reaches less of it before running out of room; scrolling is how you see **Updated** and
-**Removed**.
+The flow uses the same steps and fields. The review keeps its columns in a sideways-scrolling
+table. Scroll across for the figures and down through every change group before committing.
 
 ## Two things that do not exist
 

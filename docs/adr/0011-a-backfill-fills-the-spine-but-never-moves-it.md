@@ -1,5 +1,10 @@
 # A backfill fills the spine but never moves it
 
+> Current write behavior: backfill inserts missing daily rows without replacing them. Quote refreshes
+> can update daily rows dated within seven days either side of today's market date, including past closes.
+> Daily rows are not immutable. See [the data model](../data-model.md).
+
+
 The daily spine has always begun the first time the poller quoted an instrument. Spec 0002 put
 "Backfilling `price_daily`" out of scope — "the spine starts the first time the poller runs. A
 provider outage leaves a gap that carry-forward covers, and no job goes back to fill it in"

@@ -1,5 +1,7 @@
 # Net worth aggregation audit — 1 September 2026
 
+> Follow-up (2026-09-11): The multi-owner redirect now uses repeated URL parameters ([owner-filter.ts](../../app/lib/owner-filter.ts)). Other findings below remain tied to the audited revision; this is not a current-status checklist.
+
 An independent correctness audit of every displayed total: the Overview headline, per-account
 values, the Holdings grand total and subtotals, the four Analysis breakdowns, and the Income
 figures. Written as a test report to be picked up as work
