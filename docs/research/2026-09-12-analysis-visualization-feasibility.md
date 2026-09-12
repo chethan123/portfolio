@@ -40,7 +40,7 @@ the overlap question it exists for.
 Two of the lower-priority items change rank once the repository is read:
 
 - **Fee exposure may be closer than the document thinks.** The library's ETF quote type declares a
-  `netExpenseRatio` field, the worker requests every field, and the whole response is archived in
+  `netExpenseRatio` field, the worker requests every field, and the per-symbol entry is archived in
   `price_observation.payload`. If a live instance's archive carries it, promoting it is a migration
   in the `annual_dividend` shape; only mutual funds need a new worker call. Whether Yahoo populates
   the field is the one fact this checkout cannot settle, and ticket 05 starts by settling it.
@@ -63,7 +63,7 @@ Analysis read already returns (`app/lib/valuation.server.ts:20-48`).
 | 2. Target vs actual | actual weights (`allocationBy(holdings, groupingBy("assetClass"))`, `analysis.tsx:163`) | **any stored target** — no table, no column; `app_setting` is a single row of typed columns (`migrations/0005_app_setting.sql:2-15`) | `settings/tax.tsx` end to end as the form pattern; `formatPercent`'s explicit sign (`format.ts:122`); `SHARE_SCALE` maths | migration; a target reader/writer; Settings tab; drift maths in `allocation.ts`; a marker on the bar |
 | 3. Largest positions | `instrument_id`, `symbol`, `instrument_name`, `value`, `account_name` per row; one row per instrument per account (`migrations/0001_initial_schema.sql:129`) | nothing | `allocationBy` with an instrument `Grouping`; the bar rows | nothing structural — but the instrument grouping sits outside the registry every other panel reads (`holdings-view.ts:2` leaves `instrument` out on purpose; `analysis.tsx:160`) |
 | 4. Look-through | `quote_type` (ETF/MUTUALFUND/EQUITY, refreshed: `prices.server.ts:591-604`) | constituents, weights, as-of, canonical issuer key, sector, region, coverage — none anywhere (`database.generated.ts:207-228`) | instrument identity only | tables, a reader, an ingest or fetch path, a coverage type |
-| 5. Asset class through time | `holding_valued_at(d)` returns `asset_class` (`migrations/0006:68-127`); the batched lateral in `readSeries` (`valuation.server.ts:339-373`) | dated classification (single mutable FK, `0001:66-68`); within-period trades (§3) | `readSeries`' shape; `chartReach`/`chartWindow`; the range control; `gridRules`, `tickLabel` (exported), masking from `net-worth-chart.tsx` | a grouped series reader; a categorised point type; a stacked-area component |
+| 5. Asset class through time | `holding_valued_at(d)` returns `asset_class` (`migrations/0006:68-127`); the batched lateral in `readSeries` (`valuation.server.ts:339-373`) | dated classification (single mutable FK, `0001:66-68`); trades between statements (§3) | `readSeries`' shape; `chartReach`/`chartWindow`; the range control; `gridRules`, `tickLabel` (to be exported), masking from `net-worth-chart.tsx` | a grouped series reader; a categorised point type; a stacked-area component |
 | Fee exposure | `QuoteEtf.netExpenseRatio` is declared (`yahoo-finance2` `quote.d.ts:355-363`); the worker requests every field (`server/yahoo-client.ts:64-67`); the response is archived (`prices.server.ts:677-699`) | a typed column; mutual-fund ratios; **proof the field is populated** | `writeQuote`, `yahooQuote` Zod, the `annual_dividend` view-column precedent | one promotion migration; later a `quoteSummary` worker route |
 | Unrealized-gain bars | `cost_basis`, `unrealized` per row | nothing, but basis is nullable by design (`0001:125-126`) and the view refuses to coalesce it (`0002:46`) | the gains table's coverage count; the bar rows | nothing structural |
 
@@ -295,7 +295,7 @@ with fixtures, no network — which is the pattern `docs/security.md` §1 alread
 the route in if look-through is ever built.
 
 A cheaper intermediate with full coverage is the fund's **sector weights** from `sectorWeightings`:
-eleven sectors summing to the fund's equity weight, one `quoteSummary` call per fund, the same
+eleven sector keys (what they sum to is unverified here), one `quoteSummary` call per fund, the same
 worker route F8 needs. It answers "how much technology am I holding through funds" without naming
 a company. It is not what the document asked for; it is what the fetchable data can honestly
 support. If built, "sector" needs a glossary entry — `CONTEXT.md:59` avoids it only as a synonym
@@ -341,9 +341,14 @@ This is why F8 prefers the fetched path for fees.
 Overview's "Allocation by account" panel is ranked horizontal bars: `allocationBars`
 (`overview.tsx:201-213`) and `AllocationPanel` (`:273-320`) render `.alloc-row` / `.alloc-track` /
 `.alloc-fill` rows with `categoryColor(index)` and an `Amount` beside each. That is the component
-tickets 02 and 05 ask for, with 01 a stacked variant and 03 a marker variant. Issue #161 already
-names its one defect: the width is computed in floats over `toPlotValue` (`:211`) where
-`allocateShares` exists to do it exactly.
+tickets 02 and 05 ask for, with 01 a stacked variant and 03 a marker variant. Issue #161 names
+three defects in that panel. One is already fixed at HEAD: the rank→colour mapping goes through
+`categoryColor` (`:210`). Two are live: the width is computed in floats over `toPlotValue` (`:211`)
+where `allocateShares` exists to do it exactly, and the panel's notes are hand-rolled (`:282-287`)
+beside `breakdown.tsx`'s own (`:36-64`, `:116-121`). The notes are not the same rule — a bar list
+*truncates* to the largest `BARS` (`:63`) and says how many it left out; a donut *folds* the tail
+into one grey wedge — so the lifted component keeps a truncation note of its own and the fold stays
+the donut's. Ticket 01 says so, which answers #161's second item rather than dropping it.
 
 So the proposal does not add a `StackedBars` sibling in `breakdown.tsx`, as the first draft did.
 Ticket 01 lifts the rows out of `overview.tsx` into one bar component, makes Overview adopt it, and
@@ -355,8 +360,8 @@ drift `breakdown.tsx`'s one-implementation argument exists to prevent.
 ### Order, and why
 
 Four tickets on data the app already stores, one on data it may already receive, one deferred with
-a route in. Ordered by dependency and by how much each teaches the next; 3 and 4 are independent
-and can run at once.
+a route in. Ordered by dependency and by how much each teaches the next; once 01 lands, 02, 03
+and 04 are mutually independent and can run at once.
 
 1. **Asset class by tax treatment** — replaces the asset-class donut (F1); lifts the bar component
    from Overview (F12), adds the stacked variant and the asset-class colour map (F2). Smallest
@@ -409,8 +414,8 @@ Each is one pull request that typechecks, builds and carries its own tests. Spec
 `crossed` keys on `${taxTreatment}|${assetClass}` — the shipped netting, share and coverage rules for
 free; the existing `groupingBy("assetClass")` and `groupingBy("tax")` calls as the marginals;
 `assetClassColor()` beside `categoryColor()`; the bar rows lifted from `overview.tsx` into
-`app/components/allocation-bars.tsx` with a stacked variant, Overview adopting it and #161's float
-width folded onto `allocateShares`; the asset-class donut removed, `byAssetClass` kept in loader
+`app/components/allocation-bars.tsx` with a stacked variant and its own truncation note, Overview
+adopting it and #161's float width folded onto `allocateShares`; the asset-class donut removed, `byAssetClass` kept in loader
 data as the totals row so `aggregates-agree` passes untouched; drill-down links into Holdings with
 both filters; §8.3 and §13.3 amended; `docs/guide/analysis.md` updated. Fixtures: a liability
 inside a taxable account, an unpriced holding, an owner-narrowed reading.
@@ -461,7 +466,7 @@ costs". Second ticket, blocked by 05: the `quoteSummary` worker route for mutual
 - **`holdingsAt` as the reuse target.** It is the per-date reader; `readSeries` through
   `chart-series.server.ts` is the pattern (F3).
 - **Stable colours for classification.** Not possible under §13.3; possible for the two closed
-  rollups, which is what views 1, 3-as-targets and 5 need (F2).
+  rollups, which is what views 1, 2 and 5 need (F2).
 - **Liabilities shown separately in view 1.** A third denominator on one screen; the shipped rule
   is kept and stated (F5). Reversible by the owner.
 - **Emergency cash out of the target denominator.** The only mechanism is a per-account flag the
@@ -510,6 +515,12 @@ is already in use (proposal); the invariant test can pass untouched (F5); `tickL
 exported (table); a "sheltered as a bar" row attributed to the research document that it never
 said (F10, deleted); §13.7 does not refuse a typed sensitivity (proposal, reworded); `drift.ts` and
 `settings.server.ts` placements (F4). Nothing the reviewer raised was rejected.
+
+A second round over the rewrite found one material item — F12 said #161 names one defect in
+Overview's bar panel; it names three, one already fixed and two live, and the lifted component
+now answers both — plus five wording corrections (the archive holds the per-symbol entry, not the
+whole response; the sector keys' sum is unverified; `tickLabel` is *to be* exported; view
+numbering in the rejections; "period" is a chart-range word). All taken; the review stopped there.
 
 ## Related open issues
 
