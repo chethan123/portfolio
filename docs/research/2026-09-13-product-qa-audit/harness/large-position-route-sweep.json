@@ -1,0 +1,54 @@
+{
+  "quantity": "25000000",
+  "results": [
+    {
+      "name": "Overview",
+      "route": "/",
+      "status": 500,
+      "heading": "Something went wrong",
+      "figure": null
+    },
+    {
+      "name": "Overview, Alex",
+      "route": "/?owner=1",
+      "status": 500,
+      "heading": "Something went wrong",
+      "figure": null
+    },
+    {
+      "name": "Overview, Jordan",
+      "route": "/?owner=2",
+      "status": 200,
+      "heading": "Overview",
+      "figure": "$130,195.79\n+40.5% / +$37,520.49"
+    },
+    {
+      "name": "Holdings",
+      "route": "/holdings",
+      "status": 200,
+      "heading": "Holdings",
+      "figure": null
+    },
+    {
+      "name": "Analysis",
+      "route": "/analysis",
+      "status": 200,
+      "heading": "Analysis",
+      "figure": null
+    },
+    {
+      "name": "Income",
+      "route": "/income",
+      "status": 200,
+      "heading": "Income",
+      "figure": "$98,527,319.81\n1.3% weighted yield"
+    },
+    {
+      "name": "Fidelity account",
+      "route": "/accounts/1",
+      "status": 200,
+      "heading": "Fidelity Individual",
+      "figure": "$7,696,563,705.81"
+    }
+  ]
+}
