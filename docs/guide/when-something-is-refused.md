@@ -91,6 +91,10 @@ A statement is rejected outright, rather than partly imported, when it cannot be
 - **It is too large.** The cap is set by whoever runs the instance.
 - **A quantity makes no sense**, or rows disagree about what date the statement is. The message
   names the line, so open the file at that line.
+- **An instrument is blank while a mapped quantity, cost basis, as-of date or account number has
+  content.** The message names the line and populated columns. If the instrument is in another
+  column, change the mapping. If the source row is wrong, edit the CSV outside Portfolio and start a
+  new upload; an existing draft keeps its original file.
 - **Rows disagree about the account number.** Export one account per file; commit refuses mixed numbers.
 - **Quantity multiplied by price, per-share basis, or dividend rate exceeds the money field's limit.**
   Check the named row's quantity and basis mapping; commit refuses amounts it cannot store.

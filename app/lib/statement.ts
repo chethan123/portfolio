@@ -294,7 +294,8 @@ export function parseStatement(
           message:
             `Line ${line} has a blank instrument, but its mapped ${cellsNamed} ` +
             `${named.length === 1 ? "cell has" : "cells have"} content. ` +
-            "Choose the correct instrument column or fix the source row before continuing.",
+            "Choose the correct instrument column. If the instrument is missing from the " +
+            "source row, fix the source file and start a new upload.",
         });
       }
       continue;

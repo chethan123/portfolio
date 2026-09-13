@@ -315,6 +315,7 @@ describe("row handling", () => {
     });
     expect(parsed.problems[0]?.message).toContain("Line 3");
     expect(parsed.problems[0]?.message).toContain(`"${populated}"`);
+    expect(parsed.problems[0]?.message).toContain("fix the source file and start a new upload");
     expect(parsed.problems[0]?.message).not.toContain(
       row.find((cell) => cell.trim() !== "") ?? "",
     );

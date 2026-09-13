@@ -230,6 +230,10 @@ describe("a review over a draft that is not ready for one", () => {
         .execute();
 
       const page = await reviewPage(draft.id);
+      if (page.diff !== null) throw new Error("The invalid draft rendered a removal diff.");
+      expect(page.blocked.accountId).toBe(account.id);
+      expect(page.blocked).not.toHaveProperty("bytes");
+      expect(page.blocked).not.toHaveProperty("mapping");
       const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, { masked: true });
 
       expect(markup).toContain("This statement cannot be reviewed yet");
@@ -242,6 +246,11 @@ describe("a review over a draft that is not ready for one", () => {
       expect(markup).not.toContain("108.2561");
       expect(markup).not.toContain("REMOVED");
       expect(markup).not.toContain("Record this statement");
+      expect(markup).toContain("change the column mapping");
+      expect(markup).toContain("instrument is missing from the source row");
+      expect(markup).toContain("edit the CSV outside Portfolio and upload the corrected file");
+      expect(markup).toContain(`href="/upload/${draft.id}/columns"`);
+      expect(markup).toContain(`href="/upload?account=${account.id}"`);
 
       expect(
         await redirectTo(() =>

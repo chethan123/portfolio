@@ -24,7 +24,8 @@ import type { Route } from "./+types/review";
  * Step four — the diff, then the commit (ingest brief §6), the flow's only
  * write. §5.2: a missing row means sold, so every removal is listed in
  * full, and removing more than half needs a ticked confirmation. Read-only
- * plus date and tick — a wrong figure is fixed by walking back to columns.
+ * plus date and tick — mapping errors go back to Columns; source-file errors
+ * need a corrected upload because a draft's bytes never change.
  */
 export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
@@ -66,6 +67,7 @@ export async function loader({ params }: Route.LoaderArgs) {
           blocked: {
             draftId: draft.id,
             filename: draft.filename,
+            accountId: draft.accountId,
             accountName: draft.accountName,
             ownerName: draft.ownerName,
             accountNumberTail: draft.accountNumberTail,
@@ -79,7 +81,6 @@ export async function loader({ params }: Route.LoaderArgs) {
         };
       }
 
-      // Missing/malformed mappings and unresolved instruments still resume at their own step.
       return redirect(`/upload/${params.draftId}/${error.step}`);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
@@ -187,12 +188,19 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {problem.message}
             </p>
           ))}
-          <p>Fix the source row or choose different columns before reviewing any removals.</p>
+          <p>
+            Go back to change the column mapping if the instrument is in another column. If the
+            instrument is missing from the source row, edit the CSV outside Portfolio and upload
+            the corrected file. This draft keeps the original file.
+          </p>
         </div>
 
         <div className="panel-form">
           <Link className="button" to={`/upload/${blocked.draftId}/columns`}>
             Back to columns
+          </Link>
+          <Link className="button button--text" to={`/upload?account=${blocked.accountId}`}>
+            Upload corrected file
           </Link>
         </div>
       </section>
