@@ -176,8 +176,13 @@ every removal. Missing rows mean sold. More than half removed requires acknowled
 
 Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
 cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
-change history without becoming current. A page left open while another tab changes data may
-show an older preview. Review again before committing.
+change history without becoming current. If another tab changes the file's mapping after Review,
+commit is refused with **This upload changed in another tab; review it again.** The refreshed review
+shows the new interpretation and clears any removal acknowledgement.
+
+When the file does not carry its own date, changing **Statement date** requires **Review this date**
+before the statement can be recorded. Selecting **Record this statement** immediately after editing
+the date also returns to a fresh review; the next press records only the date now shown.
 
 Only account positions wait until commit. Drafts, mappings, and resolved instrument names are
 saved earlier and can survive an abandoned upload.

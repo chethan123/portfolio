@@ -16,7 +16,12 @@ import {
   formFields,
 } from "~/lib/input.server";
 import { parseStatement, statementMapping } from "~/lib/statement";
-import { rememberMapping, requireDraft, type UploadDraft } from "~/lib/uploads.server";
+import {
+  STALE_REVIEW_MESSAGE,
+  rememberMapping,
+  requireDraft,
+  type UploadDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { ParseProblem, StatementMapping } from "~/lib/statement";
@@ -166,6 +171,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       savedProblems: savedProblems.map((problem) => problem.message),
       savedProblemFields:
         savedMapping === null ? [] : problemFieldsOf(savedMapping, savedProblems),
+      staleReviewMessage:
+        new URL(request.url).searchParams.get("stale") === "true"
+          ? STALE_REVIEW_MESSAGE
+          : null,
       // Component can't import a `.server` module — sentinel rides down with the data.
       notInFile: NOT_IN_FILE,
     };
@@ -252,6 +261,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
     missingColumns,
     savedProblems,
     savedProblemFields,
+    staleReviewMessage,
     notInFile,
   } = loaderData;
 
@@ -309,6 +319,12 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
           {draft.ownerName}
         </p>
+
+        {staleReviewMessage ? (
+          <p className="form-error" role="alert">
+            {staleReviewMessage}
+          </p>
+        ) : null}
 
         {fromInstitution ? (
           <p>
