@@ -1578,7 +1578,8 @@ still-shutting-down container, and a determined operator can run two.
 | Two current-state writes for one account | `withAccountWrite` holds `FOR NO KEY UPDATE` on the account through the latest-state read and mutation. Corrections merge into the preceding complete snapshot; uploads and balances append in lock order | `account-write.server.ts`; all three position-set writers |
 | A form posted against a position that moved | Once its account lock is acquired, `currentPosition` resolves the latest committed set; absence becomes an actionable refusal. The write's `source` CTE repeats the membership check and keeps the set plus copied holdings atomic | `positions.server.ts` |
 | A balance typed against a statement that changed under it | Once its account lock is acquired, `currentStatement` sees the preceding writer; non-cash holdings become an actionable refusal. Its CTE keeps the set plus cash holding atomic | `balances.server.ts` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:161` |
+| A position write landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | [`accounts.server.ts`](app/lib/accounts.server.ts); [#311](https://github.com/chethan123/portfolio/issues/311) |
+| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | [`accounts.server.ts`](app/lib/accounts.server.ts); [#312](https://github.com/chethan123/portfolio/issues/312) |
 | An account closes while a current-state write is in flight | Closure takes the same account lock. A writer ordered after it re-reads `closed_at` under the lock and refuses; no position history is appended to the closed account | `accounts.server.ts`; all three position-set writers |
 
 Same-date position sets remain ordered by `as_of_date`, then `created_at`, then `id` in
@@ -2115,8 +2116,9 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **`inTransaction` exists twice** — in `prices.server.ts` and
-  `instrument-resolution.server.ts` — identically. Both already import from `db.server.ts`.
+- **The transaction-or-reuse branch exists three times** — in `prices.server.ts`,
+  `instrument-resolution.server.ts` and `account-write.server.ts`. All three already import from
+  `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
@@ -2127,6 +2129,8 @@ still live in the current code:
 
 **Found while writing this document**, not from the review:
 
+- **Account and upload-draft route ids check decimal shape but not the `bigint` bound**, so an
+  oversized id reaches PostgreSQL as a 500 ([#310](https://github.com/chethan123/portfolio/issues/310)).
 - **`MAX_UPLOAD_MB` is not wired through `compose.yaml`**, so under the documented deployment the cap
   is permanently 10 MB whatever an operator puts in `.env` (§3.3).
 - **`statement.ts:15` imports a `.server` module as a value** (§4.3). It stays out of the client

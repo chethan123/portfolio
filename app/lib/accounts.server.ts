@@ -170,8 +170,8 @@ export async function updateAccount(
 
   // Checked against the new kind and the rows, never existing.kind — otherwise a two-hop edit
   // (liability -> brokerage -> bank) reaches what one hop couldn't. Securities kinds unaffected.
-  // Read-then-write, no lock/transaction: a statement racing into the gap leaves a brief
-  // mislabel, not a loss — setBalance repeats this guard inside its own write.
+  // Read-then-write is not serialized with position writers; a stale kind decision can survive
+  // their account lock. Tracked in https://github.com/chethan123/portfolio/issues/311.
   if (input.kind !== existing.kind && acceptsSetBalance(input.kind)) {
     const { cashIsNegative, others } = await currentStatement(existing.id, db);
 

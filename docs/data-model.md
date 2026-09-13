@@ -296,11 +296,11 @@ and the set's holdings go with it by cascade.
 | `source` | `text` | no | `upload` \| `manual` (CHECK) |
 | `source_filename` | `text` | yes | null for a manual balance entry |
 | `raw_file` | `bytea` | yes | the original CSV bytes, retained so a mis-mapped column can be re-parsed into a *new* set without re-downloading a statement the brokerage may no longer offer |
-| `created_at` | `timestamptz` | no | default `statement_timestamp()`; the tie-break when two sets share an `as_of_date`, stamped by the insert after the account write guard is acquired |
+| `created_at` | `timestamptz` | no | default `statement_timestamp()`; the tie-break when two sets share an `as_of_date` ([why this is an insert-time timestamp](../ARCHITECTURE.md#72-transactions-and-concurrency)) |
 
 Index: `position_set_account_as_of_idx` on `(account_id, as_of_date desc, created_at desc, id desc)`
 — the exact ordering `latest_position_set` scans, so "which set speaks for this account" is an
-index scan stopping at the first row. `id` makes equal statement timestamps deterministic.
+index scan stopping at the first row. `id` makes equal timestamps deterministic.
 
 **`holding`** — one instrument's line inside one position set.
 

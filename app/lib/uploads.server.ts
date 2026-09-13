@@ -151,13 +151,31 @@ type DraftRecord = UploadDraft & {
   accountNumber: string | null;
 };
 
+function couldBeDraftId(draftId: string): boolean {
+  return /^\d+$/.test(draftId);
+}
+
+async function findDraftAccountId(
+  draftId: string,
+  db: Kysely<Database>,
+): Promise<string | undefined> {
+  if (!couldBeDraftId(draftId)) return undefined;
+
+  const row = await db
+    .selectFrom("upload_draft")
+    .select("account_id")
+    .where("id", "=", draftId)
+    .executeTakeFirst();
+  return row?.account_id;
+}
+
 // Closed accounts stay in: requireDraft reads one as expired, commitUpload owes it a sentence.
 async function findDraft(
   draftId: string,
   db: Kysely<Database>,
 ): Promise<DraftRecord | undefined> {
   // "abc" would fail as a malformed bigint — a 500 wearing a bookmark.
-  if (!/^\d+$/.test(draftId)) return undefined;
+  if (!couldBeDraftId(draftId)) return undefined;
 
   const row = await db
     .selectFrom("upload_draft")
@@ -641,19 +659,24 @@ export async function commitUpload(
 ): Promise<CommittedUpload> {
   // The draft supplies the account key. Re-read it under the lock below: this first lookup only
   // chooses which account to serialize, and never decides whether or what to commit.
-  const draft = await findDraft(draftId, db);
-  if (draft === undefined) throw new NotFoundError(EXPIRED);
+  const accountId = await findDraftAccountId(draftId, db);
+  if (accountId === undefined) throw new NotFoundError(EXPIRED);
 
-  return withAccountWrite(draft.accountId, db, (trx) => commitUploadUnderLock(draftId, raw, trx));
+  return withAccountWrite(accountId, db, (trx) =>
+    commitUploadUnderLock(draftId, accountId, raw, trx),
+  );
 }
 
 async function commitUploadUnderLock(
   draftId: string,
+  lockedAccountId: string,
   raw: CommitInput,
   db: Kysely<Database>,
 ): Promise<CommittedUpload> {
   const draft = await findDraft(draftId, db);
-  if (draft === undefined) throw new NotFoundError(EXPIRED);
+  if (draft === undefined || draft.accountId !== lockedAccountId) {
+    throw new NotFoundError(EXPIRED);
+  }
 
   // First: a closed account isn't fixable by a ticked box or typed date.
   if (draft.accountClosedAt !== null) {
