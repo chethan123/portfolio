@@ -422,9 +422,10 @@ grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
-  compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
+  compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴,
+  half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
 - `valuation.server.ts:417` (`readSessionSeries`) values holdings from `price_observation` rather
@@ -784,7 +785,7 @@ generated always as identity` precisely so that "tie-break by id descending" mea
 wins". A random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
 exactly, so this is an index scan stopping at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts`) needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -958,7 +959,7 @@ button and a bookmarked half-finished upload all behave, and it is why the mappi
 delimiter rather than letting a second sniff reach a different verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts`) folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -988,8 +989,15 @@ Problems present means the file must not be committed. Whether anything is still
 what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
 so the screen has something to show beside the complaint. A problem with the **mapping itself**, a
 required column not named or a column name the header row does not carry, returns no positions at all
-(`statement.ts:192`), because nothing below it could be trusted. The second case is the ordinary
+(`parseStatement` in `statement.ts`), because nothing below it could be trusted. The second case is
+the ordinary
 one: a saved mapping meeting a renamed column.
+
+A row with no instrument is ignored only when its raw mapped quantity, cost basis, as-of and account
+number cells are empty. Those cells are tested before figure parsing, so zero, absence spellings and
+malformed values remain evidence of a source row rather than disappearing through normalisation.
+The problem points at the instrument mapping and names the source line and populated column labels;
+it never repeats their values.
 
 #### The step machine
 
@@ -1004,7 +1012,8 @@ stateDiagram-v2
 
     Instruments --> Review: resolveAll() — aliases written NOW,<br/>not at commit
 
-    Review --> Columns: mapping no longer parses —<br/>DraftNotReadyError, resume where the answer is
+    Review --> Columns: mapping/header or another parse rule fails —<br/>DraftNotReadyError, resume where the answer is
+    Review --> Review: saved mapping exposes a blank-instrument data row —<br/>show the source problem, no diff or commit
     Review --> Instruments: a first sighting reappeared
     Review --> Review: guards refuse — see the commit flowchart
     Review --> Committed: commitUpload() — one transaction
@@ -1028,7 +1037,8 @@ be a fifth step nobody asked to stand on.
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
 next move, starting again from `/upload`, is the same in every case. The one variation is
 deliberate: a re-POSTed review knows which account the statement already landed in, so it throws
-`data({ accountId }, { status: 404 })` (`review.tsx:87`) and that rendering adds a second link to the
+`data({ accountId }, { status: 404 })` (`action` in `review.tsx`) and that rendering adds a second
+link to the
 account. Every other step throws a plain-string 404 and gets the single link.
 
 #### Column mapping: how a brokerage is remembered
@@ -1152,7 +1162,7 @@ Three of those deserve emphasis:
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:776-782`, guarded by
+file carries one, `commitUpload` in `uploads.server.ts` writes it onto the account (guarded by
 `where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
 itself on the first upload, and every later statement is checked against it.
 
@@ -1551,16 +1561,19 @@ Three error types, and the layer each one is answered at.
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors`, a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:87` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
-| `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
+| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `action` in `upload/review.tsx` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
+| `DraftNotReadyError` | `uploads.server.ts` | the step still owed and any parser problems, plus the draft that was checked | the upload routes | a redirect to that step; Review instead renders a carried blank-instrument row problem as a blocking page |
 
 **A refusal is an ordinary outcome of a form submission, never a 500.** That rule is what keeps
 routes thin: a route reads the form, hands the raw fields to a domain function, and renders whatever
 comes back. It never imports Zod, and it never states a rule that a second caller could then get a
 different answer for.
 
-`DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. The reader's next
-move is an earlier step, so the error names that step and the routes translate it into a redirect.
+`DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. Usually the reader's
+next move is an earlier step, so the error names that step and the routes translate it into a
+redirect. Review keeps one exception for a mapping saved before the blank-instrument rule existed:
+it renders the carried source-row problems at the bookmarked URL, with no diff or commit, and links
+to Columns.
 
 **One deliberate inversion of this table:** `app/lib/owner-reading.server.ts`'s `ownerReading` throws
 the redirect `Response` itself, rather than a domain error for a route to translate, because settling
@@ -2238,7 +2251,7 @@ there.
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
 | `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
 | `upload/instruments.tsx` | Step three: resolve first sightings, each answered once and remembered forever. The flow's one early write: it records vocabulary, not the statement. Reached only on a miss; otherwise the loader redirects to review |
-| `upload/review.tsx` | Step four: the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. Otherwise read-only: a wrong figure is fixed back on the columns step, because it is wrong in the mapping |
+| `upload/review.tsx` | Step four: the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping on Columns or upload a corrected external file against the same account. Otherwise read-only |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
 | `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
 | `settings/index.tsx` | What Settings holds and what it will hold, since naming the unbuilt tabs is the honest version of a fresh install |

@@ -223,12 +223,31 @@ describe("rememberMapping", () => {
   );
 
   it(
-    "refuses an instrument column that is empty on every row, naming that column",
+    "hands back row problems when an empty instrument column has mapped quantity data",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
       const account = await seedAccount({ kind: "brokerage" });
       const draft = await seedUploadDraft({
         account,
         bytes: new TextEncoder().encode("Symbol,Quantity\n,100\n,50\n"),
+      });
+
+      const outcome = await rememberMapping(draft.id, SIMPLE, db);
+
+      if (!("problems" in outcome)) throw new Error("The invalid rows passed Columns.");
+      expect(outcome.problems).toHaveLength(2);
+      expect(outcome.problems.map((problem) => problem.row)).toEqual([1, 2]);
+      expect(outcome.problems.every((problem) => problem.code === "blank-instrument")).toBe(true);
+      expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses an instrument column empty on every genuinely empty data row",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      const account = await seedAccount({ kind: "brokerage" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\n,\n,\n"),
       });
 
       let refusal: ValidationError | null = null;

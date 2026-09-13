@@ -21,7 +21,7 @@ const mapping = (
 });
 
 describe("parseStatement on the fixtures", () => {
-  it("reads the Fidelity-shaped export past its preamble and footer", () => {
+  it("reads Fidelity positions and refuses footer prose in a mapped account-number cell", () => {
     const { rows } = readCsv(fixture("fidelity.csv"));
     const parsed = parseStatement(
       rows,
@@ -37,7 +37,14 @@ describe("parseStatement on the fixtures", () => {
       }),
     );
 
-    expect(parsed.problems).toEqual([]);
+    expect(parsed.problems.map(({ row, column }) => ({ row, column }))).toEqual([
+      { row: 8, column: "Symbol" },
+      { row: 9, column: "Symbol" },
+      { row: 10, column: "Symbol" },
+    ]);
+    for (const problem of parsed.problems) {
+      expect(problem.message).toContain('"Account Number"');
+    }
     expect(parsed.positions).toHaveLength(4);
     expect(parsed.skipped).toEqual([]);
 
@@ -161,7 +168,7 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.problems[0]?.column).toBe("Symbol");
   });
 
-  it("records the liability statement's positive balance as a debt", () => {
+  it("records the liability row and refuses footer prose in its mapped account-number cell", () => {
     const { rows } = readCsv(fixture("liability.csv"));
     const parsed = parseStatement(
       rows,
@@ -177,7 +184,9 @@ describe("parseStatement on the fixtures", () => {
       }),
     );
 
-    expect(parsed.problems).toEqual([]);
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ row: 5, column: "Description" });
+    expect(parsed.problems[0]?.message).toContain('"Account Number"');
     expect(parsed.positions).toHaveLength(1);
 
     // file says 14,500.00 owed; §2 puts the sign in the quantity, decided by the mapping's checkbox
@@ -257,10 +266,126 @@ describe("the mapping itself", () => {
 describe("row handling", () => {
   const columns = { instrument: "Symbol", quantity: "Qty" };
 
-  it("skips a row whose instrument cell is empty, as a footer or spacer", () => {
+  it.each([
+    {
+      label: "quantity",
+      columns: { instrument: "Symbol", quantity: "Qty" },
+      header: ["Symbol", "Qty"],
+      row: ["", "139.153103"],
+      populated: "Qty",
+    },
+    {
+      label: "cost basis",
+      columns: { instrument: "Symbol", quantity: "Qty", costBasis: "Basis" },
+      header: ["Symbol", "Qty", "Basis"],
+      row: [" ", "", "108.2561"],
+      populated: "Basis",
+    },
+    {
+      label: "as-of date",
+      columns: { instrument: "Symbol", quantity: "Qty", asOf: "As Of" },
+      header: ["Symbol", "Qty", "As Of"],
+      row: ["\t", "", "2026-09-13"],
+      populated: "As Of",
+    },
+    {
+      label: "account number",
+      columns: { instrument: "Symbol", quantity: "Qty", accountNumber: "Account" },
+      header: ["Symbol", "Qty", "Account"],
+      row: ["", "", "Z12-345678"],
+      populated: "Account",
+    },
+  ])("refuses a blank instrument with a populated mapped $label cell", ({
+    columns: mapped,
+    header,
+    row,
+    populated,
+  }) => {
     const parsed = parseStatement(
-      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"], ["   ", "2"], [""]],
-      mapping({ columns }),
+      [header, ["VTI", "282.144455"], row],
+      mapping({ columns: mapped }),
+    );
+
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.positions).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({
+      row: 2,
+      column: "Symbol",
+      code: "blank-instrument",
+    });
+    expect(parsed.problems[0]?.message).toContain("Line 3");
+    expect(parsed.problems[0]?.message).toContain(`"${populated}"`);
+    expect(parsed.problems[0]?.message).not.toContain(
+      row.find((cell) => cell.trim() !== "") ?? "",
+    );
+  });
+
+  it.each(["0", "not a number", "--", "n/a"])(
+    "treats a raw quantity spelling of %j as populated before numeric normalisation",
+    (quantity) => {
+      const parsed = parseStatement(
+        [
+          ["Symbol", "Qty"],
+          ["", quantity],
+        ],
+        mapping({ columns }),
+      );
+
+      expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+      expect(parsed.problems[0]?.message).toContain('"Qty"');
+    },
+  );
+
+  it("refuses a ragged row whose missing instrument cell accompanies mapped data", () => {
+    const parsed = parseStatement(
+      [
+        ["Qty", "Symbol"],
+        ["0"],
+      ],
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty" } }),
+    );
+
+    expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(/Line 2.*"Qty"/);
+  });
+
+  it("refuses a ragged account-number-only row before a missing instrument cell", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["Z12-345678"],
+      ],
+      mapping({
+        columns: {
+          instrument: "Symbol",
+          quantity: "Qty",
+          accountNumber: "Account",
+        },
+      }),
+    );
+
+    expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(/Line 2.*"Account"/);
+  });
+
+  it("ignores empty spacers and footer text outside mapped financial and account columns", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "Basis", "As Of", "Account", "Name", "Other"],
+        ["VTI", "1", "", "", "", "Vanguard", ""],
+        [],
+        ["   ", "  ", "", "\t", "", "Footer heading", "disclosure text"],
+      ],
+      mapping({
+        columns: {
+          instrument: "Symbol",
+          quantity: "Qty",
+          costBasis: "Basis",
+          asOf: "As Of",
+          accountNumber: "Account",
+          name: "Name",
+        },
+      }),
     );
 
     expect(parsed.problems).toEqual([]);

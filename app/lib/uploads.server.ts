@@ -281,7 +281,7 @@ export async function rememberMapping(
 
 // step names the earliest step still owed; null = diffable and committable.
 export type DraftParse =
-  | { step: "columns" }
+  | { step: "columns"; problems: ParseProblem[] }
   | {
       step: "instruments";
       parsed: ParsedStatement;
@@ -295,13 +295,13 @@ export async function parseDraft(
   db: Kysely<Database> = getDb(),
 ): Promise<DraftParse> {
   const saved = statementMapping.safeParse(draft.mapping);
-  if (!saved.success) return { step: "columns" };
+  if (!saved.success) return { step: "columns", problems: [] };
 
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
 
   // A saved mapping only lands after a clean parse, so problems mean it predates a rule — remap.
-  if (parsed.problems.length > 0) return { step: "columns" };
+  if (parsed.problems.length > 0) return { step: "columns", problems: parsed.problems };
 
   const unresolved = await unresolvedStrings(
     parsed.positions.map((position) => position.instrument),
@@ -314,14 +314,23 @@ export async function parseDraft(
   return { step: null, parsed, mapping: saved.data };
 }
 
-// Not a refusal, not a 404 — the reader's next move is an earlier step, and routes redirect there.
+// Not a refusal, not a 404. Routes usually redirect to the owed step; Review uses carried
+// blank-instrument problems and the exact checked draft to render its legacy-draft block.
 export class DraftNotReadyError extends Error {
   override readonly name = "DraftNotReadyError";
   readonly step: "columns" | "instruments";
+  readonly problems: ParseProblem[];
+  readonly draft: UploadDraft | undefined;
 
-  constructor(step: "columns" | "instruments") {
+  constructor(
+    step: "columns" | "instruments",
+    problems: ParseProblem[] = [],
+    draft?: UploadDraft,
+  ) {
     super(`This draft has not passed the ${step} step.`);
     this.step = step;
+    this.problems = problems;
+    this.draft = draft;
   }
 }
 
@@ -432,7 +441,13 @@ async function assembleDiff(
   db: Kysely<Database>,
 ): Promise<AssembledDiff> {
   const result = await parseDraft(draft, db);
-  if (result.step !== null) throw new DraftNotReadyError(result.step);
+  if (result.step !== null) {
+    throw new DraftNotReadyError(
+      result.step,
+      result.step === "columns" ? result.problems : [],
+      draft,
+    );
+  }
   const { parsed } = result;
 
   const strings = parsed.positions.map((position) => position.instrument);

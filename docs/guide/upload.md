@@ -24,16 +24,18 @@ A leading byte-order mark, the invisible marker some exports start with, is fine
 
 ## What the reader tolerates
 
-You do not have to tidy a file up first.
+The reader handles these formats and layout details:
 
 - **Comma, semicolon and tab are all detected**, by which one divides the file most consistently,
   not by counting commas on the first line.
 - **Quoted fields** work as they do everywhere: a quoted cell may contain the delimiter, a line
   break and doubled quotes.
 - **Any line ending.** Windows, Unix or old Mac.
-- **Preamble and footer rows.** "Account Summary", a date stamp, a blank line, a disclaimer at the
-  foot: rows above the header are never read, and a row with nothing in the instrument column is
-  passed over.
+- **Preamble and footer rows without mapped data.** Rows above the header are never read. Below it,
+  a blank line or a disclaimer in a name or unmapped column is passed over when the instrument,
+  quantity, cost basis, as-of date and account-number cells are blank. If footer prose lands under a
+  mapped account-number or financial column, remove that footer row from the external file and start
+  a new upload, or mark the optional column **Not in this file** before continuing.
 - **Ragged rows.** Rows shorter or longer than the header do not break the read.
 
 ## The account and the file
@@ -121,7 +123,12 @@ for households ahead of the server's time zone.
 
 ## What happens to your rows
 
-- **A row with a blank instrument is skipped silently.** That is a spacer or a footer.
+- **A blank instrument is skipped only when every mapped financial and account cell is blank.** If
+  quantity, cost basis, as-of date or account number contains anything, Columns refuses the mapping
+  and names the source line and populated columns. Zero, `n/a`, a dash and malformed figures all
+  count as content here: they cannot make a source row disappear before it is checked. Choose a
+  different instrument column if the mapping is wrong; if the source row is wrong, fix the external
+  file and start a new upload.
 - **A row that names something but whose quantity is an absence marker is skipped and listed on the
   review**, by line number. A blank, a dash or `n/a` in the quantity column is the usual case: a
   "Cash & Cash Investments" heading, a subtotal. It is named rather than dropped quietly, because a
@@ -173,6 +180,11 @@ refused naming the currency; the instance holds dollars only.
 
 The review compares the resolved file against current holdings, listing additions, updates, and
 every removal. Missing rows mean sold. More than half removed requires acknowledgement.
+
+A draft saved before the blank-instrument check may reach Review with one of these invalid rows.
+Review names the line and populated mapped columns, shows no removal diff, and offers no record
+button. Return to Columns to change the mapping, or edit the CSV outside Portfolio and use the link
+to upload the corrected file against the same account. The draft's original file does not change.
 
 Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
 cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
