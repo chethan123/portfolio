@@ -7,6 +7,7 @@ import { z } from "zod";
 import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
+import { withAccountWrite } from "./account-write.server.ts";
 import { numberTail } from "./account-label.ts";
 import { getAccount } from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
@@ -377,14 +378,6 @@ type AssembledDiff = {
   fileAccountNumber: string | null;
 };
 
-// Kysely refuses .transaction() on a transaction, and the test seam is one.
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
-
 // quantity x price for a row holding_valued cannot compute yet; same digits the view produces.
 function valueAt(quantity: string, price: string | null): string | null {
   if (price === null) return null;
@@ -638,13 +631,26 @@ export type CommittedUpload = {
 };
 
 // The flow's one write: immutable position_set, one holding per parsed row, draft deleted — one
-// transaction. Every refusal runs first, each commented below. A second upload for an
-// already-recorded date is allowed (latest_position_set's tie-break resolves it); re-posting a
-// committed draft is a NotFoundError.
+// account-serialized transaction. Every refusal runs under that lock, each commented below. A
+// second upload for an already-recorded date is allowed (latest_position_set's tie-break resolves
+// it); re-posting a committed draft is a NotFoundError.
 export async function commitUpload(
   draftId: string,
   raw: CommitInput,
   db: Kysely<Database> = getDb(),
+): Promise<CommittedUpload> {
+  // The draft supplies the account key. Re-read it under the lock below: this first lookup only
+  // chooses which account to serialize, and never decides whether or what to commit.
+  const draft = await findDraft(draftId, db);
+  if (draft === undefined) throw new NotFoundError(EXPIRED);
+
+  return withAccountWrite(draft.accountId, db, (trx) => commitUploadUnderLock(draftId, raw, trx));
+}
+
+async function commitUploadUnderLock(
+  draftId: string,
+  raw: CommitInput,
+  db: Kysely<Database>,
 ): Promise<CommittedUpload> {
   const draft = await findDraft(draftId, db);
   if (draft === undefined) throw new NotFoundError(EXPIRED);
@@ -737,65 +743,63 @@ export async function commitUpload(
     );
   }
 
-  return inTransaction(db, async (trx) => {
-    // Deletion leads and guards the transaction: no second set behind a concurrent commit's back.
-    const taken = await trx
-      .deleteFrom("upload_draft")
-      .where("id", "=", draft.id)
-      .executeTakeFirst();
-    if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
+  // Deletion leads and guards the transaction: no second set behind a concurrent commit's back.
+  const taken = await db
+    .deleteFrom("upload_draft")
+    .where("id", "=", draft.id)
+    .executeTakeFirst();
+  if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
 
-    const set = await trx
-      .insertInto("position_set")
-      .values({
-        account_id: draft.accountId,
-        as_of_date: asOf,
-        source: "upload",
-        source_filename: draft.filename,
-        raw_file: Buffer.from(draft.bytes),
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
+  const set = await db
+    .insertInto("position_set")
+    .values({
+      account_id: draft.accountId,
+      as_of_date: asOf,
+      source: "upload",
+      source_filename: draft.filename,
+      raw_file: Buffer.from(draft.bytes),
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
 
-    if (rows.length > 0) {
-      await trx
-        .insertInto("holding")
-        .values(
-          rows.map((row) => ({
-            position_set_id: set.id,
-            instrument_id: row.instrumentId,
-            // Zero stays zero, null stays null: a defaulted basis reports a fake gain (§5.4, 0001).
-            quantity: row.quantity,
-            cost_basis_per_share: row.costBasisPerShare,
-          })),
-        )
-        .execute();
-    }
+  if (rows.length > 0) {
+    await db
+      .insertInto("holding")
+      .values(
+        rows.map((row) => ({
+          position_set_id: set.id,
+          instrument_id: row.instrumentId,
+          // Zero stays zero, null stays null: a defaulted basis reports a fake gain (§5.4, 0001).
+          quantity: row.quantity,
+          cost_basis_per_share: row.costBasisPerShare,
+        })),
+      )
+      .execute();
+  }
 
-    // Only where the column is still empty: never overwrite a hand-recorded or concurrent number.
-    if (fileAccountNumber !== null && draft.accountNumber === null) {
-      await trx
-        .updateTable("account")
-        .set({ external_account_number: fileAccountNumber })
-        .where("id", "=", draft.accountId)
-        .where("external_account_number", "is", null)
-        .execute();
-    }
+  // Only where the column is still empty: never overwrite a hand-recorded or concurrent number.
+  if (fileAccountNumber !== null && draft.accountNumber === null) {
+    await db
+      .updateTable("account")
+      .set({ external_account_number: fileAccountNumber })
+      .where("id", "=", draft.accountId)
+      .where("external_account_number", "is", null)
+      .execute();
+  }
 
-    return {
-      setId: set.id,
-      accountId: draft.accountId,
-      accountName: draft.accountName,
-      filename: draft.filename,
-      asOf,
-      counts: {
-        added: diff.added.length,
-        updated: diff.updated.length,
-        unchanged: diff.unchangedCount,
-        removed: diff.removed.length,
-      },
-    };
-  });
+  return {
+    setId: set.id,
+    accountId: draft.accountId,
+    accountName: draft.accountName,
+    filename: draft.filename,
+    asOf,
+    counts: {
+      added: diff.added.length,
+      updated: diff.updated.length,
+      unchanged: diff.unchangedCount,
+      removed: diff.removed.length,
+    },
+  };
 }
 
 export type UploadReceipt = {

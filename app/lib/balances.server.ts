@@ -1,11 +1,12 @@
 // Sets the balance of a single-position account (DESIGN.md §5.2, §11) via the same
 // append-a-position-set mechanism as an upload (source='manual', no filename).
 // Sign is derived from kind, never typed in. Refusals read actual current holdings, not just
-// `kind` (a label that can lie, SET-1). Both inserts are one statement: a data-modifying CTE
-// so a position_set can never land without its holding row.
+// `kind` (a label that can lie, SET-1). The account write transaction serializes its current-state
+// read; both inserts are one data-modifying CTE so a set can never land without its holding row.
 import { sql } from "kysely";
 import { z } from "zod";
 
+import { withAccountWrite } from "./account-write.server.ts";
 import { acceptsSetBalance, isOwed } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
@@ -73,6 +74,14 @@ export async function setBalance(
   raw: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<RecordedBalance> {
+  return withAccountWrite(accountId, db, (trx) => setBalanceUnderLock(accountId, raw, trx));
+}
+
+async function setBalanceUnderLock(
+  accountId: string,
+  raw: unknown,
+  db: Kysely<Database>,
+): Promise<RecordedBalance> {
   const account = await getAccount(accountId, db);
 
   // Before field validation: wrong account kind isn't fixable by correcting the form.
@@ -115,10 +124,8 @@ export async function setBalance(
   const zero = /^0+(\.0+)?$/.test(input.amount);
   const quantity = isOwed(account.kind) && !zero ? `-${input.amount}` : input.amount;
 
-  // Guard re-checks inside the write (revisePosition's pattern): a statement committed between
-  // the pre-check and this insert would otherwise get sold off. No guard row => no insert at all,
-  // even with no prior statement (latest_position_set is NULL, so `not exists` still holds).
-  // Race untested deliberately: rollback isolation means it can't be reproduced in a test.
+  // Defense in depth after the serialized pre-check: no guard row means no insert at all, even
+  // with no prior statement (latest_position_set is NULL, so `not exists` still holds).
   const written = await sql<{ position_set_id: string }>`
     with guard as (
       select 1
