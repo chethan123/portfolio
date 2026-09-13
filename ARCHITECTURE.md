@@ -1576,12 +1576,13 @@ still-shutting-down container, and a determined operator can run two.
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
 | Two refreshes anywhere, from a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's. The checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
-| Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
+| Two commits of one draft | Serialized on the account lock; the second commit's locked re-read finds no draft. Delete-first remains the final defence: zero rows aborts | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
 | Two current-state writes for one account | `withAccountWrite` holds `FOR NO KEY UPDATE` on the account through the latest-state read and mutation. Corrections merge into the preceding complete snapshot; uploads and balances append in lock order | `account-write.server.ts`; all three position-set writers |
 | A form posted against a position that moved | Once its account lock is acquired, `currentPosition` resolves the latest committed set; absence becomes an actionable refusal. The write's `source` CTE repeats the membership check and keeps the set plus copied holdings atomic | `positions.server.ts` |
 | A balance typed against a statement that changed under it | Once its account lock is acquired, `currentStatement` sees the preceding writer; non-cash holdings become an actionable refusal. Its CTE keeps the set plus cash holding atomic | `balances.server.ts` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:161` |
+| A position write landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | [`accounts.server.ts`](app/lib/accounts.server.ts); [#311](https://github.com/chethan123/portfolio/issues/311) |
+| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | [`accounts.server.ts`](app/lib/accounts.server.ts); [#312](https://github.com/chethan123/portfolio/issues/312) |
 | An account closes while a current-state write is in flight | Closure takes the same account lock. A writer ordered after it re-reads `closed_at` under the lock and refuses; no position history is appended to the closed account | `accounts.server.ts`; all three position-set writers |
 
 Same-date position sets remain ordered by `as_of_date`, then `created_at`, then `id` in
@@ -2118,8 +2119,9 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **`inTransaction` exists twice** — in `prices.server.ts` and
-  `instrument-resolution.server.ts` — identically. Both already import from `db.server.ts`.
+- **The transaction-or-reuse branch exists three times** — in `prices.server.ts`,
+  `instrument-resolution.server.ts` and `account-write.server.ts`. All three already import from
+  `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
@@ -2130,6 +2132,8 @@ still live in the current code:
 
 **Found while writing this document**, not from the review:
 
+- **Account and upload-draft route ids check decimal shape but not the `bigint` bound**, so an
+  oversized id reaches PostgreSQL as a 500 ([#310](https://github.com/chethan123/portfolio/issues/310)).
 - **`MAX_UPLOAD_MB` is not wired through `compose.yaml`**, so under the documented deployment the cap
   is permanently 10 MB whatever an operator puts in `.env` (§3.3).
 - **`statement.ts:15` imports a `.server` module as a value** (§4.3). It stays out of the client
@@ -2303,7 +2307,7 @@ also export pure helpers for testing.
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
 | `0010_price_backfill.sql` | `price_backfill`, one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
-| `0012_lock.sql` | `passkey` and `unlock_grant` — the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
+| `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
 | `0013_account_write_order.sql` | The `position_set.created_at` insert-time default that keeps same-date latest-set order aligned with serialized account writes |
 
 ### `public/`
