@@ -3,6 +3,7 @@ import { Form, Link, redirect } from "react-router";
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   NarrowedTo,
   OwnerFilterControl,
@@ -10,8 +11,9 @@ import {
   holdsNothing,
 } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { isNegative, joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
+import { DECIMAL_FORMAT_HINT } from "~/lib/decimal-input";
+import { isNegative, joinWords } from "~/lib/format";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -760,7 +762,7 @@ function Row({
         {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
         <td className="is-numeric" role="cell" data-label="Quantity">
           {open ? (
-            <input
+            <InterpretedNumberInput
               id="revise-quantity"
               form={EDITOR}
               name="quantity"
@@ -771,9 +773,16 @@ function Row({
               className="cell-input"
               aria-label={`Quantity of ${holding.instrumentName}`}
               aria-invalid={errors?.quantity ? true : undefined}
-              aria-describedby={errors?.quantity ? "revise-error-quantity" : undefined}
+              aria-describedby={
+                errors?.quantity
+                  ? "revise-error-quantity revise-quantity-format revise-number-format"
+                  : "revise-quantity-format revise-number-format"
+              }
               autoComplete="off"
               autoFocus
+              compact
+              noteId="revise-quantity-format"
+              shape="quantity"
             />
           ) : (
             <Amount value={holding.quantity} shape="quantity" />
@@ -787,7 +796,7 @@ function Row({
         </td>
         <td className="is-numeric" role="cell" data-label="Cost basis">
           {open ? (
-            <input
+            <InterpretedNumberInput
               id="revise-cost-basis"
               form={EDITOR}
               name="costBasisPerShare"
@@ -800,9 +809,14 @@ function Row({
               placeholder="per share"
               aria-invalid={errors?.costBasisPerShare ? true : undefined}
               aria-describedby={
-                errors?.costBasisPerShare ? "revise-error-costBasisPerShare" : undefined
+                errors?.costBasisPerShare
+                  ? "revise-error-costBasisPerShare revise-cost-basis-format revise-number-format"
+                  : "revise-cost-basis-format revise-number-format"
               }
               autoComplete="off"
+              compact
+              noteId="revise-cost-basis-format"
+              shape="money"
             />
           ) : (
             <Amount value={holding.costBasis} />
@@ -840,6 +854,9 @@ function Row({
           <td colSpan={span} role="cell" data-label="">
             <div className="row-editor">
               <div>
+                <p id="revise-number-format" className="form-note">
+                  {DECIMAL_FORMAT_HINT}
+                </p>
                 {messages.length > 0 ? (
                   messages.map(([field, message]) => (
                     <p

@@ -457,12 +457,12 @@ export function groupHoldings(
 
 // Not in format.ts, which renders money — a quantity takes no currency mark. Same U+2212 as
 // format.ts so signs read alike; shared with Account detail's cell, which drifted with its own copy.
-export function formatQuantity(decimal: string): string {
+export function formatQuantity(decimal: string, preservePlaces = false): string {
   const trimmed = decimal.trim();
   const negative = trimmed.startsWith("-") || trimmed.startsWith("−");
   const [int = "0", frac = ""] = trimmed.replace(/^[-+−]/, "").split(".");
-  const fraction = frac.replace(/0+$/, "");
-  const zero = /^0*$/.test(int) && fraction === "";
+  const fraction = preservePlaces ? frac : frac.replace(/0+$/, "");
+  const zero = /^0*$/.test(int) && /^0*$/.test(fraction);
 
   return `${negative && !zero ? "−" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${
     fraction ? `.${fraction}` : ""

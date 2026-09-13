@@ -45,9 +45,15 @@ describe("percentRate", () => {
     expect(refusal("23.8123456")).toMatch(/decimal places/);
   });
 
+  it.each(["1,5", "12,34", "1 5"])("refuses ambiguous grouping in %o", (typed) => {
+    expect(refusal(typed)).toMatch(/ambiguous or invalid.*group thousands in threes/i);
+  });
+
   it("allows both ends of the range and nothing outside it", () => {
     expect(parsed("0")).toBe("0");
     expect(parsed("100")).toBe("100");
+    expect(parsed("0,099.5%")).toBe("0099.5");
+    expect(refusal("12,345")).toMatch(/more than 100/);
     expect(refusal("100.000001")).toMatch(/more than 100/);
     expect(refusal("101")).toMatch(/more than 100/);
   });
@@ -56,6 +62,7 @@ describe("percentRate", () => {
     // hyphen from a keyboard, U+2212 from a rendered document — same pair the money fields refuse
     expect(refusal("-5")).toMatch(/negative/);
     expect(refusal("−5")).toMatch(/negative/);
+    expect(refusal("-$1,234")).toMatch(/negative/);
   });
 
   it("refuses an empty box and anything that is not a number", () => {
