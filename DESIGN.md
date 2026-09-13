@@ -347,7 +347,10 @@ restate every figure back to the date of the statement the row landed in. March'
 move because an August typo was fixed, with nothing on any screen saying so. A correction is
 therefore a *new* position set dated today, and the one it corrects stays where it is, still
 speaking for its own dates. Undo is a second correction, resolved by the same tie-break a
-re-uploaded statement is (`created_at`, then `id`).
+re-uploaded statement is (`created_at`, then `id`). `created_at` is stamped when the insert
+statement begins, after the account's current-state writers have taken their serialized turn;
+transaction start time would make an older waiting transaction's later snapshot sort behind the
+write it followed and disappear from current readings.
 
 **It carries the whole account forward.** §5.2's "a missing row means sold" makes a position set a
 photograph of everything an account holds, so a set containing only the corrected row would record

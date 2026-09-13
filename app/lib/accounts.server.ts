@@ -4,6 +4,7 @@
 // What "closed" means for a figure is the views' rule (SQL, §8.2), not this module's.
 import { z } from "zod";
 
+import { withAccountWrite } from "./account-write.server.ts";
 import {
   ACCOUNT_KINDS,
   acceptsSetBalance,
@@ -240,23 +241,25 @@ export async function closeAccount(
   raw: CloseAccountInput,
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
-  const existing = await getAccount(id, db);
-  if (existing.isClosed) return existing;
+  return withAccountWrite(id, db, async (trx) => {
+    const existing = await getAccount(id, trx);
+    if (existing.isClosed) return existing;
 
-  if (raw.confirmClose !== "true") {
-    throw ValidationError.form(
-      `${existing.name} stays open — closing is one-way in this version, ` +
-        "so it asks for the acknowledgement to be ticked first.",
-    );
-  }
+    if (raw.confirmClose !== "true") {
+      throw ValidationError.form(
+        `${existing.name} stays open — closing is one-way in this version, ` +
+          "so it asks for the acknowledgement to be ticked first.",
+      );
+    }
 
-  await db
-    .updateTable("account")
-    .set({ closed_at: new Date() })
-    .where("id", "=", existing.id)
-    .execute();
+    await trx
+      .updateTable("account")
+      .set({ closed_at: new Date() })
+      .where("id", "=", existing.id)
+      .execute();
 
-  return getAccount(existing.id, db);
+    return getAccount(existing.id, trx);
+  });
 }
 
 // A nonexistent owner id is a form message, not a foreign-key violation.

@@ -1,10 +1,12 @@
 // Corrects one position in place on Holdings (DESIGN.md §5.4) — balances.server.ts for accounts
 // holding more than one thing. Same rules: appends never edits (an update would restate every
 // plotted date back to the statement); carries the whole account forward; changes numbers, never
-// membership (§4.3). One statement; the CTE guards the instrument is still on the account.
+// membership (§4.3). The account write transaction serializes the latest-set read; one CTE keeps
+// the new set and copied holdings atomic and repeats the membership guard.
 import { sql } from "kysely";
 import { z } from "zod";
 
+import { withAccountWrite } from "./account-write.server.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
   NotFoundError,
@@ -56,8 +58,8 @@ export type RevisedPosition = {
   asOf: IsoDate;
 };
 
-// Resolved via latest_position_set (§8.2), read twice per correction (write checks whether it
-// may apply, loader reads the date it'll carry). Null for no such instrument, or no statement at all.
+// Resolved via latest_position_set (§8.2). The correction reads it under the account write lock;
+// the CTE repeats the membership check. Null for no such instrument, or no statement at all.
 export async function currentPosition(
   accountId: string,
   instrumentId: string,
@@ -145,6 +147,17 @@ export async function revisePosition(
   instrumentId: string,
   raw: unknown,
   db: Kysely<Database> = getDb(),
+): Promise<RevisedPosition> {
+  return withAccountWrite(accountId, db, (trx) =>
+    revisePositionUnderLock(accountId, instrumentId, raw, trx),
+  );
+}
+
+async function revisePositionUnderLock(
+  accountId: string,
+  instrumentId: string,
+  raw: unknown,
+  db: Kysely<Database>,
 ): Promise<RevisedPosition> {
   const account = await getAccount(accountId, db);
 
