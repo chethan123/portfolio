@@ -34,17 +34,12 @@ Anything long belongs in a file, not the reply.
 a rewrite. One question per turn, then wait. Routine judgement calls are yours: make them and
 state the assumption in one line.
 
-**Delegation.** Use subagents for bounded, independent work that is substantial enough to repay the
-coordination cost: codebase searches, current-doc checks, review passes, and parallel tickets. Keep
-synthesis, dependency decisions, the final reply, and shared mutable state with the primary agent;
-give each file or external side effect one owner. Do tightly coupled or very small tasks directly.
-Route by risk, ambiguity, and evidence rather than calling every tool task mechanical: use an
-efficient model at low or medium effort for repetitive, well-specified work, and stronger reasoning
-for architecture, diagnosis, high-stakes changes, and adversarial review. External writes still
-need duplicate checks, explicit stopping conditions, and primary-agent verification. Brief every
-subagent as though it has read nothing: objective, scope and non-goals, source of truth, expected
-deliverable, verification, and when to stop. Dispatch independent work together, require concise
-evidence back, then verify and integrate it centrally.
+**Delegation.** Subagents are the default unit of work here, not the escalation. Anything that reads
+more than it writes goes to one — a search across the codebase, a library's current docs, a review
+pass, a spec or plan read end to end — and independent pieces go to several at once, dispatched
+in a single turn. Keep for yourself the decisions, the edits, and the reply to me. Brief each
+subagent as though it has read nothing: what it is looking at, what to hand back, and which file
+or document is the authority for its answer.
 
 **Plans and specs.** Neither reaches me first draft. Write it, then hand it to a subagent as
 adversarial reviewer whose mandate is to **ground** it: every file, function, helper, column and
