@@ -2,6 +2,7 @@
 // (error type, parse helper, field shapes, phrase-builder) so routes never import Zod.
 import { z } from "zod";
 
+import { decimalFormatMessage, parseDecimalInput, type DecimalInputOptions } from "./decimal-input.ts";
 import { SHARE_SCALE, compareDecimal } from "./money.ts";
 
 // Key for a message belonging to the submission as a whole, not one field.
@@ -81,26 +82,28 @@ export function formFields(form: FormData): Record<string, string> {
   return fields;
 }
 
-// Digits and point, extracted from how a person writes a figure. Shared by every number field
-// so there's one answer to "is `1 234.5` a number", not a subtly different one per field.
-const bareDecimal = (value: string): string =>
-  value
-    .replace(/^\+/, "")
-    // U+00A0 (copy-pasted statement) and U+2009 (thousands separator some brokerages use).
-    .replace(/[$\s ,]/g, "")
-    // ".50"/"50." complete rather than refuse; lookarounds keep a bare "." from becoming "0"
-    // (a stray keystroke would otherwise read as the whole position sold).
-    .replace(/^\.(?=\d)/, "0.")
-    .replace(/(?<=\d)\.$/, "");
+// Validate grouping before removing it: changing `1,5` to `15` is a financial write, not tidying.
+// U+00A0 and U+2009 remain valid thousands separators when their groups are actually three digits.
+const decimalText = (label: string, options?: DecimalInputOptions & { required?: boolean }) =>
+  z
+    .string(options?.required ? { message: `${label} is required.` } : undefined)
+    .trim()
+    .superRefine((value, ctx) => {
+      const parsed = parseDecimalInput(value, options);
+      if (parsed.kind === "invalid" && parsed.reason === "grouping") {
+        ctx.addIssue({ code: "custom", message: decimalFormatMessage(label) });
+      }
+    })
+    .transform((value) => {
+      const parsed = parseDecimalInput(value, options);
+      return parsed.kind === "decimal" ? parsed.value : value;
+    });
 
 // Unsigned decimal string, as a person types one ($14,500.00 / 14,500 / 14500 all valid).
 // No sign: direction comes from account kind (§2), not a second source of truth. No Number():
 // output stays typed digits as text (§4.1). maxIntegerDigits default 12 = numeric(20,8)'s room.
 export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    .transform(bareDecimal)
+  decimalText(label, { required: true })
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
 
@@ -183,11 +186,7 @@ const PER_SHARE_DECIMALS = 4;
 // thousands separators both need to come back in. "−0" isn't a thing: a debt of nothing
 // shouldn't print as though it were something.
 export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    // U+2212 in (table's true minus), ASCII "-" out (what the driver takes) — converted once, here.
-    .transform((value) => bareDecimal(value).replace(/^−/, "-"))
+  decimalText(label, { required: true })
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
 
@@ -213,10 +212,7 @@ export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
 // places (numeric(20,4)) so a box prefilled from cost_basis_per_share accepts what it printed.
 // Blank -> null, never 0: a zero basis would claim the shares were free.
 export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
-  z
-    .string()
-    .trim()
-    .transform(bareDecimal)
+  decimalText(label)
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
 
@@ -243,10 +239,7 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
 // multiplier happens only where the multiplying does. "23.8%" pasted equals "23.8" typed;
 // negative isn't a generosity extended (a negative rate isn't a rate). No Number() (§4.1).
 export const percentRate = (label: string, decimals = SHARE_SCALE) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    .transform((value) => bareDecimal(value.replace(/%$/, "")))
+  decimalText(label, { required: true, allowTrailingPercent: true })
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
 

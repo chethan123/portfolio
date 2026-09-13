@@ -22,6 +22,50 @@ async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> 
 
 describe("setBalance", () => {
   it(
+    "refuses ambiguous grouping before writing or changing history",
+    withDatabase(async ({ db, seedAccount }) => {
+      const bank = await seedAccount({ kind: "bank" });
+      await setBalance(bank.id, { amount: "1000.00", asOf: "2026-08-15" }, db);
+
+      const before = await db
+        .selectFrom("position_set")
+        .select(["id", "as_of_date"])
+        .where("account_id", "=", bank.id)
+        .orderBy("id")
+        .execute();
+      const refusal = await refusalOf(() =>
+        setBalance(bank.id, { amount: "1,5", asOf: "2026-08-16" }, db),
+      );
+
+      expect(refusal.fieldErrors.amount).toMatch(/ambiguous or invalid/);
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select(["id", "as_of_date"])
+          .where("account_id", "=", bank.id)
+          .orderBy("id")
+          .execute(),
+      ).toEqual(before);
+      expect((await accountTotal(bank.id, db))?.amount).toBe("1000.0000");
+    }),
+  );
+
+  it(
+    "stores ungrouped decimals and properly grouped balances exactly",
+    withDatabase(async ({ db, seedAccount }) => {
+      const bank = await seedAccount({ kind: "bank" });
+
+      expect(
+        (await setBalance(bank.id, { amount: "1.5", asOf: "2026-08-15" }, db)).amount,
+      ).toBe("1.5");
+      expect(
+        (await setBalance(bank.id, { amount: "1,234.56", asOf: "2026-08-16" }, db)).amount,
+      ).toBe("1234.56");
+      expect((await accountTotal(bank.id, db))?.amount).toBe("1234.5600");
+    }),
+  );
+
+  it(
     "records a bank balance as a positive quantity the account total reads back exactly",
     withDatabase(async ({ db, seedAccount }) => {
       const bank = await seedAccount({ kind: "bank", name: "Ally Online Savings" });

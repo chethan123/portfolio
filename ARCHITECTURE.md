@@ -2194,6 +2194,7 @@ still live in the current code:
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
 | `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
+| `decimal-input.ts` | The browser-safe exact-string grammar shared by every typed financial field and its live interpretation: commas and spaces group thousands only in threes, while a point alone marks decimals |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
@@ -2265,6 +2266,7 @@ also export pure helpers for testing.
 | File | Role |
 |---|---|
 | `amount.tsx` | **The one component that renders an amount** (spec 0007, ADR-0002): every absolute figure comes through here and every ratio does not. One component rather than a flag on the formatters, because the guarantee is only as good as its narrowest point; `masking-boundary.test.ts` asserts the import boundary in place of a linter. `Delta` lives here and asks it for the figure rather than being a second renderer |
+| `interpreted-number-input.tsx` | The progressive form control for the shared decimal grammar: the fixed interpretation rule is in server markup, then an exact, masking-aware echo follows the field after hydration |
 | `masking-toggle.tsx` | The control that hides every amount, in the chrome, labelled with what it will do rather than what is true. Two writers, one click: a real form to `/masking` for scripting-off, and a direct cookie write so the flip happens at the speed of a hand |
 | `lock-now-control.tsx` | The chrome's other control (ticket 06, docs/adr/0012): a real `<form method="post">` to `/lock-now`, drawn only while the household holds a passkey at all. Beside `MaskingToggle` and never mistakable for it: that one dots the amounts on a screen you are reading, while this one ends the reading outright, on this browser, right now |
 | `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable, because a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |

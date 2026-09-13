@@ -62,6 +62,10 @@ there is no reopen control. See [account lifecycle](people-and-accounts.md#corre
 Set the household rate used by Analysis for its potential-tax estimate. This is a projection,
 not a tax calculation for filing. See [Analysis](analysis.md#the-rate-is-yours).
 
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three; `1,5` is
+refused as ambiguous rather than read as 15%. With scripting on, the field also echoes exactly how
+it reads the rate while you type.
+
 ## Prices
 
 ![The refresh cadence, and the holdings whose price history does not reach back far enough](images/settings-prices.png)
