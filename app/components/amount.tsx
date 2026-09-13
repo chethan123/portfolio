@@ -25,17 +25,19 @@ export function Amount({
   value,
   shape = "money",
   places,
+  preservePlaces = false,
 }: {
   value: string | null;
   shape?: AmountShape;
   places?: number;
+  preservePlaces?: boolean;
 }) {
   const masked = useMasked();
 
   if (value === null) return <>—</>;
 
   if (!masked) {
-    if (shape === "quantity") return <>{formatQuantity(value)}</>;
+    if (shape === "quantity") return <>{formatQuantity(value, preservePlaces)}</>;
     if (shape === "signed") return <>{formatSignedMoney(value, places)}</>;
     return <>{formatMoney(value, places)}</>;
   }

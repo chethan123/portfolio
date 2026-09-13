@@ -1,5 +1,6 @@
 import { Form } from "react-router";
 
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import { rateDigits } from "~/lib/allocation";
 import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
@@ -64,26 +65,28 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
           ) : null}
 
           <div>
-            <label htmlFor="capital-gains-rate">
-              Rate, as a percentage
-              <input
-                id="capital-gains-rate"
-                name="capitalGainsRate"
-                inputMode="decimal"
-                // Nothing rounded — rounding would round-trip: 3.75 shown as 3.8, then quietly saved as that.
-                defaultValue={
-                  error
-                    ? (actionData?.values.capitalGainsRate ?? "")
-                    : rateDigits(capitalGainsRate)
-                }
-                aria-invalid={error ? true : undefined}
-                aria-describedby="capital-gains-rate-note"
-                autoComplete="off"
-              />
-            </label>
+            <label htmlFor="capital-gains-rate">Rate, as a percentage</label>
+            <InterpretedNumberInput
+              id="capital-gains-rate"
+              name="capitalGainsRate"
+              inputMode="decimal"
+              // Nothing rounded — rounding would round-trip: 3.75 shown as 3.8, then quietly saved as that.
+              defaultValue={
+                error ? (actionData?.values.capitalGainsRate ?? "") : rateDigits(capitalGainsRate)
+              }
+              aria-invalid={error ? true : undefined}
+              aria-describedby={
+                error
+                  ? "capital-gains-rate-error capital-gains-rate-format capital-gains-rate-note"
+                  : "capital-gains-rate-format capital-gains-rate-note"
+              }
+              autoComplete="off"
+              noteId="capital-gains-rate-format"
+              shape="percentage"
+            />
 
             {error ? (
-              <p className="field-error" role="alert">
+              <p id="capital-gains-rate-error" className="field-error" role="alert">
                 {error}
               </p>
             ) : null}

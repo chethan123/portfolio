@@ -54,9 +54,19 @@ describe("moneyMagnitude", () => {
     ["+14500.00", "14500.00"],
     // A copy out of a rendered statement brings a non-breaking space with it.
     ["$14 500.00", "14500.00"],
+    ["14 500.00", "14500.00"],
   ])("reads %o as the same amount", (typed, stored) => {
     expect(parseInput(amount, { amount: typed }).amount).toBe(stored);
   });
+
+  it.each(["1,5", "12,34", "123,45.67", "1 5", "12 34", "123 45.67", "1,234 567"])(
+    "refuses ambiguous grouping in %o",
+    (typed) => {
+      expect(refusal(amount, { amount: typed }, "amount")).toMatch(
+        /ambiguous or invalid.*group thousands in threes/i,
+      );
+    },
+  );
 
   it("does not round, pad or otherwise tidy the scale it was given", () => {
     // Column decides stored scale — inventing one here (padding cents) would be arithmetic.
@@ -79,6 +89,7 @@ describe("moneyMagnitude", () => {
     // sources of truth about which way it points.
     expect(refusal(amount, { amount: "-14500" }, "amount")).toMatch(/without a minus sign/);
     expect(refusal(amount, { amount: "−14500" }, "amount")).toMatch(/without a minus sign/);
+    expect(refusal(amount, { amount: "-$1,234" }, "amount")).toMatch(/without a minus sign/);
   });
 
   it("refuses what is not an amount", () => {

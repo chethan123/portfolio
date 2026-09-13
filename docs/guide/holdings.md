@@ -176,6 +176,10 @@ Two things to know before you type:
 - **Price, Value and Unrealized keep showing the stored figures** while the row is open. They are
   what you are checking your correction against.
 
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three; the
+editor refuses ambiguous forms such as `1,5`. With scripting on, it also echoes exactly how it reads
+each number while you type.
+
 ### What saving actually does
 
 Saving appends the account’s full snapshot with one position changed. The date is today, or the

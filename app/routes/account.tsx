@@ -3,6 +3,7 @@ import { Form, Link, redirect } from "react-router";
 import { Amount } from "~/components/amount";
 import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   AccountBalanceIcon,
   EditIcon,
@@ -528,22 +529,27 @@ function SetBalance({
           refusal, so a client-side redirect doesn't leave a stale, uncontrolled input. */}
       <Form method="post" className="panel-form" key={recorded?.id ?? "none"}>
         <div>
-          <label htmlFor="set-balance-amount">
-            {owed ? "Amount owed" : "Balance"}
-            <input
-              id="set-balance-amount"
-              name="amount"
-              defaultValue={typedAmount}
-              // `text`, not `number` — a number input silently drops unparseable paste ("$14,500.00").
-              type="text"
-              inputMode="decimal"
-              placeholder="14,500.00"
-              aria-invalid={errors?.amount ? true : undefined}
-              autoComplete="off"
-            />
-          </label>
+          <label htmlFor="set-balance-amount">{owed ? "Amount owed" : "Balance"}</label>
+          <InterpretedNumberInput
+            id="set-balance-amount"
+            name="amount"
+            defaultValue={typedAmount}
+            // `text`, not `number` — a number input silently drops unparseable paste ("$14,500.00").
+            type="text"
+            inputMode="decimal"
+            placeholder="14,500.00"
+            aria-invalid={errors?.amount ? true : undefined}
+            aria-describedby={
+              errors?.amount
+                ? "set-balance-amount-error set-balance-amount-format"
+                : "set-balance-amount-format"
+            }
+            autoComplete="off"
+            noteId="set-balance-amount-format"
+            shape="money"
+          />
           {errors?.amount ? (
-            <p className="field-error" role="alert">
+            <p id="set-balance-amount-error" className="field-error" role="alert">
               {errors.amount}
             </p>
           ) : null}
