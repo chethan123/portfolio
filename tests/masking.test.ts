@@ -8,6 +8,7 @@ import {
   clearedMaskingCookie,
   maskingCookie,
   readMaskingCookie,
+  resolveBrowserMasked,
   resolveMasked,
   type MaskingPolicy,
 } from "~/lib/masking";
@@ -50,6 +51,25 @@ describe("resolving whether a screen is masked", () => {
     // a corrupted value isn't a vote; reading it as anything but "no answer" could show balances
     expect(resolveMasked("masked", "")).toBe(true);
     expect(resolveMasked("unmasked", "yes")).toBe(false);
+  });
+});
+
+describe("the browser decision after hydration", () => {
+  it("keeps a failed policy read masked even when an existing cookie says to show", () => {
+    expect(
+      resolveBrowserMasked({ masked: true, maskingResolved: false }, UNMASKED),
+    ).toBe(true);
+  });
+
+  it("lets a valid browser cookie override every successful loader answer", () => {
+    expect(resolveBrowserMasked({ masked: false, maskingResolved: true }, MASKED)).toBe(true);
+    expect(resolveBrowserMasked({ masked: true, maskingResolved: true }, UNMASKED)).toBe(false);
+  });
+
+  it("fails closed without root data and uses successful root data without a valid cookie", () => {
+    expect(resolveBrowserMasked(undefined, UNMASKED)).toBe(true);
+    expect(resolveBrowserMasked({ masked: true, maskingResolved: true }, undefined)).toBe(true);
+    expect(resolveBrowserMasked({ masked: false, maskingResolved: true }, "invalid")).toBe(false);
   });
 });
 

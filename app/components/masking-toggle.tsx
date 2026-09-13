@@ -15,13 +15,14 @@ import {
   MASKING_FIELD,
   UNMASKED,
   maskingCookie,
+  notifyBrowserMaskingChange,
   useMasked,
 } from "~/lib/masking";
 
 import type { loader as rootLoader } from "../root.tsx";
 
 export function MaskingToggle({ className }: { className?: string }) {
-  // Keyed so every amount on the page can find this submission in flight (`useMasked`).
+  // The rail and phone copies share one submission, including React Router's newer-request cancellation.
   const fetcher = useFetcher({ key: MASKING_FETCHER_KEY });
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
   const masked = useMasked();
@@ -40,6 +41,7 @@ export function MaskingToggle({ className }: { className?: string }) {
         // Optimistic write, so the flip survives a reload before the POST lands. Guarded on `document` for the server render.
         if (typeof document !== "undefined") {
           document.cookie = maskingCookie(next === MASKED, rootData?.maskingPolicy ?? "masked");
+          notifyBrowserMaskingChange();
         }
       }}
     >

@@ -486,6 +486,7 @@ sequenceDiagram
     L->>H: availableFilters / applyFilters / groupHoldings / summarise
     Note right of H: Pure functions over the array that<br/>already exists. Rows, groups and totals<br/>all come from it, so they cannot disagree.
     H-->>L: rows + groups + totals
+    L->>L: if masked, omit amount fields after all calculations
     L-->>B: SSR HTML (hydrates to client routing)
 ```
 
@@ -507,6 +508,24 @@ Three properties of this path are deliberate:
    will be filed under.
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
+
+Holdings is the one read path whose masked projection does not carry those decimal strings to the
+browser. `masking.server.ts` places one deferred policy-and-cookie resolution in React Router's
+per-request `RouterContextProvider`; the root and Holdings loaders obtain the same promise even when
+they start in parallel. The Holdings loader does every calculation against `ValuedHolding[]`, then
+replaces known amounts with omitted properties. Null remains null so an unknown figure stays a dash;
+direction and ratios are projected separately. The global masking fetcher revalidates route loaders
+after its action (React Router 7.18.2), so showing amounts obtains a fresh exact projection before
+correction inputs mount.
+
+The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
+publishes its synchronous write, and the cookie stays ahead of loader data after the fetcher settles
+or fails. This prevents an older exact Show revalidation from remounting correction inputs after a
+newer Hide. A successful policy resolution is an explicit root-loader field; when the policy read
+fails, that field keeps the browser masked even if a pre-existing cookie says to show. The hook's
+server snapshot remains the root loader value, so hydration has no module-global request state.
+During either transition the editor requires both unmasked state and an exact projection, preventing
+stale exact data or a placeholder from becoming a form default.
 
 ### 4.5 Write paths
 
@@ -2199,7 +2218,8 @@ still live in the current code:
 | `format.ts` | Renders. Never computes |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
-| `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `masking.ts` | The masking vocabulary, cookie parsing and browser state reader (ADR-0002). React's external-store hook rereads the cookie after a same-tab toggle so the latest browser choice stays ahead of stale loader data; shared with the server and in the client bundle by design |
+| `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and the same fail-closed outcome |
 | `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request — attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 

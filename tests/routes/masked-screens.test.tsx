@@ -103,12 +103,19 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
     "Holdings — every value, cost basis, gain and share quantity at once",
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
-      const data = await holdingsLoader(args(get("/holdings")));
+      const maskedData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${MASKED}`)),
+      );
+      const shownData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${UNMASKED}`)),
+      );
 
-      if (data instanceof Response) throw new Error("The loader redirected instead of rendering.");
+      if (maskedData instanceof Response || shownData instanceof Response) {
+        throw new Error("The loader redirected instead of rendering.");
+      }
 
-      const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
-      const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
+      const masked = renderRoute(Holdings, "/holdings", maskedData, { masked: true });
+      const shown = renderRoute(Holdings, "/holdings", shownData, { masked: false });
 
       expect(shown).toContain(VALUE);
       expect(masked).not.toContain(VALUE);
@@ -227,11 +234,18 @@ describe("how a masked figure is announced", () => {
     "keeps a gain's sign and its arrow, and loses only its size",
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
-      const data = await holdingsLoader(args(get("/holdings")));
-      if (data instanceof Response) throw new Error("The loader redirected instead of rendering.");
+      const maskedData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${MASKED}`)),
+      );
+      const shownData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${UNMASKED}`)),
+      );
+      if (maskedData instanceof Response || shownData instanceof Response) {
+        throw new Error("The loader redirected instead of rendering.");
+      }
 
-      const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
-      const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
+      const masked = renderRoute(Holdings, "/holdings", maskedData, { masked: true });
+      const shown = renderRoute(Holdings, "/holdings", shownData, { masked: false });
 
       // Asserted against the unmasked render, not a literal, so a fixture that stopped producing a gain fails here instead of passing vacuously.
       expect(shown).toContain("delta--gain");

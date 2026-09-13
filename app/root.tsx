@@ -30,11 +30,11 @@ import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
 import { LOCK_NOW_ACTION, RETURN_PARAM, UNLOCK_PATH } from "~/lib/lock";
 import { clearedLockCookie, isLocked, readLockCookie, touchGrant } from "~/lib/lock.server";
-import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
+import { type MaskingPolicy } from "~/lib/masking";
+import { maskingForRequest } from "~/lib/masking.server";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
 import { postLockNow, watchReentry } from "~/lib/reentry";
-import { readMaskingPolicy } from "~/lib/settings.server";
 import { getConfig } from "../server/config.ts";
 
 import type { Route } from "./+types/root";
@@ -187,11 +187,12 @@ const UNLOCK_SCREEN_ROOT_DATA = {
   firstRun: null as FirstRunStep,
   masked: true,
   maskingPolicy: "masked" as MaskingPolicy,
+  maskingResolved: false,
   hasPasskey: false,
 };
 
 /** Masking is resolved server-side: a page that drew the amounts and then hid them is the one failure this feature cannot have (story 30); every read fails toward masked. */
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, context }: Route.LoaderArgs) {
   const url = new URL(request.url);
   // Skipped deliberately, not just for shape: this is the one request an un-granted browser can hammer.
   if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;
@@ -204,15 +205,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("First-run check failed; continuing without the prompt:", error);
   }
 
-  let masked = true;
-  let maskingPolicy: MaskingPolicy = "masked";
-
-  try {
-    maskingPolicy = await readMaskingPolicy();
-    masked = resolveMasked(maskingPolicy, readMaskingCookie(request));
-  } catch (error) {
-    console.error("Masking policy read failed; masking this render:", error);
-  }
+  const { masked, maskingPolicy, resolved: maskingResolved } = await maskingForRequest(
+    request,
+    context,
+  );
 
   // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again
   // rather than passed down from the middleware so `tests/support/routes.ts`'s `args()` can call this loader directly.
@@ -228,6 +224,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     firstRun,
     masked,
     maskingPolicy,
+    maskingResolved,
     hasPasskey,
   };
 }
