@@ -1,0 +1,50 @@
+{
+  "finding": "QA-25",
+  "runDate": "2026-09-13",
+  "method": "Production HTTP actions against an isolated migrated database, with a disclosed test-only timing intervention",
+  "timingIntervention": {
+    "trigger": "BEFORE INSERT on position_set; manual inserts slept 750 ms",
+    "purpose": "Widen the real gap between revisePosition's closed-account precheck and its INSERT",
+    "productionCodeChanged": false
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "schedule": "Correction and close launched together",
+      "elapsedMs": 411,
+      "responses": {
+        "correction": { "status": 200, "location": null },
+        "close": { "status": 302, "location": "/settings/accounts" }
+      },
+      "accountClosed": true,
+      "positionSets": [
+        { "id": "39", "source": "upload", "asOf": "2026-09-01" }
+      ],
+      "currentRows": 0,
+      "closeDateHistorical": [
+        { "quantity": "100.00000000", "value": null }
+      ],
+      "result": "Correction refused because close won before its precheck"
+    },
+    {
+      "attempt": 2,
+      "schedule": "Correction launched first; close launched 150 ms later",
+      "elapsedMs": 870,
+      "responses": {
+        "correction": { "status": 302, "location": "/holdings?saved=7.12" },
+        "close": { "status": 302, "location": "/settings/accounts" }
+      },
+      "accountClosed": true,
+      "positionSets": [
+        { "id": "40", "source": "upload", "asOf": "2026-09-01" },
+        { "id": "41", "source": "manual", "asOf": "2026-09-13" }
+      ],
+      "currentRows": 0,
+      "closeDateHistorical": [
+        { "quantity": "125.00000000", "value": null }
+      ],
+      "result": "Bug reproduced: both actions redirected as successful and the closed account gained the corrected manual snapshot"
+    }
+  ],
+  "caveat": "This transcript proves the underlying race is reachable under a widened schedule; it does not estimate how often uninstrumented users hit it."
+}

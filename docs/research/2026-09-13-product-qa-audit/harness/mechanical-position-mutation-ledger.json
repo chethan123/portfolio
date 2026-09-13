@@ -1,0 +1,932 @@
+[
+  {
+    "step": 1,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "300",
+      "costBasisPerShare": "160"
+    },
+    "db": {
+      "quantity": "300.00000000",
+      "costBasisPerShare": "160.0000"
+    },
+    "expected": {
+      "netWorth": "$700,909.95",
+      "account": "$218,563.06"
+    },
+    "actual": {
+      "overview": "$700,909.95; $218,563.06",
+      "holdings": "$700,909.95",
+      "account": "$218,563.06"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "/tmp/portfolio-mutqa-artifacts.3XFbPA/screenshots/01-vti-pass.png",
+    "error": null
+  },
+  {
+    "step": 2,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "282.144455",
+      "costBasisPerShare": "165.4961"
+    },
+    "db": {
+      "quantity": "282.14445500",
+      "costBasisPerShare": "165.4961"
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "actual": {
+      "overview": "$695,412.98; $213,066.09",
+      "holdings": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 3,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": "165.4961"
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": "165.4961"
+    },
+    "expected": {
+      "netWorth": "$608,552.70",
+      "account": "$126,205.81"
+    },
+    "actual": {
+      "overview": "$608,552.70; $126,205.81",
+      "holdings": "$608,552.70",
+      "account": "$126,205.81"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 4,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "10.5",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "10.50000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$611,785.20",
+      "account": "$129,438.31"
+    },
+    "actual": {
+      "overview": "$611,785.20; $129,438.31",
+      "holdings": "$611,785.20",
+      "account": "$129,438.31"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 5,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "999999.12345678",
+      "costBasisPerShare": "0.0001"
+    },
+    "db": {
+      "quantity": "999999.12345678",
+      "costBasisPerShare": "0.0001"
+    },
+    "expected": {
+      "netWorth": "$308,465,782.85",
+      "account": "$307,983,435.96"
+    },
+    "actual": {
+      "overview": "$308,465,782.85; $307,983,435.96",
+      "holdings": "$308,465,782.85",
+      "account": "$307,983,435.96"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 6,
+    "target": "VTI",
+    "route": "/holdings?edit=13.34",
+    "input": {
+      "quantity": "282.144455",
+      "costBasisPerShare": "165.4961"
+    },
+    "db": {
+      "quantity": "282.14445500",
+      "costBasisPerShare": "165.4961"
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "actual": {
+      "overview": "$695,412.98; $213,066.09",
+      "holdings": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 7,
+    "target": "AAPL",
+    "route": "/holdings?edit=13.38",
+    "input": {
+      "quantity": "150.25",
+      "costBasisPerShare": "100.1234"
+    },
+    "db": {
+      "quantity": "150.25000000",
+      "costBasisPerShare": "100.1234"
+    },
+    "expected": {
+      "netWorth": "$697,326.51",
+      "account": "$214,979.62"
+    },
+    "actual": {
+      "overview": "$697,326.51; $214,979.62",
+      "holdings": "$697,326.51",
+      "account": "$214,979.62"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 8,
+    "target": "AAPL",
+    "route": "/holdings?edit=13.38",
+    "input": {
+      "quantity": "139.153103",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "139.15310300",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "actual": {
+      "overview": "$695,412.98; $213,066.09",
+      "holdings": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 9,
+    "target": "MSFT",
+    "route": "/holdings?edit=13.39",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": "185.3936"
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": "185.3936"
+    },
+    "expected": {
+      "netWorth": "$669,553.51",
+      "account": "$187,206.62"
+    },
+    "actual": {
+      "overview": "$669,553.51; $187,206.62",
+      "holdings": "$669,553.51",
+      "account": "$187,206.62"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 10,
+    "target": "MSFT",
+    "route": "/holdings?edit=13.39",
+    "input": {
+      "quantity": "94.960067",
+      "costBasisPerShare": "185.3936"
+    },
+    "db": {
+      "quantity": "94.96006700",
+      "costBasisPerShare": "185.3936"
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "actual": {
+      "overview": "$695,412.98; $213,066.09",
+      "holdings": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 11,
+    "target": "SPAXX",
+    "route": "/holdings?edit=13.40",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$679,412.98",
+      "account": "$197,066.09"
+    },
+    "actual": {
+      "overview": "$679,412.98; $197,066.09",
+      "holdings": "$679,412.98",
+      "account": "$197,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 12,
+    "target": "SPAXX",
+    "route": "/holdings?edit=13.40",
+    "input": {
+      "quantity": "16000",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "16000.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "actual": {
+      "overview": "$695,412.98; $213,066.09",
+      "holdings": "$695,412.98",
+      "account": "$213,066.09"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 13,
+    "target": "ALLY",
+    "route": "/holdings?edit=17.1",
+    "input": {
+      "quantity": "14500",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "14500.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$667,912.98",
+      "account": "$14,500.00"
+    },
+    "actual": {
+      "overview": "$667,912.98; $14,500.00",
+      "holdings": "$667,912.98",
+      "account": "$14,500.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 14,
+    "target": "ALLY",
+    "route": "/holdings?edit=17.1",
+    "input": {
+      "quantity": "14500.55",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "14500.55000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$667,913.53",
+      "account": "$14,500.55"
+    },
+    "actual": {
+      "overview": "$667,913.53; $14,500.55",
+      "holdings": "$667,913.53",
+      "account": "$14,500.55"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 15,
+    "target": "ALLY",
+    "route": "/holdings?edit=17.1",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$653,412.98",
+      "account": "$0.00"
+    },
+    "actual": {
+      "overview": "$653,412.98; $0.00",
+      "holdings": "$653,412.98",
+      "account": "$0.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "/tmp/portfolio-mutqa-artifacts.3XFbPA/screenshots/15-ally-pass.png",
+    "error": null
+  },
+  {
+    "step": 16,
+    "target": "ALLY",
+    "route": "/holdings?edit=17.1",
+    "input": {
+      "quantity": "42000",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "42000.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "$42,000.00"
+    },
+    "actual": {
+      "overview": "$695,412.98; $42,000.00",
+      "holdings": "$695,412.98",
+      "account": "$42,000.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 17,
+    "target": "CHASE",
+    "route": "/holdings?edit=18.1",
+    "input": {
+      "quantity": "-10000",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "-10000.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$699,912.98",
+      "account": "−$10,000.00"
+    },
+    "actual": {
+      "overview": "$699,912.98; −$10,000.00",
+      "holdings": "$699,912.98",
+      "account": "−$10,000.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "/tmp/portfolio-mutqa-artifacts.3XFbPA/screenshots/17-chase-pass.png",
+    "error": null
+  },
+  {
+    "step": 18,
+    "target": "CHASE",
+    "route": "/holdings?edit=18.1",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$709,912.98",
+      "account": "$0.00"
+    },
+    "actual": {
+      "overview": "$709,912.98; $0.00",
+      "holdings": "$709,912.98",
+      "account": "$0.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 19,
+    "target": "CHASE",
+    "route": "/holdings?edit=18.1",
+    "input": {
+      "quantity": "2500",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "2500.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$712,412.98",
+      "account": "$2,500.00"
+    },
+    "actual": {
+      "overview": "$712,412.98; $2,500.00",
+      "holdings": "$712,412.98",
+      "account": "$2,500.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 20,
+    "target": "CHASE",
+    "route": "/holdings?edit=18.1",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$709,912.98",
+      "account": "$0.00"
+    },
+    "actual": {
+      "overview": "$709,912.98; $0.00",
+      "holdings": "$709,912.98",
+      "account": "$0.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 21,
+    "target": "CHASE",
+    "route": "/holdings?edit=18.1",
+    "input": {
+      "quantity": "-14500",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "-14500.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$695,412.98",
+      "account": "−$14,500.00"
+    },
+    "actual": {
+      "overview": "$695,412.98; −$14,500.00",
+      "holdings": "$695,412.98",
+      "account": "−$14,500.00"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "/tmp/portfolio-mutqa-artifacts.3XFbPA/screenshots/21-chase-pass.png",
+    "error": null
+  },
+  {
+    "step": 22,
+    "target": "VOO",
+    "route": "/holdings?edit=15.44",
+    "input": {
+      "quantity": "120",
+      "costBasisPerShare": "300"
+    },
+    "db": {
+      "quantity": "120.00000000",
+      "costBasisPerShare": "300.0000"
+    },
+    "expected": {
+      "netWorth": "$698,246.18",
+      "account": "$99,564.23"
+    },
+    "actual": {
+      "overview": "$698,246.18; $99,564.23",
+      "holdings": "$698,246.18",
+      "account": "$99,564.23"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 23,
+    "target": "VWO",
+    "route": "/holdings?edit=15.45",
+    "input": {
+      "quantity": "0",
+      "costBasisPerShare": "47.227"
+    },
+    "db": {
+      "quantity": "0.00000000",
+      "costBasisPerShare": "47.2270"
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "actual": {
+      "overview": "$681,985.07; $83,303.12",
+      "holdings": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 24,
+    "target": "BND",
+    "route": "/holdings?edit=15.46",
+    "input": {
+      "quantity": "306.237359",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "306.23735900",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "actual": {
+      "overview": "$681,985.07; $83,303.12",
+      "holdings": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 25,
+    "target": "BND",
+    "route": "/holdings?edit=15.46",
+    "input": {
+      "quantity": "306.237359",
+      "costBasisPerShare": "70.0845"
+    },
+    "db": {
+      "quantity": "306.23735900",
+      "costBasisPerShare": "70.0845"
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "actual": {
+      "overview": "$681,985.07; $83,303.12",
+      "holdings": "$681,985.07",
+      "account": "$83,303.12"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 26,
+    "target": "VIIIX",
+    "route": "/holdings?edit=14.41",
+    "input": {
+      "quantity": "350.071327",
+      "costBasisPerShare": "482.1234"
+    },
+    "db": {
+      "quantity": "350.07132700",
+      "costBasisPerShare": "482.1234"
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$269,920.06"
+    },
+    "actual": {
+      "overview": "$681,985.07; $269,920.06",
+      "holdings": "$681,985.07",
+      "account": "$269,920.06"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 27,
+    "target": "VIIIX",
+    "route": "/holdings?edit=14.41",
+    "input": {
+      "quantity": "350.071327",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "350.07132700",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$269,920.06"
+    },
+    "actual": {
+      "overview": "$681,985.07; $269,920.06",
+      "holdings": "$681,985.07",
+      "account": "$269,920.06"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 28,
+    "target": "PTTRX",
+    "route": "/holdings?edit=16.48",
+    "input": {
+      "quantity": "3416.941624",
+      "costBasisPerShare": "0"
+    },
+    "db": {
+      "quantity": "3416.94162400",
+      "costBasisPerShare": "0.0000"
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "actual": {
+      "overview": "$681,985.07; $88,195.79",
+      "holdings": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 29,
+    "target": "PTTRX",
+    "route": "/holdings?edit=16.48",
+    "input": {
+      "quantity": "3416.941624",
+      "costBasisPerShare": "8.5773"
+    },
+    "db": {
+      "quantity": "3416.94162400",
+      "costBasisPerShare": "8.5773"
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "actual": {
+      "overview": "$681,985.07; $88,195.79",
+      "holdings": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 30,
+    "target": "CIT",
+    "route": "/holdings?edit=16.49",
+    "input": {
+      "quantity": "1600",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "1600.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "actual": {
+      "overview": "$681,985.07; $88,195.79",
+      "holdings": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "",
+    "error": null
+  },
+  {
+    "step": 31,
+    "target": "CIT",
+    "route": "/holdings?edit=16.49",
+    "input": {
+      "quantity": "1450",
+      "costBasisPerShare": null
+    },
+    "db": {
+      "quantity": "1450.00000000",
+      "costBasisPerShare": null
+    },
+    "expected": {
+      "netWorth": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "actual": {
+      "overview": "$681,985.07; $88,195.79",
+      "holdings": "$681,985.07",
+      "account": "$88,195.79"
+    },
+    "pass": true,
+    "checks": {
+      "quantityPass": true,
+      "basisPass": true,
+      "totalsPass": true
+    },
+    "screenshot": "/tmp/portfolio-mutqa-artifacts.3XFbPA/screenshots/31-cit-pass.png",
+    "error": null
+  }
+]

@@ -1,0 +1,1426 @@
+{
+  "base": "http://localhost:4279",
+  "mutationCount": 32,
+  "failed": false,
+  "ledger": [
+    {
+      "step": 1,
+      "scenario": "VTI ordinary increase",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "300",
+        "costBasisPerShare": "165.4961"
+      },
+      "expectedCents": {
+        "householdValue": "70090995",
+        "householdBasis": "27196942",
+        "householdUnrealized": "11552047",
+        "annualDividend": "1350199",
+        "accountValue": "21856306"
+      },
+      "actualCents": {
+        "holdingsValue": "70090995",
+        "holdingsBasis": "27196942",
+        "holdingsUnrealized": "11552047",
+        "holdingsDividend": "1350199",
+        "overviewValue": "70090995",
+        "overviewStatus": 200,
+        "accountValue": "21856306"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 13,
+      "positionSetsAfter": 14,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 300 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 2,
+      "scenario": "VTI eighth-decimal increment",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "300.00000001",
+        "costBasisPerShare": "165.4961"
+      },
+      "expectedCents": {
+        "householdValue": "70090995",
+        "householdBasis": "27196942",
+        "householdUnrealized": "11552047",
+        "annualDividend": "1350199",
+        "accountValue": "21856306"
+      },
+      "actualCents": {
+        "holdingsValue": "70090995",
+        "holdingsBasis": "27196942",
+        "holdingsUnrealized": "11552047",
+        "holdingsDividend": "1350199",
+        "overviewValue": "70090995",
+        "overviewStatus": 200,
+        "accountValue": "21856306"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 14,
+      "positionSetsAfter": 15,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 300.00000001 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 3,
+      "scenario": "VTI close to zero and clear basis",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "60855270",
+        "householdBasis": "22232059",
+        "householdUnrealized": "7281205",
+        "annualDividend": "1231981",
+        "accountValue": "12620581"
+      },
+      "actualCents": {
+        "holdingsValue": "60855270",
+        "holdingsBasis": "22232059",
+        "holdingsUnrealized": "7281205",
+        "holdingsDividend": "1231981",
+        "overviewValue": "60855270",
+        "overviewStatus": 200,
+        "accountValue": "12620581"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 10,
+        "gainKnown": 10
+      },
+      "positionSetsBefore": 15,
+      "positionSetsAfter": 16,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 4,
+      "scenario": "VTI reopen short after zero",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "-1",
+        "costBasisPerShare": "100"
+      },
+      "expectedCents": {
+        "householdValue": "60824484",
+        "householdBasis": "22222059",
+        "householdUnrealized": "7260419",
+        "annualDividend": "1231587",
+        "accountValue": "12589795"
+      },
+      "actualCents": {
+        "holdingsValue": "60824484",
+        "holdingsBasis": "22222059",
+        "holdingsUnrealized": "7260419",
+        "holdingsDividend": "1231587",
+        "overviewValue": "60824484",
+        "overviewStatus": 200,
+        "accountValue": "12589795"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 16,
+      "positionSetsAfter": 17,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads −1 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 5,
+      "scenario": "VTI negative fractional quantity",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "-123.45678901",
+        "costBasisPerShare": "120.1234"
+      },
+      "expectedCents": {
+        "householdValue": "57054560",
+        "householdBasis": "20749054",
+        "householdUnrealized": "4963500",
+        "annualDividend": "1183332",
+        "accountValue": "8819871"
+      },
+      "actualCents": {
+        "holdingsValue": "57054560",
+        "holdingsBasis": "20749054",
+        "holdingsUnrealized": "4963500",
+        "holdingsDividend": "1183332",
+        "overviewValue": "57054560",
+        "overviewStatus": 200,
+        "accountValue": "8819871"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 17,
+      "positionSetsAfter": 18,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads −123.45678901 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "1",
+        "expectedValueCents": "44034980",
+        "expectedDividendCents": "1040979",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 6,
+      "scenario": "VTI short to zero with zero basis",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": "0"
+      },
+      "expectedCents": {
+        "householdValue": "60855270",
+        "householdBasis": "22232059",
+        "householdUnrealized": "7281205",
+        "annualDividend": "1231981",
+        "accountValue": "12620581"
+      },
+      "actualCents": {
+        "holdingsValue": "60855270",
+        "holdingsBasis": "22232059",
+        "holdingsUnrealized": "7281205",
+        "holdingsDividend": "1231981",
+        "overviewValue": "60855270",
+        "overviewStatus": 200,
+        "accountValue": "12620581"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 18,
+      "positionSetsAfter": 19,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 7,
+      "scenario": "VTI tiny quantity and maximal per-share basis",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "0.00000001",
+        "costBasisPerShare": "9999999999999999.9999"
+      },
+      "expectedCents": {
+        "householdValue": "60855270",
+        "householdBasis": "10022232059",
+        "householdUnrealized": "-9992718795",
+        "annualDividend": "1231981",
+        "accountValue": "12620581"
+      },
+      "actualCents": {
+        "holdingsValue": "60855270",
+        "holdingsBasis": "10022232059",
+        "holdingsUnrealized": "-9992718795",
+        "holdingsDividend": "1231981",
+        "overviewValue": "60855270",
+        "overviewStatus": 200,
+        "accountValue": "12620581"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 19,
+      "positionSetsAfter": 20,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0.00000001 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 8,
+      "scenario": "VTI very large quantity",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "999999999999",
+        "costBasisPerShare": "0.0001"
+      },
+      "expectedCents": {
+        "householdValue": "30785750060824484",
+        "householdBasis": "10022232059",
+        "householdUnrealized": "30785740007250419",
+        "annualDividend": "394060001231587",
+        "accountValue": "30785750012589795"
+      },
+      "actualCents": {
+        "holdingsValue": "30785750060824484",
+        "holdingsBasis": "10022232059",
+        "holdingsUnrealized": "30785740007250419",
+        "holdingsDividend": "394060001231587",
+        "overviewValue": null,
+        "overviewStatus": 500,
+        "accountValue": "30785750012589795"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 20,
+      "positionSetsAfter": 21,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 999,999,999,999 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "finding",
+      "finding": "Accepted large position makes Overview return 500 while Holdings and account detail still render."
+    },
+    {
+      "step": 9,
+      "scenario": "VTI precision boundary",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "1.23456789",
+        "costBasisPerShare": "165.4961"
+      },
+      "expectedCents": {
+        "householdValue": "60893277",
+        "householdBasis": "22252490",
+        "householdUnrealized": "7298780",
+        "annualDividend": "1232467",
+        "accountValue": "12658588"
+      },
+      "actualCents": {
+        "holdingsValue": "60893277",
+        "holdingsBasis": "22252490",
+        "holdingsUnrealized": "7298780",
+        "holdingsDividend": "1232467",
+        "overviewValue": "60893277",
+        "overviewStatus": 200,
+        "accountValue": "12658588"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 21,
+      "positionSetsAfter": 22,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 1.23456789 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass"
+    },
+    {
+      "step": 10,
+      "scenario": "VTI restore",
+      "accountId": 1,
+      "instrumentId": 2,
+      "input": {
+        "quantity": "282.144455",
+        "costBasisPerShare": "165.4961"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "21306609"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "21306609"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 22,
+      "positionSetsAfter": 23,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.2",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 282.144455 of Vanguard Total Stock Market ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.2",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "1",
+        "expectedValueCents": "56521719",
+        "expectedDividendCents": "1200810",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 11,
+      "scenario": "AAPL whole quantity",
+      "accountId": 1,
+      "instrumentId": 6,
+      "input": {
+        "quantity": "100",
+        "costBasisPerShare": "100"
+      },
+      "expectedCents": {
+        "householdValue": "68866150",
+        "householdBasis": "26395022",
+        "householdUnrealized": "11129121",
+        "annualDividend": "1339922",
+        "accountValue": "20631461"
+      },
+      "actualCents": {
+        "holdingsValue": "68866150",
+        "holdingsBasis": "26395022",
+        "holdingsUnrealized": "11129121",
+        "holdingsDividend": "1339922",
+        "overviewValue": "68866150",
+        "overviewStatus": 200,
+        "accountValue": "20631461"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 23,
+      "positionSetsAfter": 24,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.6",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 100 of Apple Inc.."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.6",
+      "result": "pass"
+    },
+    {
+      "step": 12,
+      "scenario": "AAPL fractional with zero basis",
+      "accountId": 1,
+      "instrumentId": 6,
+      "input": {
+        "quantity": "100.55555555",
+        "costBasisPerShare": "0"
+      },
+      "expectedCents": {
+        "householdValue": "68875729",
+        "householdBasis": "25395022",
+        "householdUnrealized": "12138701",
+        "annualDividend": "1339968",
+        "accountValue": "20641040"
+      },
+      "actualCents": {
+        "holdingsValue": "68875729",
+        "holdingsBasis": "25395022",
+        "holdingsUnrealized": "12138701",
+        "holdingsDividend": "1339968",
+        "overviewValue": "68875729",
+        "overviewStatus": 200,
+        "accountValue": "20641040"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 24,
+      "positionSetsAfter": 25,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.6",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 100.55555555 of Apple Inc.."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.6",
+      "result": "pass"
+    },
+    {
+      "step": 13,
+      "scenario": "AAPL close and clear basis",
+      "accountId": 1,
+      "instrumentId": 6,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "67141769",
+        "householdBasis": "25395022",
+        "householdUnrealized": "10404740",
+        "annualDividend": "1331645",
+        "accountValue": "18907080"
+      },
+      "actualCents": {
+        "holdingsValue": "67141769",
+        "holdingsBasis": "25395022",
+        "holdingsUnrealized": "10404740",
+        "holdingsDividend": "1331645",
+        "overviewValue": "67141769",
+        "overviewStatus": 200,
+        "accountValue": "18907080"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 10,
+        "gainKnown": 10
+      },
+      "positionSetsBefore": 25,
+      "positionSetsAfter": 26,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.6",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0 of Apple Inc.."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.6",
+      "result": "pass"
+    },
+    {
+      "step": 14,
+      "scenario": "AAPL reopen",
+      "accountId": 1,
+      "instrumentId": 6,
+      "input": {
+        "quantity": "50.5",
+        "costBasisPerShare": "200.1234"
+      },
+      "expectedCents": {
+        "householdValue": "68012581",
+        "householdBasis": "26405645",
+        "householdUnrealized": "10264929",
+        "annualDividend": "1335825",
+        "accountValue": "19777892"
+      },
+      "actualCents": {
+        "holdingsValue": "68012581",
+        "holdingsBasis": "26405645",
+        "holdingsUnrealized": "10264929",
+        "holdingsDividend": "1335825",
+        "overviewValue": "68012581",
+        "overviewStatus": 200,
+        "accountValue": "19777892"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 26,
+      "positionSetsAfter": 27,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.6",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 50.5 of Apple Inc.."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.6",
+      "result": "pass"
+    },
+    {
+      "step": 15,
+      "scenario": "AAPL restore",
+      "accountId": 1,
+      "instrumentId": 6,
+      "input": {
+        "quantity": "139.153103",
+        "costBasisPerShare": "108.2561"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "21306609"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "21306609"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 27,
+      "positionSetsAfter": 28,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.6",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 139.153103 of Apple Inc.."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.6",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "1",
+        "expectedValueCents": "56521719",
+        "expectedDividendCents": "1200810",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 16,
+      "scenario": "cash cent increment",
+      "accountId": 1,
+      "instrumentId": 8,
+      "input": {
+        "quantity": "16000.01",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "69541299",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "21306610"
+      },
+      "actualCents": {
+        "holdingsValue": "69541299",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541299",
+        "overviewStatus": 200,
+        "accountValue": "21306610"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 28,
+      "positionSetsAfter": 29,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.8",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 16,000.01 of Fidelity Government Money Market Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.8",
+      "result": "pass"
+    },
+    {
+      "step": 17,
+      "scenario": "cash close",
+      "accountId": 1,
+      "instrumentId": 8,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "67941298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1263963",
+        "accountValue": "19706609"
+      },
+      "actualCents": {
+        "holdingsValue": "67941298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1263963",
+        "overviewValue": "67941298",
+        "overviewStatus": 200,
+        "accountValue": "19706609"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 29,
+      "positionSetsAfter": 30,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.8",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0 of Fidelity Government Money Market Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.8",
+      "result": "pass"
+    },
+    {
+      "step": 18,
+      "scenario": "cash one cent",
+      "accountId": 1,
+      "instrumentId": 8,
+      "input": {
+        "quantity": "0.01",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "67941299",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1263963",
+        "accountValue": "19706610"
+      },
+      "actualCents": {
+        "holdingsValue": "67941299",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1263963",
+        "overviewValue": "67941299",
+        "overviewStatus": 200,
+        "accountValue": "19706610"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 30,
+      "positionSetsAfter": 31,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.8",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 0.01 of Fidelity Government Money Market Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.8",
+      "result": "pass"
+    },
+    {
+      "step": 19,
+      "scenario": "cash restore",
+      "accountId": 1,
+      "instrumentId": 8,
+      "input": {
+        "quantity": "16000",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "21306609"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "21306609"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 31,
+      "positionSetsAfter": 32,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=1.8",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Fidelity Individual now reads 16,000 of Fidelity Government Money Market Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=1.8",
+      "result": "pass"
+    },
+    {
+      "step": 20,
+      "scenario": "401k add basis",
+      "accountId": 2,
+      "instrumentId": 9,
+      "input": {
+        "quantity": "350",
+        "costBasisPerShare": "400"
+      },
+      "expectedCents": {
+        "householdValue": "69537854",
+        "householdBasis": "40901439",
+        "householdUnrealized": "14200046",
+        "annualDividend": "1343117",
+        "accountValue": "26988562"
+      },
+      "actualCents": {
+        "holdingsValue": "69537854",
+        "holdingsBasis": "40901439",
+        "holdingsUnrealized": "14200046",
+        "holdingsDividend": "1343117",
+        "overviewValue": "69537854",
+        "overviewStatus": 200,
+        "accountValue": "26988562"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 12,
+        "gainKnown": 12
+      },
+      "positionSetsBefore": 13,
+      "positionSetsAfter": 14,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=2.9",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Empower 401(k) now reads 350 of Vanguard Institutional Index Fund Instl Plus."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=2.9",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "1",
+        "expectedValueCents": "56518274",
+        "expectedDividendCents": "1200764",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 21,
+      "scenario": "401k minimum positive quantity",
+      "accountId": 2,
+      "instrumentId": 9,
+      "input": {
+        "quantity": "0.00000001",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "52635661",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1120010",
+        "accountValue": "10086369"
+      },
+      "actualCents": {
+        "holdingsValue": "52635661",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1120010",
+        "overviewValue": "52635661",
+        "overviewStatus": 200,
+        "accountValue": "10086369"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 14,
+      "positionSetsAfter": 15,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=2.9",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Empower 401(k) now reads 0.00000001 of Vanguard Institutional Index Fund Instl Plus."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=2.9",
+      "result": "pass"
+    },
+    {
+      "step": 22,
+      "scenario": "401k large fractional quantity",
+      "accountId": 2,
+      "instrumentId": 9,
+      "input": {
+        "quantity": "999999.99999999",
+        "costBasisPerShare": "482.9198"
+      },
+      "expectedCents": {
+        "householdValue": "48344615661",
+        "householdBasis": "48318881439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "638570010",
+        "accountValue": "48302066369"
+      },
+      "actualCents": {
+        "holdingsValue": "48344615661",
+        "holdingsBasis": "48318881439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "638570010",
+        "overviewValue": "48344615661",
+        "overviewStatus": 200,
+        "accountValue": "48302066369"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 12,
+        "gainKnown": 12
+      },
+      "positionSetsBefore": 15,
+      "positionSetsAfter": 16,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=2.9",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Empower 401(k) now reads 999,999.99999999 of Vanguard Institutional Index Fund Instl Plus."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=2.9",
+      "result": "pass"
+    },
+    {
+      "step": 23,
+      "scenario": "401k restore",
+      "accountId": 2,
+      "instrumentId": 9,
+      "input": {
+        "quantity": "350.071327",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "26992006"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "26992006"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 16,
+      "positionSetsAfter": 17,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=2.9",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Empower 401(k) now reads 350.071327 of Vanguard Institutional Index Fund Instl Plus."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=2.9",
+      "result": "pass"
+    },
+    {
+      "step": 24,
+      "scenario": "Roth position close",
+      "accountId": 3,
+      "instrumentId": 12,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "63697570",
+        "householdBasis": "23347153",
+        "householdUnrealized": "9008410",
+        "annualDividend": "1267195",
+        "accountValue": "3829375"
+      },
+      "actualCents": {
+        "holdingsValue": "63697570",
+        "holdingsBasis": "23347153",
+        "holdingsUnrealized": "9008410",
+        "holdingsDividend": "1267195",
+        "overviewValue": "63697570",
+        "overviewStatus": 200,
+        "accountValue": "3829375"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 10,
+        "gainKnown": 10
+      },
+      "positionSetsBefore": 13,
+      "positionSetsAfter": 14,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=3.12",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Vanguard Roth IRA now reads 0 of Vanguard S&P 500 ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=3.12",
+      "result": "pass"
+    },
+    {
+      "step": 25,
+      "scenario": "Roth one share",
+      "accountId": 3,
+      "instrumentId": 12,
+      "input": {
+        "quantity": "1",
+        "costBasisPerShare": "510.5873"
+      },
+      "expectedCents": {
+        "householdValue": "63748629",
+        "householdBasis": "23398212",
+        "householdUnrealized": "9008410",
+        "annualDividend": "1267859",
+        "accountValue": "3880434"
+      },
+      "actualCents": {
+        "holdingsValue": "63748629",
+        "holdingsBasis": "23398212",
+        "holdingsUnrealized": "9008410",
+        "holdingsDividend": "1267859",
+        "overviewValue": "63748629",
+        "overviewStatus": 200,
+        "accountValue": "3880434"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 14,
+      "positionSetsAfter": 15,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=3.12",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Vanguard Roth IRA now reads 1 of Vanguard S&P 500 ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=3.12",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "1",
+        "expectedValueCents": "50729049",
+        "expectedDividendCents": "1125505",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 26,
+      "scenario": "Roth restore",
+      "accountId": 3,
+      "instrumentId": 12,
+      "input": {
+        "quantity": "114.451110",
+        "costBasisPerShare": "310.5506"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "9673103"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "9673103"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 15,
+      "positionSetsAfter": 16,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=3.12",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Vanguard Roth IRA now reads 114.45111 of Vanguard S&P 500 ETF."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=3.12",
+      "result": "pass"
+    },
+    {
+      "step": 27,
+      "scenario": "Jordan no-op normalized spelling",
+      "accountId": 4,
+      "instrumentId": 15,
+      "input": {
+        "quantity": "755.20145",
+        "costBasisPerShare": "50.538"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "8819579"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "8819579"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 13,
+      "positionSetsAfter": 14,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.15",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 755.20145 of T. Rowe Price Growth Stock Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.15",
+      "result": "pass"
+    },
+    {
+      "step": 28,
+      "scenario": "Jordan quantity increase",
+      "accountId": 4,
+      "instrumentId": 15,
+      "input": {
+        "quantity": "1000.00000001",
+        "costBasisPerShare": "74.5664"
+      },
+      "expectedCents": {
+        "householdValue": "71366673",
+        "householdBasis": "30541442",
+        "householdUnrealized": "9483224",
+        "annualDividend": "1345900",
+        "accountValue": "10644954"
+      },
+      "actualCents": {
+        "holdingsValue": "71366673",
+        "holdingsBasis": "30541442",
+        "holdingsUnrealized": "9483224",
+        "holdingsDividend": "1345900",
+        "overviewValue": "71366673",
+        "overviewStatus": 200,
+        "accountValue": "10644954"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 14,
+      "positionSetsAfter": 15,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.15",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 1,000.00000001 of T. Rowe Price Growth Stock Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.15",
+      "result": "pass"
+    },
+    {
+      "step": 29,
+      "scenario": "Jordan restore",
+      "accountId": 4,
+      "instrumentId": 15,
+      "input": {
+        "quantity": "755.201450",
+        "costBasisPerShare": "50.5380"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "8819579"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "8819579"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 15,
+      "positionSetsAfter": 16,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.15",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 755.20145 of T. Rowe Price Growth Stock Fund."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.15",
+      "result": "pass"
+    },
+    {
+      "step": 30,
+      "scenario": "unpriced trust close",
+      "accountId": 4,
+      "instrumentId": 17,
+      "input": {
+        "quantity": "0",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "8819579"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "8819579"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 16,
+      "positionSetsAfter": 17,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.17",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 0 of Principal LifeTime 2045 Collective Investment Trust."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.17",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "2",
+        "expectedValueCents": "13019579",
+        "expectedDividendCents": "142353",
+        "result": "pass"
+      }
+    },
+    {
+      "step": 31,
+      "scenario": "unpriced trust with basis",
+      "accountId": 4,
+      "instrumentId": 17,
+      "input": {
+        "quantity": "1450.12345678",
+        "costBasisPerShare": "25.5"
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "30599254",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "8819579"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "30599254",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "8819579"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 12,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 17,
+      "positionSetsAfter": 18,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.17",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 1,450.12345678 of Principal LifeTime 2045 Collective Investment Trust."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.17",
+      "result": "pass"
+    },
+    {
+      "step": 32,
+      "scenario": "unpriced trust restore",
+      "accountId": 4,
+      "instrumentId": 17,
+      "input": {
+        "quantity": "1450",
+        "costBasisPerShare": null
+      },
+      "expectedCents": {
+        "householdValue": "69541298",
+        "householdBasis": "26901439",
+        "householdUnrealized": "11297853",
+        "annualDividend": "1343163",
+        "accountValue": "8819579"
+      },
+      "actualCents": {
+        "holdingsValue": "69541298",
+        "holdingsBasis": "26901439",
+        "holdingsUnrealized": "11297853",
+        "holdingsDividend": "1343163",
+        "overviewValue": "69541298",
+        "overviewStatus": 200,
+        "accountValue": "8819579"
+      },
+      "coverage": {
+        "holdings": 18,
+        "priced": 17,
+        "based": 11,
+        "gainKnown": 11
+      },
+      "positionSetsBefore": 18,
+      "positionSetsAfter": 19,
+      "receipt": {
+        "url": "http://localhost:4279/holdings?saved=4.17",
+        "receipt": [
+          "Nothing stands in front of this instance. No sign-in is being asked for, so anyone who can reach it on the network can read and change your data. Put it behind the gate before leaving it running anywhere shared.",
+          "Recorded. Principal 401(k) now reads 1,450 of Principal LifeTime 2045 Collective Investment Trust."
+        ]
+      },
+      "url": "http://localhost:4279/holdings?saved=4.17",
+      "result": "pass",
+      "ownerCheckpoint": {
+        "ownerId": "2",
+        "expectedValueCents": "13019579",
+        "expectedDividendCents": "142353",
+        "result": "pass"
+      }
+    }
+  ]
+}

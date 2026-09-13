@@ -1,0 +1,46 @@
+{
+  "finding": "QA-22",
+  "runDate": "2026-09-13",
+  "method": "Concurrent production HTTP actions against a new migrated database, with no delay, trigger, or app instrumentation",
+  "setup": {
+    "server": "Production build on loopback with AUTH_GATE=none",
+    "database": "New isolated PostgreSQL database",
+    "account": "One open brokerage account with two holdings",
+    "roundDefinition": "Two simultaneous position-correction POSTs, one per holding"
+  },
+  "summary": {
+    "rounds": 25,
+    "requests": 50,
+    "successRedirects": 50,
+    "lostUpdateRounds": 22,
+    "fullyRetainedRounds": 3,
+    "firstLossRound": 2
+  },
+  "ledger": [
+    { "round": 1, "status": [302, 302], "expected": { "NATX": "1001.00000000", "NATY": "2001.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2001.00000000" }, "lostUpdate": false },
+    { "round": 2, "status": [302, 302], "expected": { "NATX": "1002.00000000", "NATY": "2002.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2002.00000000" }, "lostUpdate": true },
+    { "round": 3, "status": [302, 302], "expected": { "NATX": "1003.00000000", "NATY": "2003.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2003.00000000" }, "lostUpdate": true },
+    { "round": 4, "status": [302, 302], "expected": { "NATX": "1004.00000000", "NATY": "2004.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2004.00000000" }, "lostUpdate": true },
+    { "round": 5, "status": [302, 302], "expected": { "NATX": "1005.00000000", "NATY": "2005.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2005.00000000" }, "lostUpdate": true },
+    { "round": 6, "status": [302, 302], "expected": { "NATX": "1006.00000000", "NATY": "2006.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2006.00000000" }, "lostUpdate": true },
+    { "round": 7, "status": [302, 302], "expected": { "NATX": "1007.00000000", "NATY": "2007.00000000" }, "actual": { "NATX": "1001.00000000", "NATY": "2007.00000000" }, "lostUpdate": true },
+    { "round": 8, "status": [302, 302], "expected": { "NATX": "1008.00000000", "NATY": "2008.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2008.00000000" }, "lostUpdate": false },
+    { "round": 9, "status": [302, 302], "expected": { "NATX": "1009.00000000", "NATY": "2009.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2009.00000000" }, "lostUpdate": true },
+    { "round": 10, "status": [302, 302], "expected": { "NATX": "1010.00000000", "NATY": "2010.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2010.00000000" }, "lostUpdate": true },
+    { "round": 11, "status": [302, 302], "expected": { "NATX": "1011.00000000", "NATY": "2011.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2011.00000000" }, "lostUpdate": true },
+    { "round": 12, "status": [302, 302], "expected": { "NATX": "1012.00000000", "NATY": "2012.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2012.00000000" }, "lostUpdate": true },
+    { "round": 13, "status": [302, 302], "expected": { "NATX": "1013.00000000", "NATY": "2013.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2013.00000000" }, "lostUpdate": true },
+    { "round": 14, "status": [302, 302], "expected": { "NATX": "1014.00000000", "NATY": "2014.00000000" }, "actual": { "NATX": "1008.00000000", "NATY": "2014.00000000" }, "lostUpdate": true },
+    { "round": 15, "status": [302, 302], "expected": { "NATX": "1015.00000000", "NATY": "2015.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2015.00000000" }, "lostUpdate": false },
+    { "round": 16, "status": [302, 302], "expected": { "NATX": "1016.00000000", "NATY": "2016.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2016.00000000" }, "lostUpdate": true },
+    { "round": 17, "status": [302, 302], "expected": { "NATX": "1017.00000000", "NATY": "2017.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2017.00000000" }, "lostUpdate": true },
+    { "round": 18, "status": [302, 302], "expected": { "NATX": "1018.00000000", "NATY": "2018.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2018.00000000" }, "lostUpdate": true },
+    { "round": 19, "status": [302, 302], "expected": { "NATX": "1019.00000000", "NATY": "2019.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2019.00000000" }, "lostUpdate": true },
+    { "round": 20, "status": [302, 302], "expected": { "NATX": "1020.00000000", "NATY": "2020.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2020.00000000" }, "lostUpdate": true },
+    { "round": 21, "status": [302, 302], "expected": { "NATX": "1021.00000000", "NATY": "2021.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2021.00000000" }, "lostUpdate": true },
+    { "round": 22, "status": [302, 302], "expected": { "NATX": "1022.00000000", "NATY": "2022.00000000" }, "actual": { "NATX": "1015.00000000", "NATY": "2022.00000000" }, "lostUpdate": true },
+    { "round": 23, "status": [302, 302], "expected": { "NATX": "1023.00000000", "NATY": "2023.00000000" }, "actual": { "NATX": "1023.00000000", "NATY": "2022.00000000" }, "lostUpdate": true },
+    { "round": 24, "status": [302, 302], "expected": { "NATX": "1024.00000000", "NATY": "2024.00000000" }, "actual": { "NATX": "1023.00000000", "NATY": "2024.00000000" }, "lostUpdate": true },
+    { "round": 25, "status": [302, 302], "expected": { "NATX": "1025.00000000", "NATY": "2025.00000000" }, "actual": { "NATX": "1023.00000000", "NATY": "2025.00000000" }, "lostUpdate": true }
+  ]
+}
