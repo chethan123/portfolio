@@ -98,9 +98,13 @@ export function postFile(
   return throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body }));
 }
 
-/** {request, params} only — no route here reads context. Cast at the call site; generated Route.LoaderArgs isn't reachable here. */
-export function args(request: Request, params: Record<string, string> = {}) {
-  return { request, params } as never;
+/** One provider per request, shared when the same args object drives parallel/root-child loaders. */
+export function args(
+  request: Request,
+  params: Record<string, string> = {},
+  context = new RouterContextProvider(),
+) {
+  return { request, params, context } as never;
 }
 
 /** Runs a route fn; routes signal redirects/404s by throwing a Response, so both outcomes land here rather than in a try. */

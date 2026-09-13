@@ -9,19 +9,30 @@ be worth writing down.
 ## The guarantee, stated as a limit
 
 Masking defends against someone reading over your shoulder. It is not access control and must never
-be described as though it were: the amounts are still in the page, inside the serialised loader data
-the client needs in order to unmask without a round trip. The login gate (§10) is the only boundary
-this application has, and anyone who can reach a masked screen can unmask it with one click.
+be described as though it were: on most screens the amounts are still in the page, inside the
+serialised loader data the client needs in order to unmask without a round trip. Anyone who can reach
+a masked screen can unmask it with one click.
 
-[Only the scenery has moved: that boundary is now a forward-auth gate in front of the application
-rather than a login page inside it — ADR-0005. The limit stated here is unchanged, and so is
-everything below it.]
+The forward-auth gate decides which family members may reach the application (ADR-0005). Once the
+household holds a passkey, the browser lock decides whether a browser past that gate may see a screen
+(ADR-0012). Masking makes neither decision; it changes what an already-admitted, unlocked browser
+draws.
 
-[It is no longer the only one: once the household holds a passkey, a browser the gate has already
-admitted is refused every screen until an assertion proves it — ADR-0012. The sentence above can no
-longer say *only*, and nothing else here moves. Masking still keeps nobody out, is still not access
-control, and the amounts are still in the payload of a screen a reader is allowed to see; the lock
-decides whether they are allowed to see it, which is the question masking was never asking.]
+**Holdings is a scoped exception.** Its inline correction would otherwise turn those payload values
+into exact input defaults without another request. While Holdings is masked, its loader finishes all
+filtering, sorting, grouping, totals and ratios on the server, then omits the amount fields from rows,
+groups, totals and a saved receipt. It keeps only the non-amount facts needed to draw the masked
+screen: whether a value is unknown, coverage counts, ratio strings and gain/loss direction. **Show
+amounts** revalidates the route and returns the exact values before the inputs exist. **Hide amounts**
+removes open inputs immediately and revalidation replaces their loader data with the omitted form.
+This prevents an ordinary masked correction from disclosing exact defaults in markup or client route
+state; it does not erase values the browser already received while unmasked.
+
+Root and Holdings resolve masking through one deferred value in React Router's per-request context.
+Their loaders start in parallel, so independent policy reads could otherwise disagree during a
+concurrent settings write and pair masked chrome with an exact Holdings payload. A failed read fixes
+that shared request value to masked rather than allowing a child loader to retry into a different
+answer.
 
 Everything below follows from accepting that limit rather than fighting it.
 
@@ -62,16 +73,27 @@ actually singles masking's out is the two writers this paragraph opened with: cl
 directly, where the chart-range cookie is only ever written by the server. What changed here is only
 that the gate's is no longer the only cookie here that carries more than a preference.]
 
+The browser reads that cookie through an external-store subscription. A direct write publishes a
+same-tab change event because cookie writes have no browser event of their own. The cookie therefore
+remains authoritative after the fetcher stops being pending, including when a toggle request fails
+or an older exact Holdings revalidation arrives after a newer Hide. This precedence applies only
+when the server successfully resolved the masking policy. A failed policy read is marked in root
+loader data and remains masked after hydration even if an older browser cookie says to show. The
+server snapshot still comes from the root loader for the first render and hydration; no browser
+state is shared between server requests.
+
 ## Considered options
 
 **State in `app_setting` as well.** Coherent, and it matches the Tax tab exactly. Rejected because
 setting "start masked" on a phone would silently change the desktop at home, which is the wrong blast
 radius for a preference about where you are sitting.
 
-**Omit the amounts from the loader while masked.** A real strengthening — the figures would not be
-in the page at all. Rejected because unmasking then costs a round trip, which puts the network back
-in the path the client-side write exists to remove, and because it defends against an attacker who
-can already click the toggle.
+**Omit the amounts from every loader while masked.** A real strengthening — the figures would not be
+in the page at all. Rejected as the application-wide rule because unmasking then costs a round trip,
+which puts the network back in the path the client-side write exists to remove, and because it
+defends against an attacker who can already click the toggle. Holdings accepts that round trip for
+the narrower correction case above: the alternative made a routine click disclose the exact values
+while the control still said they were hidden.
 
 **Blur the rendered text instead of replacing it.** Keeps typography and layout exactly. Rejected
 because blurred digits stay selectable, copyable and readable by a screen reader, and at the 32px

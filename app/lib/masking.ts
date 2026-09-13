@@ -1,8 +1,9 @@
 /** Masking vocabulary, cookie and precedence rule, shared by server and browser. spec 0007, ADR-0002 */
-import { useFetchers, useRouteLoaderData } from "react-router";
+import { useSyncExternalStore } from "react";
+import { useRouteLoaderData } from "react-router";
 
 import type { Option } from "./account-options.ts";
-import { readCookie } from "./cookies.ts";
+import { readCookie, readCookieHeader } from "./cookies.ts";
 import type { loader as rootLoader } from "../root.tsx";
 
 /** Values must match `app_setting_masking_policy_valid` (migration 0007); migration first. */
@@ -67,7 +68,7 @@ export function readMaskingCookie(request: Request): string | undefined {
   return readCookie(request, MASKING_COOKIE);
 }
 
-/** Keyed: an unkeyed `useFetcher()` scopes to its caller, so amount cells could not see the flip in flight. */
+/** The rail and phone controls share one fetcher key, so a newer toggle cancels the older request. */
 export const MASKING_FETCHER_KEY = "masking";
 
 /** Carries the state being flipped *to*. */
@@ -75,21 +76,58 @@ export const MASKING_FIELD = "masked";
 
 export const MASKING_ACTION = "/masking";
 
+const MASKING_CHANGE_EVENT = "portfolio:masking-change";
+
+function browserMaskingSnapshot(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  return readCookieHeader(document.cookie, MASKING_COOKIE);
+}
+
+function serverMaskingSnapshot(): undefined {
+  return undefined;
+}
+
+function subscribeToBrowserMasking(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+
+  window.addEventListener(MASKING_CHANGE_EVENT, onChange);
+  return () => window.removeEventListener(MASKING_CHANGE_EVENT, onChange);
+}
+
+/** Cookie writes have no browser event; tell every mounted reader to take a fresh snapshot. */
+export function notifyBrowserMaskingChange(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(MASKING_CHANGE_EVENT));
+}
+
+type MaskingLoaderState = {
+  masked: boolean;
+  maskingResolved: boolean;
+};
+
+/** Browser precedence after hydration; a failed/missing server answer always remains masked. */
+export function resolveBrowserMasked(
+  rootData: MaskingLoaderState | undefined,
+  browser: string | undefined,
+): boolean {
+  if (rootData === undefined || !rootData.maskingResolved) return true;
+  if (browser === MASKED) return true;
+  if (browser === UNMASKED) return false;
+  return rootData.masked;
+}
+
 /**
- * Pending submission wins over loader data — the optimistic flip.
- * Guarded on `formData`, not `state`: an idle fetcher stays in `useFetchers()`, only `formData` clears.
- * Masked when there is no loader data (error boundaries) — the safe way to be wrong.
+ * Server/root data supplies SSR and hydration. After hydration the browser cookie wins over loader
+ * responses that successfully resolved policy, including an older revalidation finishing last
+ * after a newer direct cookie write. Missing or failed policy data stays masked.
  */
 export function useMasked(): boolean {
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
+  const browser = useSyncExternalStore(
+    subscribeToBrowserMasking,
+    browserMaskingSnapshot,
+    serverMaskingSnapshot,
+  );
 
-  const pending = useFetchers().find(
-    (fetcher) => fetcher.key === MASKING_FETCHER_KEY && fetcher.formData != null,
-  )?.formData;
-
-  if (pending !== undefined && pending !== null) {
-    return pending.get(MASKING_FIELD) === MASKED;
-  }
-
-  return rootData?.masked ?? true;
+  return resolveBrowserMasked(rootData, browser);
 }

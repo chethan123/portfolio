@@ -6,6 +6,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
+import { MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { saveMaskingPolicy } from "~/lib/settings.server";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -44,10 +45,13 @@ describe("the shell's loader", () => {
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
 
     try {
-      const data = await withDb(unreachable, () => loader(args(get("/"))));
+      const data = await withDb(unreachable, () =>
+        loader(args(get("/", `${MASKING_COOKIE}=${UNMASKED}`))),
+      );
 
       expect(data.firstRun).toBeNull(); // "no prompt", not a thrown Response or an error page
       expect(data.masked).toBe(true); // fail-safe: cannot put balances on screen while unreachable (spec 0007)
+      expect(data.maskingResolved).toBe(false); // hydration may not weaken that answer with an old unmasked cookie
       expect(data.hasPasskey).toBe(false); // fail-safe: no control, rather than one clearing a grant that may not exist
     } finally {
       await unreachable.destroy();
@@ -97,6 +101,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
         firstRun: "accounts",
         masked: false,
         maskingPolicy: "unmasked",
+        maskingResolved: true,
         hasPasskey: true,
       });
 
@@ -106,6 +111,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
         firstRun: null,
         masked: true,
         maskingPolicy: "masked",
+        maskingResolved: false,
         hasPasskey: false,
       });
     }),
@@ -122,6 +128,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
           firstRun: null,
           masked: true,
           maskingPolicy: "masked",
+          maskingResolved: false,
           hasPasskey: false,
         });
       } finally {
