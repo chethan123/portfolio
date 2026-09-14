@@ -104,6 +104,23 @@ jobs:
             console.log("no production package declares hasInstallScript, os or cpu");
           '
 
+      # `package.json`'s one `overrides` entry is the only thing holding qs above
+      # express 4's `~6.15.1` (docs/security.md §6). Delete it and the tree silently
+      # falls back to a version with GHSA-4mjr-xmp4-gh2g, under an audit gate that
+      # lets a moderate pass. Goes with the override, when express ships the fix.
+      - name: Enforce the qs floor the override sets
+        run: |
+          node -e '
+            const version = require("./package-lock.json").packages["node_modules/qs"].version;
+            const [major, minor] = version.split(".").map(Number);
+            if (major < 6 || (major === 6 && minor < 16)) {
+              console.error(`qs ${version} is below the 6.16.0 floor package.json forces.`);
+              console.error("docs/security.md §6 names why the override exists and when it goes.");
+              process.exit(1);
+            }
+            console.log(`qs ${version}`);
+          '
+
       # Below is reported, not enforced: the fix is usually somebody else's release.
       - name: Report dev advisories
         if: always()

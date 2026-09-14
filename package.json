@@ -30,6 +30,9 @@
     "yahoo-finance2": "^4.0.2",
     "zod": "^4.4.3"
   },
+  "overrides": {
+    "qs": "~6.16.0"
+  },
   "devDependencies": {
     "@react-router/dev": "^7.18.2",
     "@types/node": "^24.10.1",

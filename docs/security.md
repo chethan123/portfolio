@@ -309,12 +309,22 @@ learns.
   three and passes.
 - The release image prunes the dev tree and unreachable runtime dependencies, and deletes the
   TypeScript compiler.
+- **One `overrides` pin**, `qs` at `~6.16.0` in `package.json`, forced past the narrower range
+  Express 4 asks for because no version in it clears GHSA-4mjr-xmp4-gh2g. The tilde is Express's
+  own discipline, kept: qs has changed parse output across minors before. Hygiene rather than a
+  patched hole — Express calls only `qs.parse`, never `stringify` and never with `comma`, so
+  neither advisory fires, and `@react-router/express` builds its `Request` from `req.originalUrl`
+  without reading the parse at all. The pin goes when Express ships the range its `4.x` branch
+  already carries, or when the app leaves Express 4; until then CI fails if the pin does.
 - The container hardening and the worker's quarantine, in §4 and §5.
 
 **Not in place** — do not assume these:
 
 - **No Dependabot or Renovate.** Updates are manual and deliberate. Nothing sweeps for a
   newly-disclosed advisory between releases.
+- **Nothing blocks on a moderate.** The gate is `--audit-level=high`, so a moderate in the
+  production tree passes CI; the `Report dev advisories` step prints it and fails nothing. Moderates
+  are found by reading that output, which is to say by somebody choosing to.
 - **No SBOM and no build provenance** for the published image; both are explicitly disabled in CI.
   **No image signing.**
 - **No digest pinning anywhere.** Base images and the app image are pinned by tag, which trusts the
