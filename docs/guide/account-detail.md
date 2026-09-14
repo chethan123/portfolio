@@ -10,10 +10,10 @@ Open it from the account list on **Overview**. The breadcrumb at the top gets yo
 
 The top panel is what the account *is*, not what it is worth:
 
-- **Owner** — the one person it belongs to.
-- **Institution** — a dash when none was recorded. It is optional.
-- **Kind** — brokerage, workplace plan, IRA, bank or loan.
-- **Tax treatment** — taxable, tax-deferred or tax-free.
+- **Owner** is the one person it belongs to.
+- **Institution** is optional, and shows a dash when none was recorded.
+- **Kind** is one of brokerage, workplace plan, IRA, bank or loan.
+- **Tax treatment** is one of taxable, tax-deferred or tax-free.
 
 All four are edited under Settings. **Edit details** on the right goes straight there.
 
@@ -21,11 +21,11 @@ All four are edited under Settings. **Edit details** on the right goes straight 
 
 **Total value** is what this account is worth now. It is the same figure the Overview row for this
 account shows. The **As of** line above it, with its **Refresh now** button, is the same control
-every figure screen carries — [Why a number did not change](prices.md) explains both.
+every figure screen carries. [Why a number did not change](prices.md) explains both.
 
 Three things it can say instead of a figure:
 
-- **"Based on N of M holdings."** under the total — some positions have never been priced. They are
+- **"Based on N of M holdings."** under the total. Some positions have never been priced. They are
   left out of the figure rather than counted as zero. See [Why a number did not
   change](prices.md#this-holding-shows-a-dash).
 - **No figure, and a sentence saying none of this account's holdings has ever been priced.** There
@@ -49,9 +49,10 @@ The readout names the selected point and can differ from the current headline.
 
 Every position this account holds, with the count in the panel header.
 
-- **Asset** — the ticker as a badge where there is one, the name, and a note line underneath giving
-  the asset class and, where it applies, **price is stale** or **never priced**.
-- **Quantity**, **Price**, **Value** — a dash rather than `$0.00` wherever nothing can be priced.
+- **Asset** shows the ticker as a badge where there is one, the name, and a note line underneath
+  giving the asset class and, where it applies, **price is stale** or **never priced**.
+- **Quantity**, **Price** and **Value** show a dash rather than `$0.00` wherever nothing can be
+  priced.
 
 There is no "today's change" column, and no change figure beside the total. The chart shows account value, not investment return.
 
@@ -61,7 +62,7 @@ What this account is projected to pay is a row of the by-account breakdown on
 how the two come to disagree.
 
 An account with nothing recorded shows a short note in place of the table, pointing at whichever way
-in applies to it — a balance for a bank or loan, [an upload](upload.md) for anything else.
+in applies to it: a balance for a bank or loan, [an upload](upload.md) for anything else.
 
 ## Just after an upload
 
@@ -89,9 +90,9 @@ Type a **plain positive amount**. The app applies the direction from the kind of
 
 - On a bank account the box is captioned **Balance**.
 - On a loan it is captioned **Amount owed**, and what you type counts against the household. You
-  never type the minus sign — typing one is refused.
+  never type the minus sign, and typing one is refused.
 
-Dollar signs and thousands separators are fine. Cents are the limit — a third decimal place is
+Dollar signs and thousands separators are fine. Cents are the limit. A third decimal place is
 refused rather than rounded.
 
 The box opens **empty** rather than pre-filled. The figure it is replacing is stated beside it
@@ -100,7 +101,7 @@ instead, so re-recording a stale number is never one click.
 ### The date
 
 As of starts at today. Dates before 1970 or after tomorrow are refused. Tomorrow is allowed for
-households ahead of the server’s time zone. The form also states the current snapshot’s date.
+households ahead of the server's time zone. The form also states the current snapshot's date.
 
 ### What saving does
 
@@ -114,9 +115,9 @@ snapshot; an older record does not replace a newer current balance. Undo by reco
 
 The identity block drops from a row of four to one field per line, and **Total value** with its
 buttons sits below rather than beside it. The range buttons on **Performance** scroll sideways past
-the edge of the screen rather than wrapping, the same as every strip of chips in this guide —
+the edge of the screen rather than wrapping, the same as every strip of chips in this guide.
 **1Y** and the rest are there, just off to the right.
 
 ---
 
-**Next:** [Holdings](holdings.md) — every position across every account, filtered and grouped.
+**Next:** [Holdings](holdings.md), every position across every account, filtered and grouped.

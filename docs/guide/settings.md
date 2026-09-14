@@ -10,9 +10,9 @@ Everything that changes what the app knows, apart from [uploading a statement](u
 A one-line description of each tab, and a link into it. It also names the three tabs that are **not
 built yet**, so nobody hunts for them:
 
-- **Classifications** — the asset labels an instrument is filed under.
-- **Instruments** — managing tickers, and typing a price by hand for something with no public quote.
-- **History** — the hand-typed net worth series from before this instance existed.
+- **Classifications.** The asset labels an instrument is filed under.
+- **Instruments.** Managing tickers, and typing a price by hand for something with no public quote.
+- **History.** The hand-typed net worth series from before this instance existed.
 
 They are named together, with a sentence and nothing to click. See [Not built
 yet](../../README.md#not-built-yet).
@@ -77,13 +77,13 @@ It is not a list of all stale current quotes. See [Prices](prices.md).
 ## Display
 
 What a browser that has never pressed the **Show amounts** control opens showing. Three choices:
-masked every time, showing every time, or however that browser was last left — and it starts at
+masked every time, showing every time, or however that browser was last left. It starts at
 masked.
 
-This is the household's standing answer, not the control itself. The control — **Show amounts** /
-**Hide amounts**, in the navigation on every screen — flips this one browser right now, and needs
+This is the household's standing answer, not the control itself. The control, **Show amounts** /
+**Hide amounts**, in the navigation on every screen, flips this one browser right now, and needs
 no network to do it. Masking hides every amount behind dots while names, dates, the shape of the
-chart and every percentage stay readable. It is not a lock: the amounts are still in the page, and
+chart and every percentage stay readable. It is not a lock. The amounts are still in the page, and
 the sign-in at the front door keeps a person out while the lock keeps a browser out.
 
 ## Passkeys
@@ -99,7 +99,7 @@ removing the last passkey disables that lock. Read [Passkeys and the lock](passk
 
 ![Settings on a phone: the seven tabs wrapped to two rows, the accounts table scrolled sideways](images/settings-accounts-mobile.png)
 
-The tab strip wraps to a second row instead of scrolling — the seven tabs stay in view together
+The tab strip wraps to a second row instead of scrolling, so the seven tabs stay in view together
 rather than hiding some off to the side, the way [the upload flow's own step
 strip](upload.md#on-a-phone) does too. The tables on
 this screen keep their columns and scroll sideways to see them all, the way every table but

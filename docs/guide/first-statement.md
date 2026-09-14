@@ -5,14 +5,14 @@ Bank and loan accounts also offer [Set balance](account-detail.md#set-balance) f
 Account positions change only when you record the statement; earlier steps can save mappings
 and instrument names.
 
-## Step 1 — Account and file
+## Step 1: Account and file
 
 ![Step one: choosing the account and the file](images/upload-1-account-and-file.png)
 
 Open **Upload statement**, choose the account and file, then **Continue to columns**.
 The file limit appears below the file box. Closed accounts are not offered.
 
-## Step 2 — Columns
+## Step 2: Columns
 
 ![Step two, before anything is mapped](images/upload-2-columns-blank.png)
 
@@ -30,7 +30,7 @@ Select **Save mapping and continue**. Mappings are remembered by institution and
 but this screen remains visible on later uploads so you can check them. See the
 [CSV reference](upload.md) for supported values.
 
-## Step 3 — New instruments
+## Step 3: New instruments
 
 ![Step three: resolving a name the file uses for the first time](images/upload-3-instruments.png)
 
@@ -41,11 +41,11 @@ or creating one with a classification and price source. A known non-USD quote is
 These instrument and alias choices are saved before the statement is committed. Once every name
 is resolved, continue to review.
 
-## Step 4 — Review, then record
+## Step 4: Review, then record
 
 ![Step four: the diff, with one position added, one updated and one removed](images/upload-4-review.png)
 
-Review additions, changed quantities or bases, and removals against the account’s current holdings.
+Review additions, changed quantities or bases, and removals against the account's current holdings.
 A first statement has no earlier holdings to compare.
 
 ### Read the removals
@@ -56,8 +56,8 @@ explicit acknowledgement; a filtered export can otherwise remove holdings you me
 
 ### The statement date
 
-Use the file’s date when present. Otherwise enter the date at review. Dates after tomorrow are
-refused; tomorrow accommodates households ahead of the server’s time zone.
+Use the file's date when present. Otherwise enter the date at review. Dates after tomorrow are
+refused; tomorrow accommodates households ahead of the server's time zone.
 
 ### Record it
 
@@ -73,4 +73,5 @@ mappings and instrument vocabulary remain if a draft is abandoned or removed.
 
 ---
 
-**Next:** [An account](account-detail.md) — the statement you just recorded, its holdings, and history.
+**Next:** [An account](account-detail.md), the statement you just recorded, its holdings and its
+history.
