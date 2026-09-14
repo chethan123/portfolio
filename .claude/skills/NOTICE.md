@@ -1,6 +1,11 @@
 # Third-party skills
 
-The skills in this directory (except this file) are vendored from
+Every skill in this directory is vendored. This file records where each
+came from and under which licence.
+
+## From mattpocock/skills
+
+All skills except `unslop` are vendored from
 [mattpocock/skills](https://github.com/mattpocock/skills), commit
 `0ab1b63a410a03d3627979a109c8695de27af954`, from the `skills/engineering`
 and `skills/productivity` categories.
@@ -41,3 +46,38 @@ them.
 skill here has the same name but a different, Standards+Spec-based review
 process — the project-level copy takes precedence when both are present.
 Rename or remove one if the collision is unwanted.
+
+## From cursor/plugins
+
+`unslop` is vendored from [cursor/plugins](https://github.com/cursor/plugins),
+`pstack/skills/unslop/SKILL.md`, commit
+`be432a96ed36e48d05f44bf375864355f62263f9`. The rule catalog (everything from
+`## Patterns to detect and fix` down) is unchanged, so its rule numbers stay
+citable and a resync is a plain diff of that section. The frontmatter and the
+`Target` and `Process` sections are rewritten for Claude Code: `$ARGUMENTS`
+resolution, in-place file edits, and a scope guard that keeps the pass off
+code, quoted text, and fenced blocks.
+
+```
+MIT License
+
+Copyright (c) 2026 Lauren Tan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
