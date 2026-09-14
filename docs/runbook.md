@@ -490,8 +490,9 @@ Two things that look like bugs and are not:
 
 - The pre-read check reads `Content-Length`, which measures the **whole multipart body**, the file
   plus the form fields plus the part boundaries. A file a little under the cap can still be refused.
-- A request carrying no `Content-Length` is refused later instead, on the file's own size, against
-  the same cap.
+- A request sent chunked, with no `Content-Length`, is counted as it arrives and cut off at the cap.
+  The client sees its connection dropped rather than the sentence. Browsers always send the header,
+  so only scripts hit this.
 
 Why: [Environment variables](operating.md#environment-variables).
 

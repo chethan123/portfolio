@@ -2,13 +2,14 @@
  * The application's first multipart form, validated down to bytes (docs/specs/ingest/01,
  * DESIGN.md §5.1). Pure — no database. At risk is the guard order and the wording: every refusal
  * names the file or form field it's about, and a leading BOM (which looks like a fault but isn't)
- * must pass untouched. Size cap is guarded twice: Content-Length before buffering, File.size after.
+ * must pass untouched. Size cap is guarded twice: the body as it streams in, File.size after.
  */
 import { describe, expect, it } from "vitest";
 
 import { ValidationError } from "~/lib/input.server";
-import { parseUploadForm, refuseOversizedBody } from "~/lib/uploads.server";
+import { parseUploadForm, readUploadForm } from "~/lib/uploads.server";
 import { getConfig } from "../server/config.ts";
+import { chunked } from "./support/routes.ts";
 
 // getConfig reads the environment once; the guards only need MAX_UPLOAD_MB, but the parse
 // requires a plausible connection string (tests/routes/root.test.ts's precedent)
@@ -90,23 +91,36 @@ describe("parseUploadForm", () => {
   });
 });
 
-describe("refuseOversizedBody", () => {
-  it("refuses a declared body over the cap before the body is read", () => {
-    const request = new Request("http://localhost/upload", {
-      method: "POST",
-      headers: { "content-length": String(CAP_BYTES + 1) },
-    });
+// the drop screen's POST, as a browser encodes it
+function upload(file: File): Request {
+  return new Request("http://localhost/upload", { method: "POST", body: submission(file) });
+}
 
-    expect(() => refuseOversizedBody(request)).toThrow(ValidationError);
-    expect(() => refuseOversizedBody(request)).toThrow(
-      new RegExp(`larger than ${getConfig().MAX_UPLOAD_MB} MB`),
-    );
+describe("readUploadForm", () => {
+  it("refuses a declared body over the cap without reading any of it", async () => {
+    const { request, sent } = chunked(upload(new File([new Uint8Array(CAP_BYTES * 2)], "huge.csv")));
+    request.headers.set("content-length", String(CAP_BYTES + 1));
+    const refusal = await refusalOf(() => readUploadForm(request));
+
+    expect(refusal.message).toMatch(new RegExp(`larger than ${getConfig().MAX_UPLOAD_MB} MB`));
+    expect(sent()).toBe(0);
   });
 
-  it("passes a request with no Content-Length through to the File.size check", () => {
-    // absence isn't over the cap — the second guard inside parseUploadForm enforces the same bound once the file exists
-    const request = new Request("http://localhost/upload", { method: "POST" });
+  it("refuses a chunked body over the cap, reading no further than the cap (#313)", async () => {
+    const { request, sent } = chunked(upload(new File([new Uint8Array(CAP_BYTES * 2)], "huge.csv")));
+    const refusal = await refusalOf(() => readUploadForm(request));
 
-    expect(() => refuseOversizedBody(request)).not.toThrow();
+    expect(refusal.message).toMatch(new RegExp(`larger than ${getConfig().MAX_UPLOAD_MB} MB`));
+    expect(sent()).toBeLessThanOrEqual(CAP_BYTES + 64 * 1024);
+  });
+
+  it("reads a chunked body under the cap into the form it carries", async () => {
+    const csv = "Symbol,Quantity\nVTI,100\n";
+    const { request } = chunked(upload(new File([csv], "Positions.csv")));
+
+    const input = await parseUploadForm(await readUploadForm(request));
+
+    expect(input.filename).toBe("Positions.csv");
+    expect(new TextDecoder().decode(input.bytes)).toBe(csv);
   });
 });

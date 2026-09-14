@@ -1,13 +1,15 @@
-// Drop screen (step one), through its real loader. Two rules: the loader must not narrow listAccounts' owner/institution/kind/number
+// Drop screen (step one), through its real loader and action. Three rules: the loader must not narrow listAccounts' owner/institution/kind/number
 // away (once rendered two same-named accounts identically); and a ?account= prefill the select doesn't offer (closed, nonexistent)
-// drops silently — matched against the options rather than trusted into defaultValue.
+// drops silently — matched against the options rather than trusted into defaultValue; and the action counts the body as
+// it streams, so a chunked upload can't buffer past the cap (#313).
 import { afterAll, describe, expect, it } from "vitest";
 
 import Upload, { action, loader } from "../../app/routes/upload.tsx";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get } from "../support/routes.ts";
+import { getConfig } from "../../server/config.ts";
+import { args, chunked, get, postFile } from "../support/routes.ts";
 
 // getConfig() memoises its first read, so set before any loader runs (as masked-screens.test.tsx does).
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -113,4 +115,18 @@ describe("the drop screen's ?account= prefill", () => {
       expect(markup).not.toContain(`<option value="${linked.id}" selected=""`);
     }),
   );
+});
+
+describe("the drop screen's action", () => {
+  it("refuses a chunked upload over the cap as a form error, reading no further than the cap (#313)", async () => {
+    const cap = getConfig().MAX_UPLOAD_MB * 1024 * 1024;
+    const { request, sent } = chunked(
+      postFile("/upload", { name: "huge.csv", content: "x".repeat(cap * 2) }, { accountId: "1" }),
+    );
+
+    const refusal = await action(args(request));
+
+    expect(refusal.formError).toContain(`larger than ${getConfig().MAX_UPLOAD_MB} MB`);
+    expect(sent()).toBeLessThanOrEqual(cap + 64 * 1024);
+  });
 });

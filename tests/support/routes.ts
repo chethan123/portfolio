@@ -98,6 +98,39 @@ export function postFile(
   return throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body }));
 }
 
+/**
+ * `request` re-sent chunked — no Content-Length, 64 KiB at a time, as a socket hands it over. `sent()` is
+ * what the reader has pulled; highWaterMark 0 so nothing is pulled ahead of it.
+ */
+export function chunked(request: Request): { request: Request; sent: () => number } {
+  const source = request.body?.getReader();
+  let pending = new Uint8Array(0);
+  let sent = 0;
+
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        if (pending.byteLength === 0) {
+          const next = await source?.read();
+          if (next === undefined || next.done) return controller.close();
+          pending = next.value;
+        }
+        const piece = pending.subarray(0, 64 * 1024);
+        pending = pending.subarray(piece.byteLength);
+        sent += piece.byteLength;
+        controller.enqueue(piece);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  const init: StreamingRequestInit = { method: request.method, body, headers, duplex: "half" };
+
+  return { request: new Request(request.url, init), sent: () => sent };
+}
+
 /** {request, params} only — no route here reads context. Cast at the call site; generated Route.LoaderArgs isn't reachable here. */
 export function args(request: Request, params: Record<string, string> = {}) {
   return { request, params } as never;
