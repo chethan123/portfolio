@@ -1,7 +1,7 @@
 # When something is refused
 
 Most refusals explain themselves. When you mistype an amount or leave a required box empty, the app
-says so beside the box, keeps what you typed, and records nothing — read the message and try again.
+says so beside the box, keeps what you typed, and records nothing. Read the message and try again.
 
 This page is for the handful where the message is clear but the *cause* is somewhere you cannot see.
 
@@ -19,17 +19,17 @@ it from Settings, but that control does not exist yet. See [closed-account recov
 [Set balance](account-detail.md) appears on bank and loan accounts only.
 
 A brokerage, IRA or workplace plan holds individual positions, and its value is what those positions
-are worth — so there is no single number to type. Its balance comes from
+are worth, so there is no single number to type. Its balance comes from
 [a statement](upload.md) or [a correction](holdings.md) instead.
 
 ## A bank or loan account will not take a balance either
 
-The form is there, and it still says no — naming what the account holds.
+The form is there, and it still says no, naming what the account holds.
 
 A typed balance is the *whole* statement for that account: one figure, replacing everything recorded
 before it. That is exactly right for a current account, and it is why the account list, the chart
 and net worth all move the moment you record one. But if a statement was uploaded against this
-account at some point, it may list more than cash — and typing one figure over it would record
+account at some point, it may list more than cash, and typing one figure over it would record
 everything else as sold.
 
 So the refusal names the positions in the way. Either [upload a statement](upload.md) for the
@@ -39,7 +39,7 @@ should not be there.
 ## An account's kind will not change
 
 Every other field on an account can be corrected freely. **Kind** is the one that cannot always be,
-because it is not a caption — every figure in the application reads it, on every date, including
+because it is not a caption. Every figure in the application reads it, on every date, including
 dates from before you changed it.
 
 Two refusals, both naming what is in the way:
@@ -53,17 +53,17 @@ Two refusals, both naming what is in the way:
   the kind.
 
 An account with nothing recorded against it yet can always change kind, which is the case this
-usually is — a kind picked wrongly when the account was added.
+usually is: a kind picked wrongly when the account was added.
 
 **On a closed account, neither way out is open.** A closed account's history does not change, so
 there is no balance to zero and no statement to upload, and the message says so rather than
-suggesting something that would be refused in turn. Its other fields still edit normally — this is
+suggesting something that would be refused in turn. Its other fields still edit normally. This is
 only about **Kind**.
 
 ## A person cannot be removed
 
-Someone who owns an account cannot be removed, and that includes accounts that have been **closed** —
-a closed account still counts on every date before it closed, so its owner is still needed.
+Someone who owns an account cannot be removed, and that includes accounts that have been **closed**.
+A closed account still counts on every date before it closed, so its owner is still needed.
 
 The refusal names each account in the way. Change the owner on those accounts, then remove the
 person.
@@ -71,7 +71,7 @@ person.
 Almost nothing in this application deletes anything, so this is the shape of most "no" answers here:
 an account is closed rather than deleted, a correction is a new record rather than an overwrite. What
 does delete, immediately and with no undo: removing a person once they own nothing at all, and
-removing a passkey on Settings → Passkeys — see [Passkeys and the lock](passkeys.md).
+removing a passkey on Settings → Passkeys. See [Passkeys and the lock](passkeys.md).
 
 ## The review screen wants a sentence ticked
 
@@ -80,14 +80,14 @@ sold. That is correct for a normal export and catastrophic for a filtered one.
 
 When a file would remove more than half of what the account holds, the review screen states the
 ratio and will not record until you tick it. Before you do, check that you exported *all* positions
-rather than a filtered page — the removals are listed individually, with quantities, so they are
+rather than a filtered page. The removals are listed individually, with quantities, so they are
 worth reading.
 
 ## The file itself is refused
 
 A statement is rejected outright, rather than partly imported, when it cannot be read honestly:
 
-- **It is not a CSV.** Export the CSV version — spreadsheets and PDFs are not read.
+- **It is not a CSV.** Export the CSV version. Spreadsheets and PDFs are not read.
 - **It is too large.** The cap is set by whoever runs the instance.
 - **A quantity makes no sense**, or rows disagree about what date the statement is. The message
   names the line, so open the file at that line.

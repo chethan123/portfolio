@@ -2,7 +2,7 @@
 
 A self-hosted family portfolio and net worth tracker. This file is the glossary: the words this
 project uses for its own concepts, and the ones it deliberately avoids. It holds no implementation
-detail — [`DESIGN.md`](DESIGN.md) is the design record, [`ARCHITECTURE.md`](ARCHITECTURE.md) is how
+detail. [`DESIGN.md`](DESIGN.md) is the design record, [`ARCHITECTURE.md`](ARCHITECTURE.md) is how
 the code is arranged, and [`docs/adr/`](docs/adr/) holds individual decisions.
 
 Terms are added when one is actually resolved, not preemptively.
@@ -13,47 +13,49 @@ Terms are added when one is actually resolved, not preemptively.
 
 **Annual dividend**:
 What a holding is projected to pay over the coming year, from the quantity held and the instrument's
-current per-share rate. Forward-looking and current-only: there is no such figure for a past date.
+current per-share rate. It is forward-looking and current-only, so there is no such figure for a
+past date.
 _Avoid_: dividend income, payout, projected income, distribution.
 
 **Weighted yield**:
 A group's annual dividend divided by the sum of its positive holding values. Debt does not
-reduce this denominator. A computed figure, never stored.
+reduce this denominator. It is a computed figure, never stored.
 _Avoid_: average yield, blended yield, portfolio yield.
 
 ### How money is taxed, and where it sits
 
 **Tax treatment**:
-Which of three tax regimes an account's money is in — `taxable`, `tax_deferred`, `tax_free`. Three
-values, never a boolean: a Traditional balance and a Roth balance are both untaxed today and differ
-entirely in what is owed later.
+Which of three tax regimes an account's money is in: `taxable`, `tax_deferred`, `tax_free`. It has
+three values and never a boolean, because a Traditional balance and a Roth balance are both untaxed
+today and differ entirely in what is owed later.
 _Avoid_: account type, tax status, taxable/non-taxable.
 
 **Account type**:
-Which of five kinds an account is — brokerage, workplace plan, IRA, bank, liability. Distinct from
-tax treatment, and the two are not interchangeable: a workplace plan may be tax-deferred or tax-free.
+Which of five kinds an account is: brokerage, workplace plan, IRA, bank, liability. It is distinct
+from tax treatment, and the two are not interchangeable, because a workplace plan may be
+tax-deferred or tax-free.
 The schema calls this column `kind` (the `holding_valued` view exposes it as `account_kind`); the
 screens call it Account type.
 _Avoid_: using it to mean tax treatment.
 
 **Sheltered**:
 Shorthand for tax-deferred and tax-free taken together. A subtotal a screen may state in words. It
-is never a stored value, never a grouping key, and never a slice of a chart — grouping by it would
-discard the distinction tax treatment exists to keep.
+is never a stored value, never a grouping key, and never a slice of a chart, because grouping by it
+would discard the distinction tax treatment exists to keep.
 _Avoid_: tax-advantaged, non-taxable, unsheltered.
 
 ### What an asset is
 
 **Classification**:
-The household's own label for what an instrument is — "S&P 500 fund", "Cash" — one per
+The household's own label for what an instrument is, "S&P 500 fund" or "Cash". There is one per
 instrument, assigned when the instrument first enters the records and shared everywhere it is
 held. Labels are free-form and may mix axes (kind, index tracked, geography), which is fine for
 labelling; the asset class rollup is what aggregates.
 _Avoid_: category, tag, asset type, label; classification to mean the asset class.
 
 **Asset class**:
-The fixed four-way rollup every classification maps onto — equity, bond, cash, other — giving
-the coarse split the free-form labels cannot. The household chooses which of the four each
+The fixed four-way rollup every classification maps onto: equity, bond, cash, other. It gives the
+coarse split the free-form labels cannot. The household chooses which of the four each
 classification rolls up to; the four themselves are closed, and `other` honestly reports
 "cannot be split further".
 _Avoid_: classification to mean the rollup, security type, sector.
@@ -64,18 +66,18 @@ _Avoid_: classification to mean the rollup, security type, sector.
 The retired state of an account, recorded with its closing instant. A closed account
 contributes nothing to current figures. For daily history, it counts when the start of that UTC
 date precedes the closing instant, usually including the closing day.
-Closing is the only way an account ends — nothing is deleted — it must be acknowledged before it
-happens, and it is one-way in this version: there is no reopen.
+Closing is the only way an account ends, and nothing is deleted. It must be acknowledged before it
+happens, and it is one-way in this version. There is no reopen.
 _Avoid_: deleted, removed, archived, deactivated, inactive.
 
 ### How a chart's time span is chosen
 
 **Chart range**:
 The named span of time a chart plots: one of the fixed presets (1D, 1W, 1M, 3M, YTD, 1Y, 5Y, All)
-or a custom start/end pair. Which dates a range can reach differs by screen — the Overview's range
+or a custom start/end pair. Which dates a range can reach differs by screen. The Overview's range
 may include hand-typed pre-app data; an account's never does.
 _Avoid_: time range, period, date range, lookback. (`window` is not avoided but means something
-narrower: the resolved start/end span a range produces, which is what `chart-range.ts` calls it —
+narrower: the resolved start/end span a range produces, which is what `chart-range.ts` calls it,
 never a synonym for the named range a reader picks.)
 
 **1D**:
@@ -92,17 +94,18 @@ _Avoid_: current value, latest value, ending balance, final value.
 ### How prices stay fresh
 
 **Refresh cadence**:
-How often the app refreshes prices — the household's dial, in whole minutes. Quotes are asked for
-only inside the scheduled quote window; a backfill may ride a refresh at any hour, and only while
-some instrument's closes are still missing. The term speaks of refreshes rather than of the timer
-that drives them.
+How often the app refreshes prices, a household setting in whole minutes. The app asks for quotes
+only inside the scheduled quote window; a backfill may accompany a refresh at any hour, and only
+while some instrument's closes are still missing. The term refers to refreshes rather than to the
+timer that drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
 
 **Scheduled quote window**:
 Regular market hours padded ±15 minutes (`app/lib/market-hours.ts`), so a backfill can recover the
 prior close before open and a delayed close after it. What the poller checks before asking for
 quotes on a tick; a person's **Refresh now** ignores it and asks at any hour.
-_Avoid_: market hours, trading hours (for what gates the poller — those still name the session itself).
+_Avoid_: market hours, trading hours (for what gates the poller, since those still name the
+session itself).
 
 **Observation**:
 A price the feed reported for one instrument, filed under the instant the provider says it was
@@ -112,10 +115,10 @@ _Avoid_: tick, snapshot, price point, intraday price.
 
 **Poll**:
 One attempt to refresh quotes for every feed-priced instrument, recorded whether or not any new
-observation resulted — the cadence's own attempts and a person's press of Refresh now alike, since
-both are the same attempt at the same instruments. What tells a quiet market apart from a server
-that was not running: a gap inside the scheduled quote window is the deployment's silence, and a row
-outside it is somebody asking.
+observation resulted. The cadence's own attempts and a person's press of Refresh now count alike,
+since both are the same attempt at the same instruments. What tells a quiet market apart from a
+server that was not running: a gap inside the scheduled quote window is the deployment's silence,
+and a row outside it is somebody asking.
 _Avoid_: refresh run, fetch, sync.
 
 **Backfill**:
@@ -130,8 +133,8 @@ means, and no database credential.
 _Avoid_: sidecar, fetcher, poller (for this).
 
 **Worker socket**:
-The unix socket in the shared volume through which the app asks and the worker answers — a
-request and a raw answer, nothing kept.
+The unix socket in the shared volume through which the app asks and the worker answers. A request
+and a raw answer, nothing kept.
 _Avoid_: queue, job table, sidecar API, RPC.
 
 ### Who gets in
@@ -146,27 +149,26 @@ The list of family email addresses the gate admits. It is the whole of who may e
 registration and no account to create.
 _Avoid_: user list, members, whitelist, accounts.
 
-**Authenticated email**:
-The verified address the gate attaches to each admitted request, naming which family member is
-acting. Attribution, never permission: it may say who did a thing, and it never decides what anyone
-may do — every family member sees and can do everything.
-_Avoid_: user, account, login, principal, role.
+**Authenticated email**: The verified address the gate attaches to each admitted request, naming
+which family member is acting. The address is attribution and never permission. It may say who did a
+thing, and it never decides what anyone may do, because every family member sees and can do
+everything. _Avoid_: user, account, login, principal, role.
 
 ### What a browser must do before it shows anything
 
 **Locked**:
 The state in which a browser is refused every screen until a passkey is checked, whatever the gate
-has already admitted. A fact about one browser at one moment rather than about the household or the
-person: signing in again does not clear it, and unlocking one browser leaves the rest locked. The
-instance locks whenever the household holds a passkey and stops when it holds none, so removing the
-last passkey is the only way to turn it off.
+has already admitted. It is a fact about one browser at one moment rather than about the household
+or the person. Signing in again does not clear it, and unlocking one browser leaves the rest
+locked. The instance locks whenever the household holds a passkey and stops when it holds none, so
+removing the last passkey is the only way to turn it off.
 _Avoid_: signed out, timed out, app lock, screen lock, privacy mode.
 
 **Passkey**:
 A credential the household has enrolled so that a browser can be unlocked, held by whichever
-provider the family member chose when creating it — the device's own, or a password manager. The
-instance keeps only its public half, and never sees the check that guards it. Not a device: one
-passkey may sync to every device in a vault, and one device may hold several.
+provider the family member chose when creating it, the device's own or a password manager. The
+instance keeps only its public half, and never sees the check that guards it. It is not a device.
+One passkey may sync to every device in a vault, and one device may hold several.
 _Avoid_: biometric, fingerprint, face, device credential, enrolled device, key.
 
 ### Whose money a screen is showing
@@ -177,60 +179,58 @@ and remove on the People screen; it is not a login, and admission to the instanc
 business rather than a person's.
 _Avoid_: user, member, profile, household member.
 
-**Owner**:
-The single person an account's money belongs to. Every account has exactly one, and every holding
-inside it is that owner's — the same person seen through the account they hold, which is why a
-screen says "owned by" rather than naming the record.
-_Avoid_: holder, beneficiary, account user.
+**Owner**: The single person an account's money belongs to. Every account has exactly one, and every
+holding inside it is that owner's. An owner is the same person seen through the account they hold,
+which is why a screen says "owned by" rather than naming the record. _Avoid_: holder, beneficiary,
+account user.
 
-**Owner filter**:
-The choice to read every screen as one or more owners rather than as everyone. A way of narrowing
-what is shown and never of deciding what may be seen — every family member may set it, clear it, and
-set it to anybody. It belongs to the reading in progress rather than to the household: it is in the
-address of the page being read and nowhere else, so it lasts exactly as long as that address does.
-Off means the whole household, which is where every reading starts — and which selecting everybody
-is only another way of saying.
-_Avoid_: user filter, person filter, lens, view-as, my view, standing choice.
+**Owner filter**: The choice to read every screen as one or more owners rather than as everyone. The
+filter narrows what is shown and never decides what may be seen. Every family member may set it,
+clear it, and set it to anybody. It belongs to the reading in progress rather than to the household,
+and lives in the address of the page being read and nowhere else, so it lasts exactly as long as
+that address does. Off means the whole household, which is where every reading starts. Selecting
+everybody is only another way of saying it. _Avoid_: user filter, person filter, lens, view-as, my
+view, standing choice.
 
 **Reading**:
 What a screen's household-scoped queries actually narrow by, once the owner filter has been resolved
-against the roster for that request: a stale id — naming nobody, or an owner whose accounts have all
-closed — is dropped, while a selection that resolves to nobody at all keeps its raw ids rather than
-widening to the whole household. Distinct from the owner filter itself, which is the address's own
-state and is never resolved against anything; the reading is what a query is allowed to believe that
-state means, and it is what makes the filter belong to "the reading in progress" the Owner filter
-entry above names.
-_Avoid_: the filter (for this — that is the raw selection), the selection, narrowed owners.
+against the roster for that request. A stale id, one naming nobody or an owner whose accounts have
+all closed, is dropped, while a selection that resolves to nobody at all keeps its raw ids rather
+than widening to the whole household. It is distinct from the owner filter itself, which is the
+address's own state and is never resolved against anything. The reading is what a query is allowed
+to believe that state means, and it is what makes the filter belong to "the reading in progress"
+the Owner filter entry above names.
+_Avoid_: the filter (for this, since that is the raw selection), the selection, narrowed owners.
 
 ### How an account is told apart
 
 **Account number**:
-The optional free-form identifier recorded on an account as its institution states it — captured
-from a statement's own column or typed in Settings. A guard and a label, never a selector: nothing
-auto-picks an account from it, and an upload naming a different number than the recorded one is
-refused rather than landed in the wrong place.
+The optional free-form identifier recorded on an account as its institution states it, captured
+from a statement's own column or typed in Settings. It is a guard and a label, never a selector.
+Nothing auto-picks an account from it, and an upload naming a different number than the recorded
+one is refused rather than landed in the wrong place.
 _Avoid_: account ID, external ID, mask (for the stored value).
 
 **Number tail**:
-The display form of an account number — four dots and its last four characters, characters rather
-than digits because the stored number is free text. An identifier and not an amount: it rides beside
-the account name wherever accounts are listed, always and not only when names collide, and masking
-never touches it.
+The display form of an account number: four dots and its last four characters, characters rather
+than digits because the stored number is free text. The tail is an identifier and not an amount. It
+appears beside the account name wherever accounts are listed, always and not only when names
+collide, and masking never touches it.
 _Avoid_: last 4 digits, masked number, account suffix.
 
 ### What a screen shows in public
 
 **Masked**:
 The display state in which every amount on a screen is replaced by a fixed run of dots. An amount is
-any absolute figure — a value, a balance, a cost basis, a gain, a share quantity; a ratio is never
+any absolute figure: a value, a balance, a cost basis, a gain, a share quantity; a ratio is never
 masked, and neither is a name, a symbol or a date. It is a state of the display and nothing more,
-and it keeps nobody out: the gate decides which person reaches the instance, being locked decides
+and it keeps nobody out. The gate decides which person reaches the instance, being locked decides
 whether a browser is shown anything, and masking only dots the figures on a screen its reader is
 already entitled to read.
 _Avoid_: private, privacy mode, hidden, secure, redacted.
 
 **Masking policy**:
-The household's standing choice of what a browser that has not been toggled yet opens in — masked,
+The household's standing choice of what a browser that has not been toggled yet opens in: masked,
 unmasked, or as that browser last left it. Distinct from being masked, which is a fact about one
 browser at one moment rather than about the household.
 _Avoid_: privacy setting, hide on start, default state.
@@ -238,19 +238,19 @@ _Avoid_: privacy setting, hide on start, default state.
 ### How a form starts already answered
 
 **Prefill**:
-A starting choice a link hands a form — already selected on arrival, still changeable, and
-committing nothing: the form's own rules decide what may actually be submitted. A prefill that
-names something gone — closed, removed, mistyped — is quietly dropped and the form starts blank,
-because a prefill only ever saved the picking; it never promised the pick. Distinct from a filter,
-which narrows what a page shows: a filter that matches nothing is kept and said out loud, since
-dropping it would silently change what the reader believes they are looking at.
+A starting choice a link hands a form, already selected on arrival, still changeable, and
+committing nothing. The form's own rules decide what may actually be submitted. A prefill that
+names something gone, whether closed, removed or mistyped, is quietly dropped and the form starts
+blank, because a prefill only ever saved the picking; it never promised the pick. It is distinct
+from a filter, which narrows what a page shows. A filter that matches nothing is kept and said out
+loud, since dropping it would silently change what the reader believes they are looking at.
 _Avoid_: pre-selection, auto-select, locked, deep-link default.
 
 ### How the data is kept safe
 
 **Dump**:
 A `pg_dump` archive of the whole database at one instant, verified readable end to end, held on the
-machine that produced it. It is not a backup: it is what a backup is taken *of*, and it survives
+machine that produced it. A dump is not a backup. It is what a backup is taken *of*, and it survives
 exactly as long as the disk under it does.
 _Avoid_: backup, snapshot, export.
 
