@@ -1352,10 +1352,21 @@ channel is for the sighted pointer a colour-blind reader steers.
 
 ### 13.4 Typography
 
-One family now: **Inter**, self-hosted (`public/fonts/`, latin subset, variable weight, 47KB).
+One family now: **Inter**, self-hosted (`app/fonts/`, latin subset, variable weight, 47KB).
 Not the Google CDN the mocks use, because this is an installable PWA (§11, ADR-0007) for a
 household's finances, and a per-visit request to a third party is both a privacy leak and a failure
 the moment the phone is off the VPN.
+
+It lives under `app/`, not `public/`, so Vite hashes it into `/assets/`, the one mount
+`react-router-serve` marks `immutable`, and a phone keeps it for a year the way it keeps the bundles.
+That is the browser's HTTP cache holding a file with no figure in it, not the device storage ADR-0007
+refuses. `root.tsx` preloads the same import, so the fetch starts with the stylesheet's rather than
+after it, and `app.css` declares fallback faces, the Roboto and Arial a phone already has, each
+resized to Inter's measured metrics, so the swap moves nothing when Inter lands. Arial has a bold
+face too; Roboto does not, because Android 12 and later ship no static Roboto Bold and a face the
+device lacks drops that weight to the system family, so the browser emboldens the regular face
+instead. They carry Inter's unicode range, so a glyph Inter lacks still comes from the system
+family.
 
 | Token | Size / line | Weight | Tracking |
 |---|---|---|---|

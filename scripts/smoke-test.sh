@@ -811,12 +811,24 @@ printf 'GET / rendered a page\n'
 # The one thing a rendered page can't vouch for: whether its <link> targets actually exist — how a 404'd asset once shipped unnoticed.
 log "Fetching the static assets from the app container"
 
-for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2; do
+for asset in /manifest.webmanifest /sw.js /icon.svg; do
   status="$(docker compose exec -T app node -e \
     'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+process.argv[1]).then(r=>{console.log(r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))' \
     "$asset")" || fail "GET ${asset} from the app returned ${status:-nothing}, expected 200"
   printf 'GET %s -> %s\n' "$asset" "$status"
 done
+
+# The font's address is only in the page: hashed into /assets/, the one mount served `immutable`
+# (#201). Anywhere else it revalidates on every open, which is the regression this catches.
+font="$(printf '%s' "$page" | grep -o 'href="/assets/[^"]*\.woff2"' | head -n 1 |
+  sed 's/^href="//; s/"$//' || true)"
+[[ -n "$font" ]] || fail "GET / did not preload a hashed font from /assets/"
+font_response="$(docker compose exec -T app node -e \
+  'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+process.argv[1]).then(r=>{console.log(r.status+" "+r.headers.get("cache-control"));process.exit(r.ok?0:1)}).catch(()=>process.exit(1))' \
+  "$font")" || fail "GET ${font} from the app returned ${font_response:-nothing}, expected 200"
+[[ "$font_response" == "200 "*immutable* ]] ||
+  fail "GET ${font} was not served immutable: ${font_response}"
+printf 'GET %s -> %s\n' "$font" "$font_response"
 
 # The body, not just the status — "200 with the wrong body" is the failure Compose, the proxy, and monitoring cannot see.
 health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
