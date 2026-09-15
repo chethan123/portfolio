@@ -1,7 +1,7 @@
 // Upload draft: the staging row behind an in-progress upload (DESIGN.md §5.1,
 // docs/specs/0004-ingest.md). Everything a step needs is on the one row, so
 // reload/back/bookmark all work. Drafts are swept at 24h by the next createDraft — no cron.
-// Size capped twice: Content-Length before buffering, File.size after.
+// Size capped twice: the body as it streams in, File.size after.
 import { z } from "zod";
 
 import { sql } from "kysely";
@@ -59,16 +59,33 @@ export type DraftInput = {
   bytes: Uint8Array;
 };
 
-// All that exists before the body buffers; a request without one falls through to File.size.
-export function refuseOversizedBody(request: Request): void {
+// Counted while streaming: chunked bodies carry no Content-Length; `request.formData()` buffers unbounded (#313).
+export async function readUploadForm(request: Request): Promise<FormData> {
   const limit = getConfig().MAX_UPLOAD_MB;
-  const declared = Number(request.headers.get("content-length"));
-
-  if (Number.isFinite(declared) && declared > limit * BYTES_PER_MB) {
-    throw ValidationError.form(
+  const tooLarge = () =>
+    ValidationError.form(
       `This upload is larger than ${limit} MB, which is the most a statement file can be.`,
     );
+
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit * BYTES_PER_MB) throw tooLarge();
+
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let received = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      received += chunk.value.byteLength;
+      if (received > limit * BYTES_PER_MB) {
+        await reader.cancel();
+        throw tooLarge();
+      }
+      chunks.push(chunk.value);
+    }
   }
+
+  const contentType = request.headers.get("content-type") ?? "";
+  return new Response(new Blob(chunks), { headers: { "content-type": contentType } }).formData();
 }
 
 const uploadInput = z.object({

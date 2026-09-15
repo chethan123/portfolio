@@ -4,7 +4,7 @@ import { UploadSteps } from "~/components/upload-steps";
 import { accountPickerGroups } from "~/lib/account-label";
 import { listAccounts } from "~/lib/accounts.server";
 import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { createDraft, parseUploadForm, refuseOversizedBody } from "~/lib/uploads.server";
+import { createDraft, parseUploadForm, readUploadForm } from "~/lib/uploads.server";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/upload";
@@ -38,10 +38,8 @@ export async function action({ request }: Route.ActionArgs) {
   let values: Record<string, string> = {};
 
   try {
-    // Before the body is read: `formData()` buffers the whole thing.
-    refuseOversizedBody(request);
-
-    const form = await request.formData();
+    // Never `request.formData()` here — unbounded (#313).
+    const form = await readUploadForm(request);
     values = formFields(form);
 
     // `formFields` drops file parts by design — read directly from the form.
