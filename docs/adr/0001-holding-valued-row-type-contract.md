@@ -8,11 +8,11 @@ not stop them.
 
 ## The trap
 
-`holding_valued_at` declares `returns setof holding_valued`, which is deliberate. It is what stops
-the historical answer from becoming a second definition of "holdings, valued". The cost is that the
-view's row type is a contract binding both, and PostgreSQL does not check it at replace time.
-Reproduced with the real migrations applied, against Postgres 17, the version `compose.test.yaml`
-runs:
+`holding_valued_at` declares `returns setof holding_valued`, which is deliberate. The declaration is
+what stops the historical answer from becoming a second definition of "holdings, valued". The cost
+is that the view's row type is a contract binding both, and PostgreSQL does not check it at replace
+time. Reproduced with the real migrations applied, against Postgres 17, the version
+`compose.test.yaml` runs:
 
 ```
 create or replace view holding_valued as ...   -- one column appended
@@ -55,8 +55,8 @@ written in SQL where a reader can see it.
   `quote` is overwritten on every refresh and `price_daily` holds only a close. The function
   follows the precedent it already sets for `is_stale`, where it returns a constant with a comment
   saying why.
-- `ValuedHolding.annualDividend` is `string | null`. It is never null on the current path, because
-  the view coalesces a missing rate to zero, and always null on an as-of one. It must not be
-  narrowed with `required()`.
+- `ValuedHolding.annualDividend` is `string | null`. It is never null on the current path, because the
+  view coalesces a missing rate to zero, and always null on an as-of one. It must not be narrowed
+  with `required()`.
 - Any future column on this view inherits the trap. Replace the view and the function in one
   migration, and never assume a green migration means a working function.

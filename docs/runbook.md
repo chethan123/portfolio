@@ -320,9 +320,9 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   call, so a tick that hangs inside it logs exactly nothing, the same silence a stopped timer
   leaves. There is no line whose presence or absence tells the two apart.
   `docker compose restart app` is the fix either way. Before restarting, `docker compose logs db`
-  for a long-running or blocked query is worth a look regardless of which cause this is. It is free
-  if the timer stopped, and it is the one thing that would explain a hung tick and be worth
-  fixing before the next one wedges the same way.
+  for a long-running or blocked query is worth a look regardless of which cause this is. The check
+  costs nothing if the timer stopped, and a blocked query is the one thing that would explain a hung
+  tick and be worth fixing before the next one wedges the same way.
 - **`scheduler`: `running`** with no other symptom is ordinary. A tick is in flight. Poll again; if
   it is still `running` well past when a tick should have finished, treat it the same as `overdue`'s
   second case above.
@@ -334,11 +334,11 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   provider logs. Settings → Prices lists historical gaps, not every stale current quote.
 - **`quotes`: `failed`** beside **`worker`: `"available"`** means the last tick's quote attempt did
   not succeed end to end while *this* probe, taken separately and up to five seconds old, found the
-  listener answering. That is not proof the socket hop was fine at the time of that attempt, since
-  `quotes` can be carried from up to a full cadence ago and the worker can have failed and recovered
-  since. Grep `Price provider failed` below regardless. `quotes`: `failed` beside **`worker`:
-  `"unavailable"`** is consistent with the fault you already found from `worker` above, though still
-  not proof by itself. The same log grep settles it either way.
+  listener answering. That combination is not proof the socket hop was fine at the time of that
+  attempt, since `quotes` can be carried from up to a full cadence ago and the worker can have
+  failed and recovered since. Grep `Price provider failed` below regardless. `quotes`: `failed`
+  beside **`worker`: `"unavailable"`** is consistent with the fault you already found from `worker`
+  above, though still not proof by itself. The same log grep settles it either way.
 - **`quotes`: `unknown`** means the tick's own database or lock work failed, not the provider. Grep
   `Price refresh failed`.
 

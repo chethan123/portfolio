@@ -398,13 +398,13 @@ server look identical. This table is what tells them apart later.
 | `stale` | `integer` | no | instruments left stale (≥ 0) |
 
 **`price_backfill`** is one row per instrument per backfill attempt, recorded whether or not it
-wrote. It is `price_poll`'s sibling and its reasoning, with two things of its own: it references an
-instrument, because an attempt is about one; and it stores a named `outcome` and the provider's
-`error` text where `price_poll` stores only counts. Those are what make it useful twice over. It is
-the retry clock, since an instrument attempted within the last day is not a candidate, so an
-unfillable gap costs one request a day rather than one every tick. It also lets Settings → Prices
-give a reason rather than a silence, reading the latest row per instrument through the index
-below.
+wrote. The table is `price_poll`'s sibling and its reasoning, with two things of its own: it
+references an instrument, because an attempt is about one; and it stores a named `outcome` and the
+provider's `error` text where `price_poll` stores only counts. Those two are what make it useful
+twice over. The table is the retry clock, since an instrument attempted within the last day is not a
+candidate, so an unfillable gap costs one request a day rather than one every tick. It also lets
+Settings → Prices give a reason rather than a silence, reading the latest row per instrument through
+the index below.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -498,9 +498,9 @@ A browser past the gate is refused every screen until a passkey is checked
 ([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md); `CONTEXT.md`'s `Locked`). `passkey`
 is the household's own enrolled credentials; `unlock_grant` is a minted unlock grant, addressed by
 an opaque id a cookie carries. The row is the authority, and the cookie carries no claim of its own.
-It is not one row per browser: minting supersedes only the row this request's own cookie named, so a
-browser that lost its cookie and unlocks again leaves its old row live beside the new one, and a
-copied cookie lets two browsers use the same row.
+`unlock_grant` is not one row per browser: minting supersedes only the row this request's own cookie
+named, so a browser that lost its cookie and unlocks again leaves its old row live beside the new
+one, and a copied cookie lets two browsers use the same row.
 
 **`passkey`** is the public half of each enrolled credential, kept until a person removes it. The
 instance is locked whenever at least one row exists here and stops the moment none do.
@@ -523,12 +523,12 @@ first passkey needs no authorisation": the *committed* half is closed by the app
 conditional insert, and neither is sufficient alone (migration 0012's own comment on the index has
 the full argument).
 
-**`unlock_grant`** is a minted unlock grant, addressed by its own opaque id. It is minted two ways:
-by a verified assertion against an already-enrolled passkey (an unlock, or the "prove yourself" step
-that authorises enrolling another passkey or removing one), or, for the household's first passkey
-only, by that passkey's own successful registration, with no existing passkey to assert against
-yet. Minting a grant there is what keeps the enrolling browser from being locked out by its own
-redirect back.
+**`unlock_grant`** is a minted unlock grant, addressed by its own opaque id. A grant is minted two
+ways: by a verified assertion against an already-enrolled passkey (an unlock, or the "prove
+yourself" step that authorises enrolling another passkey or removing one), or, for the household's
+first passkey only, by that passkey's own successful registration, with no existing passkey to
+assert against yet. Minting a grant there is what keeps the enrolling browser from being locked out
+by its own redirect back.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -543,7 +543,7 @@ Index: `unlock_grant_expires_at_idx` on `(expires_at)`, what the sweep reads, ma
 **Neither table is history.** Both are scaffolding, on the same footing as `upload_draft`, and both
 may be deleted from freely, where `position_set`, `holding` and the rest of the household's record
 may not. `passkey` rows are deleted the moment a person removes one, cascading away that passkey's
-own grants; `unlock_grant` rows are additionally swept once past their own expiry, superseded when
+own grants; `unlock_grant` rows are also swept once past their own expiry, superseded when
 the browser holding one verifies another assertion, and deleted outright by an explicit lock.
 
 ## 5. Derived objects: how the schema is read
@@ -567,15 +567,15 @@ property of the answer, argued in
 
 ### 5.2 `holding_valued` (view)
 
-Current holdings, valued. This view is the shared definition every dashboard reads. There is one
-row per holding of every open account. The rules it encodes, each a decision:
+Current holdings, valued. This view is the shared definition every dashboard reads, one row per
+holding of every open account. The rules it encodes, each a decision:
 
 - **Latest set per account** via `latest_position_set(a.id)`.
 - **Closed accounts excluded** (`closed_at is null`). The filter lives here, not in consumers.
 - **`quote` is LEFT-joined**: an instrument never priced yields a null price and value and the row
   *still appears*, carrying `is_priced = false`. Inner-joining would silently vanish it from every
-  total. That is the understatement this design refuses everywhere. A total can therefore be
-  labelled "based on 8 of 12 holdings" instead of quietly understating.
+  total. This design refuses that understatement everywhere. A total can therefore be labelled
+  "based on 8 of 12 holdings" instead of quietly understating.
 - **Round each holding before summing.** Value and cost basis are independently rounded to
   `numeric(20,4)`. Unrealized gain subtracts those rounded figures. Null price or basis stays
   unknown; separate totals need separate coverage counts.

@@ -216,22 +216,22 @@ Each service is a decision rather than an accident:
   dials, so it is a `tmpfs`, sized at 1 MB, gone the moment the host is. `compose.yaml` carries the
   transcript for both.
 
-**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
-for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`, `/config`
-and `/data` for `caddy`. That is enforcement, not intention. It states that none of them writes to its
-own filesystem and that any can be destroyed and recreated freely. It holds for the gate because
-its sessions live in an encrypted cookie in the browser (a sidecar with a session database would need
-a volume, and this one does not have one), for `db` because all of its state is in the bound directory
-above, and for `worker` because the one thing it needs to write, its socket, lives on the volume
-mounted at `/run/price-worker`, not on the container's own root.
+**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes:
+`/tmp` for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`,
+`/config` and `/data` for `caddy`. That pairing is enforcement, not intention. It states that none
+of them writes to its own filesystem and that any can be destroyed and recreated freely. It holds
+for the gate because its sessions live in an encrypted cookie in the browser (a sidecar with a
+session database would need a volume, and this one does not have one), for `db` because all of its
+state is in the bound directory above, and for `worker` because the one thing it needs to write, its
+socket, lives on the volume mounted at `/run/price-worker`, not on the container's own root.
 
 Alongside it, on all seven: every Linux capability dropped and `no-new-privileges` set, an
 unprivileged uid pinned on six of them, and exactly two capabilities granted back. `gate` alone runs
 as root, which `compose.yaml` argues and `scripts/smoke-test.sh` asserts rather than leaves to
 drift. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
 operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, which is not there
-to bind anything. Binding 8080 needs no capability. It is granted because the image's binary carries
-that file capability and the kernel will not `exec` it from an empty bounding set.
+to bind anything. Binding 8080 needs no capability. It is granted because the image's binary
+carries that file capability and the kernel will not `exec` it from an empty bounding set.
 
 ### 3.2 Startup sequence
 
@@ -376,9 +376,9 @@ counts of the last decimal place. Nothing adds a money value except through `mon
 ### 4.2 Single-site invariants
 
 A recurring shape in this codebase: a hazard is contained by making exactly one place able to cause
-it. These are the ones worth knowing before changing anything, but they are not all the same kind of
-guarantee, and treating them as one kind is how a reader ends up disproving the table with a single
-grep. They come in three tiers.
+it. The invariants below are the ones worth knowing before changing anything, but they are not all
+the same kind of guarantee, and treating them as one kind is how a reader ends up disproving the
+table with a single grep. They come in three tiers.
 
 **Enforced by structure.** A second site is not reachable without deleting the first.
 
@@ -1258,16 +1258,16 @@ refresh that ran and could not commit.
 
 The batch that follows is **one transaction per instrument**, not one for the batch: an attempt's
 closes and the `price_backfill` row describing them commit together or not at all, and nothing spans
-two attempts. That is deliberate, because a batch is a bounded sequence of independent fetches, and one
-unreachable instrument must not undo the four that already landed.
+two attempts. The per-instrument boundary is deliberate, because a batch is a bounded sequence of
+independent fetches, and one unreachable instrument must not undo the four that already landed.
 
 `price_backfill` is `price_poll`'s sibling and shares its argument, an attempt recorded whether or
 not it produced anything, so a silence can be read. Two
 things are its own: it references the instrument, because an attempt is about one, and it stores a
 named `outcome` and the provider's `error` text where `price_poll` stores only counts. That is what
 makes it the retry clock, since an instrument attempted in the last day is not a candidate and an
-unfillable gap costs one request a day rather than one every tick. It is also what lets Settings →
-Prices give a reason rather than a silence.
+unfillable gap costs one request a day rather than one every tick. Those two things also let
+Settings → Prices give a reason rather than a silence.
 
 **`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
 the same precedent that keeps every uploaded CSV in `position_set.raw_file`, an audit artifact that
@@ -1336,9 +1336,9 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 The interval itself is the household's refresh cadence (`app_setting.refresh_cadence_minutes`,
 edited at Settings → Prices). The timer is armed at the seeded 15 and each in-session tick re-reads
-the row, re-arming when the value moved. That is the entire propagation mechanism: no restart, no
-cross-process signal, and every process converges within one old cadence because every process's
-next tick reads the same row.
+the row, re-arming when the value moved. That re-read is the entire propagation mechanism: no
+restart, no cross-process signal, and every process converges within one old cadence because every
+process's next tick reads the same row.
 
 `/healthz` now reads this same slot for `pricing.scheduler` and `pricing.quotes` (spec
 price-health/03). The derivation itself lives in `price-health.ts`, and the loader only reads a
@@ -1407,7 +1407,7 @@ before editing any of these. Four shapes, and they are not interchangeable:
 - `firstRecordedDate` narrows by subquery, because `position_set` carries `account_id` and no owner
   (DESIGN.md §4.2). That subquery spans **closed** accounts where the view excludes them, so a
   narrowed first-recorded date and a narrowed `currentHoldings` can disagree about which owners have
-  any history. That is deliberate, and the Overview's chart reach depends on it.
+  any history. The disagreement is deliberate, and the Overview's chart reach depends on it.
 
 The id guard is shared: `isOneOf` binds ids as one `bigint[]` behind a digits-and-length test, so an
 id past the type's range answers "no such row" in SQL rather than erroring inside Postgres.
@@ -1646,11 +1646,11 @@ proxy is not saturated. None restarts a container on failure, and all three are 
 `docker compose ps`. `app`'s own now proves one hop none of the other two can: not "is `worker`
 accepting requests on its socket" (that's `worker`'s own check, run from inside its container, on the
 uid that owns the mount) but "can *this app process*, over its separate read-only mount, actually
-reach it". That is the hop `scripts/smoke-test.sh` proved only once, at deploy, before this. It is still a
-bounded, cached probe of the worker's listener alone: it says nothing about `egress-proxy` or Yahoo,
-and a transition can lag its five-second cache. `docs/operating.md`'s "Verify it actually worked" has
-the uncached, one-shot version of the same check, worth running by hand right after any change to the
-host's engine or container runtime.
+reach it". `scripts/smoke-test.sh` proved that hop only once, at deploy, before this. `app`'s check
+is still a bounded, cached probe of the worker's listener alone: it says nothing about
+`egress-proxy` or Yahoo, and a transition can lag its five-second cache. `docs/operating.md`'s
+"Verify it actually worked" has the uncached, one-shot version of the same check, worth running by
+hand right after any change to the host's engine or container runtime.
 
 ### 7.5 The provider seam
 

@@ -9,7 +9,7 @@ Its one control is the whole of what you need, and the next section says what to
 ![A locked browser: the card this guide means by "Locked"](images/unlock.png)
 
 Managing a passkey, by contrast, lives in Settings → Passkeys, reachable only once a browser is
-already unlocked. That is where you enrol one, see what the household holds, and remove one.
+already unlocked. That screen is where you enrol one, see what the household holds, and remove one.
 
 ## Being locked
 
@@ -56,7 +56,7 @@ check-in-with-a-passkey step before it even reaches that second press (see below
 ### Doing it
 
 While the household still holds none, every browser can reach everything, so do this from whichever
-one you already have open. It is the one that will stay unlocked afterwards.
+one you already have open, the one that will stay unlocked afterwards.
 
 1. Open **Settings → Passkeys**.
 2. Under **Add a passkey**, fill in **Label**, up to 60 characters. You type it yourself, and
@@ -66,7 +66,7 @@ one you already have open. It is the one that will stay unlocked afterwards.
 3. Tick the box beside the bold warning. It only appears while the household holds none, and no
    later passkey asks for it.
 4. Press **Continue**. It stays greyed out until both the label and the tick are done.
-5. Press **Create the passkey named "…"**. This is the press that makes it. Whatever holds your
+5. Press **Create the passkey named "…"**. This press is what makes it. Whatever holds your
    passkeys, the device's own or a password manager, takes over here and asks you to confirm in
    whatever way it normally does. That prompt is theirs, not this app's, so it looks like the rest
    of your device rather than like these screens.
@@ -134,7 +134,7 @@ can promise.
 That is the thing worth carrying with you: **this lock is only ever as strong as whatever already
 unlocks that passkey provider on that device.** A phone sitting unlocked in someone else's hands,
 with its own vault already open, answers **Unlock** the same way it would for you. Narrowing that
-risk is what this feature is for. It is not a promise that it closes it.
+risk is what this feature is for, not a promise that it closes it.
 
 If this particular device does not hold a passkey the household has enrolled, it may still be able to
 ask a different one for help. Your browser may offer a way to reach another device, usually by
@@ -183,22 +183,22 @@ Google's sign-in again about weekly, and if that falls due while this app is out
 own request is redirected into the sign-in instead of reaching the app, so it can come back
 unlocked, until its own clock runs out.
 
-None of those needs you to do anything, and none is a fault if it catches you off guard the first few
-times. It is the lock doing its job while you were not looking, not a random failure. **Lock now** is
-the one you control directly, and it does not wait on either clock. It is the padlock, at the foot
-of the side rail on a wide screen and in the bar across the top on a phone, where it may show as the
-padlock alone with no words beside it. It is a request to the app like the others, so on a slow
-connection whatever was on the screen can stay up a moment longer before it locks. Handing your
-phone to someone, even for a minute, is exactly when to press it first.
+None of those needs you to do anything, and none is a fault if it catches you off guard the first
+few times. It is the lock doing its job while you were not looking, not a random failure. **Lock
+now** is the one you control directly, and it does not wait on either clock. It is the padlock, at
+the foot of the side rail on a wide screen and in the bar across the top on a phone, where it may
+show as the padlock alone with no words beside it. It is a request to the app like the others, so on
+a slow connection whatever was on the screen can stay up a moment longer before it locks. Handing
+your phone to someone, even for a minute, is exactly when to press it first.
 
 ## Removing a passkey
 
 Removing one is not like anything else in this app. It deletes that passkey outright, and there is
 no undo. Because of that, a removal asks for its own fresh passkey check first, and being unlocked
-already is not enough on its own. That is deliberate. A phone that is unlocked but not, right now,
-in your own hands should not also be able to get rid of everyone else's way in.
+already is not enough on its own. That extra check is deliberate. A phone that is unlocked but not,
+right now, in your own hands should not also be able to get rid of everyone else's way in.
 
-There is a cost to that, though. If the household holds only one passkey and it becomes
+That safeguard has a cost, though. If the household holds only one passkey and it becomes
 unreachable, whether lost, broken or simply not at hand, nobody can remove it, because there is
 nothing else left to check in with. **A household on exactly one passkey should enrol a second soon
 after the first**, from any browser that is already unlocked, so that losing one still leaves a way
