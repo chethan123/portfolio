@@ -4,6 +4,7 @@
 // What "closed" means for a figure is the views' rule (SQL, §8.2), not this module's.
 import { z } from "zod";
 
+import { withAccountWrite } from "./account-write.server.ts";
 import {
   ACCOUNT_KINDS,
   acceptsSetBalance,
@@ -169,8 +170,8 @@ export async function updateAccount(
 
   // Checked against the new kind and the rows, never existing.kind — otherwise a two-hop edit
   // (liability -> brokerage -> bank) reaches what one hop couldn't. Securities kinds unaffected.
-  // Read-then-write, no lock/transaction: a statement racing into the gap leaves a brief
-  // mislabel, not a loss — setBalance repeats this guard inside its own write.
+  // Read-then-write is not serialized with position writers; a stale kind decision can survive
+  // their account lock. Tracked in https://github.com/chethan123/portfolio/issues/311.
   if (input.kind !== existing.kind && acceptsSetBalance(input.kind)) {
     const { cashIsNegative, others } = await currentStatement(existing.id, db);
 
@@ -240,23 +241,25 @@ export async function closeAccount(
   raw: CloseAccountInput,
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
-  const existing = await getAccount(id, db);
-  if (existing.isClosed) return existing;
+  return withAccountWrite(id, db, async (trx) => {
+    const existing = await getAccount(id, trx);
+    if (existing.isClosed) return existing;
 
-  if (raw.confirmClose !== "true") {
-    throw ValidationError.form(
-      `${existing.name} stays open — closing is one-way in this version, ` +
-        "so it asks for the acknowledgement to be ticked first.",
-    );
-  }
+    if (raw.confirmClose !== "true") {
+      throw ValidationError.form(
+        `${existing.name} stays open — closing is one-way in this version, ` +
+          "so it asks for the acknowledgement to be ticked first.",
+      );
+    }
 
-  await db
-    .updateTable("account")
-    .set({ closed_at: new Date() })
-    .where("id", "=", existing.id)
-    .execute();
+    await trx
+      .updateTable("account")
+      .set({ closed_at: new Date() })
+      .where("id", "=", existing.id)
+      .execute();
 
-  return getAccount(existing.id, db);
+    return getAccount(existing.id, trx);
+  });
 }
 
 // A nonexistent owner id is a form message, not a foreign-key violation.

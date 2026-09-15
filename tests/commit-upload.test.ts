@@ -1077,7 +1077,6 @@ describe("commitUpload", () => {
         db,
       );
 
-      // latest_position_set's created_at-then-id tie-break.
       expect(written.setId).not.toBe(first.id);
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
       const holdings = await accountHoldings(account.id, db);

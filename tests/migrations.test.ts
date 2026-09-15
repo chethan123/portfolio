@@ -427,6 +427,19 @@ describe("the schema's planner costs", () => {
   });
 });
 
+describe("position-set ordering", () => {
+  it("stamps creation at the insert statement, after an account writer has waited its turn", async () => {
+    const result = await sql<{ default_expression: string }>`
+      select pg_get_expr(d.adbin, d.adrelid) as default_expression
+      from pg_attrdef d
+      join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+      where d.adrelid = 'position_set'::regclass and a.attname = 'created_at'
+    `.execute(db);
+
+    expect(result.rows).toEqual([{ default_expression: "statement_timestamp()" }]);
+  });
+});
+
 describe("instrument aliases", () => {
   it("matches the raw string case-sensitively, exactly as the brokerage wrote it", async () => {
     // case-sensitive: 'CASH' and 'Cash' may point at different instruments

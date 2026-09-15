@@ -10,6 +10,7 @@ import type { Pool, PoolClient } from "pg";
 import type { Database } from "~/lib/db.server";
 import { joinTransports } from "~/lib/lock";
 import type { BackfillOutcome } from "~/lib/prices.server";
+import type { StatementMapping } from "~/lib/statement";
 import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 
 export type SeededPerson = { id: string; name: string };
@@ -77,6 +78,8 @@ export type Fixtures = {
     account: SeededAccount;
     filename?: string;
     bytes?: Uint8Array;
+    mapping?: StatementMapping;
+    hadFirstSightings?: boolean;
     /** What the 24h sweep reads — backdate a draft through this. */
     createdAt?: Date | string;
   }): Promise<SeededUploadDraft>;
@@ -185,6 +188,44 @@ export async function bootstrapPasskeyExists(
 /** Removes every passkey the race planted. Run at both ends — a run killed right after the unblocking commit would strand rows for the next run otherwise. */
 export async function clearRacingPasskeys(handle: RawHandle): Promise<void> {
   await handle.query("delete from passkey where credential_id like $1", ["race-%"]);
+}
+
+export const ACCOUNT_WRITE_RACE_PREFIX = "account-write-race-";
+
+/** Committed rows need both post-test cleanup and a pre-test sweep after an interrupted run. */
+export async function clearAccountWriteRaces(db: Kysely<Database>): Promise<void> {
+  const accountIds = db
+    .selectFrom("account")
+    .select("id")
+    .where("name", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`);
+  const positionSetIds = db
+    .selectFrom("position_set")
+    .select("id")
+    .where("account_id", "in", accountIds);
+
+  await db.deleteFrom("upload_draft").where("account_id", "in", accountIds).execute();
+  await db
+    .deleteFrom("instrument_alias")
+    .where("raw_string", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`)
+    .execute();
+  await db.deleteFrom("holding").where("position_set_id", "in", positionSetIds).execute();
+  await db.deleteFrom("position_set").where("account_id", "in", accountIds).execute();
+  await db
+    .deleteFrom("account")
+    .where("name", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`)
+    .execute();
+  await db
+    .deleteFrom("instrument")
+    .where("name", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`)
+    .execute();
+  await db
+    .deleteFrom("classification")
+    .where("name", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`)
+    .execute();
+  await db
+    .deleteFrom("person")
+    .where("name", "like", `${ACCOUNT_WRITE_RACE_PREFIX}%`)
+    .execute();
 }
 
 export function makeFixtures(db: Kysely<Database>): Fixtures {
@@ -309,6 +350,8 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     account,
     filename = `statement-${next()}.csv`,
     bytes = new TextEncoder().encode("Symbol,Quantity\n"),
+    mapping,
+    hadFirstSightings,
     createdAt,
   }) => {
     const row = await db
@@ -317,6 +360,10 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
         account_id: account.id,
         filename,
         raw_file: Buffer.from(bytes),
+        ...(mapping === undefined ? {} : { mapping: JSON.stringify(mapping) }),
+        ...(hadFirstSightings === undefined
+          ? {}
+          : { had_first_sightings: hadFirstSightings }),
         ...(createdAt === undefined ? {} : { created_at: createdAt }),
       })
       .returning("id")
