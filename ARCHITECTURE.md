@@ -1732,6 +1732,7 @@ allowlist does.
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves. Google's registered redirect URI is that origin plus `/oauth2/callback` |
 | Upload bounds | Guarded twice. The whole body is counted as it streams: a declared `Content-Length` over the cap is refused before any read, and a chunked body is cut off at the cap. `File.size` is checked after |
+| Request body size | Capped at `caddy`, counted as read so a chunked body is capped too: 16 MiB on `/upload`, `/upload/` and `/upload.data`, 1 MiB on every other path. A browser declares an upload's size, so the app refuses an oversized file first, with its own sentence. Caddy's bare 413 reaches a person only if `MAX_UPLOAD_MB` is raised to 16 or more without raising the cap. Checked by `scripts/caddy-body-cap-test.sh` |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
 | Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field, or its backslash spelling, lands on `/`. Both resource routes (`masking`, `refresh`) use it |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status, and nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
@@ -1950,8 +1951,9 @@ no SQLite. (For the size of the suite, count it: `find tests -name '*.test.ts*'`
 in Postgres-specific SQL and in `numeric` handling, and both disappear under a substitute: a fake
 database would pass while the real one silently rounded money or resolved the wrong position set.
 
-Alongside the `vitest` suite there is exactly one other test: `scripts/smoke-test.sh`, run as its own
-CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and §8.1.
+Alongside the `vitest` suite there is one other test job: `scripts/smoke-test.sh`, which is the only
+coverage of the deployment claims in §3.1, §3.2 and §8.1. It also runs `scripts/caddy-body-cap-test.sh`,
+which checks the `Caddyfile`'s body caps against a stub upstream.
 
 ### 9.1 The three groups
 
@@ -2321,6 +2323,7 @@ recipe a human followed by hand, a defence that works until the day nobody has t
 | `render-icons.ts` | The committed PWA icons, rasterised from `public/icon.svg`, and the manifest's `data:`-URI `icons` array (§7.7). Committed rather than generated at build time so the artifacts change only when someone means them to |
 | `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference, so it cannot remove anything still reachable. Not a general garbage collector |
 | `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree, since otherwise every run would silently certify the last release |
+| `caddy-body-cap-test.sh` | The `Caddyfile`'s request body caps, run against a stub `app` and `gate` that read every byte, because the live stack redirects an unauthenticated POST before reading its body. Run by `smoke-test.sh` |
 
 ### `tests/support/`
 
