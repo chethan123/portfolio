@@ -422,7 +422,7 @@ grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
   compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -784,7 +784,7 @@ generated always as identity` precisely so that "tie-break by id descending" mea
 wins". A random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
 exactly, so this is an index scan stopping at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts`) needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -957,8 +957,15 @@ the commit only by having written rows into `instrument_alias`. That is what mak
 button and a bookmarked half-finished upload all behave, and it is why the mapping records its own
 delimiter rather than letting a second sniff reach a different verdict.
 
+Review also emits a server-generated SHA-256 revision for the statement on screen. It covers the
+draft identity and account, filename and raw bytes, parsed mapping, byte-exact alias resolutions,
+the rows that would be stored, the current quantities and bases used by the diff and removal guard,
+and the reviewed statement date. The form carries that revision back; it is evidence of what was
+reviewed, never a client-supplied replacement for any of those inputs. For a file with no date,
+changing the date submits a fresh review first, then a second press records that dated statement.
+
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts`) folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -1095,19 +1102,27 @@ There is deliberately **no skip**. A skipped row is a holding silently missing f
 
 #### Commit: the flow's one write
 
-`commitUpload` is the deepest function in the codebase, three parameters over an entry check, seven
-guards and a transaction. The order is the design:
+`commitUpload` is the deepest function in the codebase, with an entry check, review revision checks,
+the existing guards and one transaction. The order is the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> A1{"draft still there?"}
+    A["commitUpload(draftId, input)"] --> T["BEGIN"]
+    T --> A1{"draft still there?"}
     A1 -->|no| R0["404 — swept, or already committed"]
-    A1 -->|yes| B{"account closed?"}
+    A1 -->|yes| L["lock account"]
+    L --> A2["re-read and lock draft"]
+    A2 -->|gone| R0
+    A2 -->|present| B{"account closed?"}
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
     C -->|yes| R2["refuse: stale or forged form"]
-    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, classify"]
-    D --> E{"file names two<br/>different accounts?"}
+    C -->|no| V["compare draft part of<br/>server review revision"]
+    V -->|different / missing| RS["refuse: changed in another tab;<br/>review it again"]
+    V -->|same| D["assembleDiff — lock aliases, re-parse,<br/>re-resolve, fold, classify"]
+    D --> V2["compare aliases, stored rows,<br/>current baseline and review date"]
+    V2 -->|different / missing| RS
+    V2 -->|same| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
@@ -1120,9 +1135,7 @@ flowchart TD
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
     H -->|no| I{"majority removed and<br/>not confirmed?"}
     I -->|yes| R7["refuse, stating the ratio"]
-    I -->|no| T["BEGIN"]
-
-    T --> T1["DELETE the draft FIRST"]
+    I -->|no| T1["DELETE the locked draft"]
     T1 --> T2{"0 rows deleted?"}
     T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT"]
     T2 -->|no| T3["INSERT position_set"]
@@ -1132,33 +1145,37 @@ flowchart TD
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8,RS refuse
 ```
 
 Three of those deserve emphasis:
 
 - **The as-of guard is easy to miss** and sits in the middle of the run. When the file dates itself,
   that date is used; when it does not, the date the reader typed is validated here, not in
-  `parseStatement`, which never saw it.
+  `parseStatement`, which never saw it. The revision includes that exact date, so editing it asks
+  for a fresh review before commit.
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking both multiplications before storing turns a site-wide outage into one sentence
   about one row.
-- **Delete-first as the transaction's guard.** The draft's deletion leads: a concurrent commit that
-  got here first has already taken the row, so `numDeletedRows === 0` aborts everything, and nothing
-  before that point wrote anything. The entry check at the top is the cheap version of the same
-  question; this one is the version that is safe under a race.
+- **Locks and delete as the transaction's guard.** The account lock comes first, then the draft row,
+  then shared locks on the resolved aliases. A Columns save that already won is seen by the revision
+  comparison; one that arrives later waits until commit consumes the draft. The deletion still
+  checks `numDeletedRows === 0`, so a concurrent commit cannot put a second set behind the first.
+  Nothing before it writes history, and every refusal rolls the transaction back.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:776-782`, guarded by
+file carries one (`commitUpload` in `uploads.server.ts`, guarded by
 `where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
 itself on the first upload, and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
-majority removal demands an explicit tick.
+majority removal demands an explicit tick. The same review revision covers the current baseline and
+the rows being removed, and any refusal or fresh review clears the tick rather than carrying its
+acknowledgement onto changed data.
 
 ### 6.2 Pricing: quotes into three tiers
 
@@ -1526,7 +1543,7 @@ set and no holding, and "nothing landed" is what becomes the refusal.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
-change behind it, because `createDraft` (`uploads.server.ts:120`) reads only whether the account is
+change behind it, because `createDraft` (`uploads.server.ts`) reads only whether the account is
 closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 

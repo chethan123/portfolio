@@ -4,6 +4,8 @@
 // Size capped twice: the body as it streams in, File.size after.
 import { z } from "zod";
 
+import { createHash } from "node:crypto";
+
 import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
@@ -89,9 +91,9 @@ export async function readUploadForm(request: Request): Promise<FormData> {
 }
 
 const uploadInput = z.object({
-  accountId: z
-    .string({ message: "Choose the account this statement describes." })
-    .regex(/^\d+$/, { message: "Choose the account this statement describes." }),
+  accountId: z.string({ message: "Choose the account this statement describes." }).regex(/^\d+$/, {
+    message: "Choose the account this statement describes.",
+  }),
 
   // An empty file input submits a File with an empty name, so presence is the name.
   file: z.custom<File>((value) => value instanceof File && value.name !== "", {
@@ -171,11 +173,12 @@ type DraftRecord = UploadDraft & {
 async function findDraft(
   draftId: string,
   db: Kysely<Database>,
+  lockDraft = false,
 ): Promise<DraftRecord | undefined> {
   // "abc" would fail as a malformed bigint — a 500 wearing a bookmark.
   if (!/^\d+$/.test(draftId)) return undefined;
 
-  const row = await db
+  let query = db
     .selectFrom("upload_draft")
     .innerJoin("account", "account.id", "upload_draft.account_id")
     .innerJoin("person", "person.id", "account.owner_id")
@@ -192,8 +195,12 @@ async function findDraft(
       "upload_draft.had_first_sightings",
       "upload_draft.created_at",
     ])
-    .where("upload_draft.id", "=", draftId)
-    .executeTakeFirst();
+    .where("upload_draft.id", "=", draftId);
+
+  // Makes a concurrent Columns save finish before this read or wait until the draft is consumed.
+  if (lockDraft) query = query.forUpdate("upload_draft");
+
+  const row = await query.executeTakeFirst();
 
   if (row === undefined) return undefined;
 
@@ -372,7 +379,8 @@ export type UploadDiff = {
   majorityRemoved: boolean;
   removesEverything: boolean;
   skipped: Array<{ row: number; instrument: string }>;
-  asOf: { source: "file"; date: IsoDate } | { source: "asked" };
+  asOf: { source: "file" | "asked"; date: IsoDate };
+  reviewRevision: string;
   // True only when columns recorded no first sightings; false for a pre-bit draft too.
   instrumentsSkipped: boolean;
 };
@@ -388,10 +396,15 @@ type FileRow = {
   lineCount: number;
 };
 
+type DiffCore = Omit<UploadDiff, "asOf" | "reviewRevision"> & {
+  asOf: { source: "file"; date: IsoDate } | { source: "asked" };
+};
+
 type AssembledDiff = {
-  diff: UploadDiff;
+  diff: DiffCore;
   rows: FileRow[];
   fileAccountNumber: string | null;
+  stateRevision: string;
 };
 
 // Kysely refuses .transaction() on a transaction, and the test seam is one.
@@ -430,20 +443,19 @@ function sameQuantity(before: string, after: string): boolean {
 async function assembleDiff(
   draft: UploadDraft,
   db: Kysely<Database>,
+  lockAliases = false,
 ): Promise<AssembledDiff> {
   const result = await parseDraft(draft, db);
   if (result.step !== null) throw new DraftNotReadyError(result.step);
   const { parsed } = result;
 
   const strings = parsed.positions.map((position) => position.instrument);
-  const aliasRows =
-    strings.length === 0
-      ? []
-      : await db
-          .selectFrom("instrument_alias")
-          .select(["raw_string", "instrument_id"])
-          .where("raw_string", "in", strings)
-          .execute();
+  let aliasQuery = db
+    .selectFrom("instrument_alias")
+    .select(["raw_string", "instrument_id"])
+    .where("raw_string", "in", strings);
+  if (lockAliases) aliasQuery = aliasQuery.forShare();
+  const aliasRows = strings.length === 0 ? [] : await aliasQuery.execute();
   const aliases = new Map(aliasRows.map((row) => [row.raw_string, row.instrument_id]));
 
   const groups = new Map<string, ParsedPosition[]>();
@@ -603,47 +615,139 @@ async function assembleDiff(
   // Via lastRecorded, not an empty holdings read: an account sold to nothing still has a statement.
   const firstStatement = (await lastRecorded(draft.accountId, db)) === null;
 
-  return {
-    diff: {
+  const diff = {
+    draftId: draft.id,
+    accountId: draft.accountId,
+    accountName: draft.accountName,
+    ownerName: draft.ownerName,
+    accountNumberTail: draft.accountNumberTail,
+    filename: draft.filename,
+    added,
+    updated,
+    removed,
+    unchangedCount,
+    currentCount: current.length,
+    firstStatement,
+    majorityRemoved: removed.length * 2 > current.length,
+    removesEverything: current.length > 0 && removed.length === current.length,
+    skipped: parsed.skipped.map(({ row, instrument }) => ({ row, instrument })),
+    asOf:
+      parsed.asOfDate !== null ? { source: "file", date: parsed.asOfDate } : { source: "asked" },
+    instrumentsSkipped: draft.hadFirstSightings === false,
+  } satisfies DiffCore;
+
+  const state = createHash("sha256");
+  state.update("portfolio-upload-review-v1\0");
+  state.update(Buffer.from(draft.bytes));
+  state.update("\0");
+  state.update(
+    JSON.stringify({
       draftId: draft.id,
       accountId: draft.accountId,
-      accountName: draft.accountName,
-      ownerName: draft.ownerName,
-      accountNumberTail: draft.accountNumberTail,
       filename: draft.filename,
-      added,
-      updated,
-      removed,
-      unchangedCount,
-      currentCount: current.length,
-      firstStatement,
-      majorityRemoved: removed.length * 2 > current.length,
-      removesEverything: current.length > 0 && removed.length === current.length,
-      skipped: parsed.skipped.map(({ row, instrument }) => ({ row, instrument })),
-      asOf:
-        parsed.asOfDate !== null
-          ? { source: "file", date: parsed.asOfDate }
-          : { source: "asked" },
-      instrumentsSkipped: draft.hadFirstSightings === false,
-    },
+      mapping: result.mapping,
+      aliases: aliasRows
+        .map((row) => ({
+          raw: row.raw_string,
+          instrumentId: row.instrument_id,
+        }))
+        .sort((a, b) => (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0)),
+      rows: rows.map((row) => ({
+        instrumentId: row.instrumentId,
+        quantity: row.quantity,
+        costBasisPerShare: row.costBasisPerShare,
+        accountNumber: row.accountNumber,
+      })),
+      current: current.map((holding) => ({
+        instrumentId: holding.instrumentId,
+        quantity: holding.quantity,
+        costBasisPerShare: holding.costBasisPerShare,
+      })),
+    }),
+  );
+
+  return {
+    diff,
     rows,
     fileAccountNumber: rows.find((row) => row.accountNumber !== null)?.accountNumber ?? null,
+    stateRevision: state.digest("base64url"),
   };
+}
+
+type DiffOptions = {
+  asOf?: string;
+  db?: Kysely<Database>;
+};
+
+function reviewDate(diff: DiffCore, rawAsOf: string | undefined): IsoDate {
+  if (diff.asOf.source === "file") return diff.asOf.date;
+
+  return parseInput(z.object({ asOf: recordedDate("The statement date") }), {
+    asOf: rawAsOf,
+  }).asOf;
+}
+
+function draftRevisionFor(draft: UploadDraft): string {
+  const digest = createHash("sha256");
+  digest.update("portfolio-upload-draft-v1\0");
+  digest.update(Buffer.from(draft.bytes));
+  digest.update("\0");
+  digest.update(
+    JSON.stringify({
+      draftId: draft.id,
+      accountId: draft.accountId,
+      filename: draft.filename,
+      mapping: draft.mapping,
+    }),
+  );
+  return digest.digest("base64url");
+}
+
+function revisionFor(draftRevision: string, stateRevision: string, asOf: IsoDate): string {
+  const digest = createHash("sha256")
+    .update(`portfolio-upload-review-date-v1\0${draftRevision}\0${stateRevision}\0${asOf}`)
+    .digest("base64url");
+  // The state digest stays server-side. Exposing it would let a form re-bind the token to another
+  // date because this is an integrity digest, not a secret-key signature.
+  return `v1.${draftRevision}.${digest}`;
+}
+
+function submittedRevision(revision: string | undefined): { draft: string } | null {
+  const match = /^v1\.([A-Za-z0-9_-]{43})\.[A-Za-z0-9_-]{43}$/.exec(revision ?? "");
+  return match === null ? null : { draft: match[1] ?? "" };
 }
 
 export async function diffForDraft(
   draftId: string,
-  db: Kysely<Database> = getDb(),
+  options: DiffOptions = {},
 ): Promise<UploadDiff> {
+  const db = options.db ?? getDb();
   const draft = await requireDraft(draftId, db);
-  return (await assembleDiff(draft, db)).diff;
+  const assembled = await assembleDiff(draft, db);
+  const asOf = reviewDate(assembled.diff, options.asOf ?? new Date().toISOString().slice(0, 10));
+  return {
+    ...assembled.diff,
+    asOf: { source: assembled.diff.asOf.source, date: asOf },
+    reviewRevision: revisionFor(draftRevisionFor(draft), assembled.stateRevision, asOf),
+  };
 }
 
 export type CommitInput = {
+  reviewRevision: string;
   asOf?: string;
   confirmRemovals?: string;
   accountId?: string;
 };
+
+export const STALE_REVIEW_MESSAGE = "This upload changed in another tab; review it again.";
+
+export class StaleReviewError extends Error {
+  override readonly name = "StaleReviewError";
+
+  constructor() {
+    super(STALE_REVIEW_MESSAGE);
+  }
+}
 
 export type CommittedUpload = {
   setId: string;
@@ -651,7 +755,12 @@ export type CommittedUpload = {
   accountName: string;
   filename: string;
   asOf: IsoDate;
-  counts: { added: number; updated: number; unchanged: number; removed: number };
+  counts: {
+    added: number;
+    updated: number;
+    unchanged: number;
+    removed: number;
+  };
 };
 
 // The flow's one write: immutable position_set, one holding per parsed row, draft deleted — one
@@ -663,98 +772,119 @@ export async function commitUpload(
   raw: CommitInput,
   db: Kysely<Database> = getDb(),
 ): Promise<CommittedUpload> {
-  const draft = await findDraft(draftId, db);
-  if (draft === undefined) throw new NotFoundError(EXPIRED);
-
-  // First: a closed account isn't fixable by a ticked box or typed date.
-  if (draft.accountClosedAt !== null) {
-    throw ValidationError.form(
-      `${draft.accountName} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this statement is still real.",
-    );
-  }
-
-  // Hidden field feeds the expired page's link only — a different account is stale/forged.
-  if (raw.accountId !== undefined && raw.accountId !== draft.accountId) {
-    throw ValidationError.form(
-      "This form was posted for a different account than the one this upload is recording " +
-        "a statement against. Reload the review and check what it is about to record.",
-    );
-  }
-
-  const { diff, rows, fileAccountNumber } = await assembleDiff(draft, db);
-
-  // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
-  const numbers = rows.flatMap((row) =>
-    row.accountNumber !== null ? [row.accountNumber] : [],
-  );
-  const firstNumber = numbers[0];
-  const differingNumber = numbers.find((number) => number !== firstNumber);
-  if (firstNumber !== undefined && differingNumber !== undefined) {
-    throw ValidationError.form(
-      `This file says it describes account "${firstNumber}" on one row and ` +
-        `"${differingNumber}" on another, and a statement describes one account. ` +
-        "Check which account this export belongs to — nothing was recorded.",
-    );
-  }
-
-  // Account-number guard: never a selector.
-  if (draft.accountNumber !== null) {
-    const disagreeing = rows.find(
-      (row) => row.accountNumber !== null && row.accountNumber !== draft.accountNumber,
-    );
-    if (disagreeing !== undefined) {
-      throw ValidationError.form(
-        `This file says it describes account "${disagreeing.accountNumber}", and ` +
-          `${draft.accountName} — owned by ${draft.ownerName} — is recorded as account ` +
-          `"${draft.accountNumber}". A statement lands in the account it describes — check ` +
-          "which account this export belongs to.",
-      );
-    }
-  }
-
-  const asOf: IsoDate =
-    diff.asOf.source === "file"
-      ? diff.asOf.date
-      : parseInput(z.object({ asOf: recordedDate("The statement date") }), { asOf: raw.asOf })
-          .asOf;
-
-  // All three multiplications the view performs; unchecked, the view raises on every request after.
-  for (const row of rows) {
-    if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
-      throw ValidationError.form(
-        `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check both columns against the " +
-          "sample rows — a cost basis is what one share cost, not what the whole position did.",
-      );
-    }
-    if (!fitsTheMoneyColumn(row.quantity, row.price)) {
-      throw ValidationError.form(
-        `${row.name}'s quantity valued at its current price is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check the quantity column against " +
-          "the sample rows.",
-      );
-    }
-    if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
-      throw ValidationError.form(
-        `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
-          "dividend than this application can hold, so nothing was recorded. Check the " +
-          "quantity column against the sample rows.",
-      );
-    }
-  }
-
-  if (diff.majorityRemoved && raw.confirmRemovals !== "true") {
-    const ratio = diff.removesEverything
-      ? `This file removes every position this account holds — all ${diff.currentCount}.`
-      : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ` +
-        "this account holds.";
-    throw ValidationError.form(
-      `${ratio} Nothing was recorded — confirm the removals to record this statement.`,
-    );
-  }
-
   return inTransaction(db, async (trx) => {
+    const found = await findDraft(draftId, trx);
+    if (found === undefined) throw new NotFoundError(EXPIRED);
+
+    // Account first: every upload into one account reaches the same lock order before it reads
+    // the current statement. Then the draft lock closes the mapping-change race.
+    await trx
+      .selectFrom("account")
+      .select("id")
+      .where("id", "=", found.accountId)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    const draft = await findDraft(draftId, trx, true);
+    if (draft === undefined) throw new NotFoundError(EXPIRED);
+
+    // First: a closed account isn't fixable by a ticked box or typed date.
+    if (draft.accountClosedAt !== null) {
+      throw ValidationError.form(
+        `${draft.accountName} is closed, and a closed account's history does not change. ` +
+          "Reopen it from Settings if this statement is still real.",
+      );
+    }
+
+    // Hidden field feeds the expired page's link only — a different account is stale/forged.
+    if (raw.accountId !== undefined && raw.accountId !== draft.accountId) {
+      throw ValidationError.form(
+        "This form was posted for a different account than the one this upload is recording " +
+          "a statement against. Reload the review and check what it is about to record.",
+      );
+    }
+
+    const submitted = submittedRevision(raw.reviewRevision);
+    if (submitted === null || submitted.draft !== draftRevisionFor(draft)) {
+      throw new StaleReviewError();
+    }
+
+    let assembled: AssembledDiff;
+    try {
+      assembled = await assembleDiff(draft, trx, true);
+    } catch (error) {
+      // A server-issued review can only become unready when its mapping or aliases changed.
+      if (error instanceof DraftNotReadyError) throw new StaleReviewError();
+      throw error;
+    }
+    const { diff, rows, fileAccountNumber, stateRevision } = assembled;
+
+    const asOf = reviewDate(diff, raw.asOf);
+    if (raw.reviewRevision !== revisionFor(draftRevisionFor(draft), stateRevision, asOf)) {
+      throw new StaleReviewError();
+    }
+
+    // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
+    const numbers = rows.flatMap((row) => (row.accountNumber !== null ? [row.accountNumber] : []));
+    const firstNumber = numbers[0];
+    const differingNumber = numbers.find((number) => number !== firstNumber);
+    if (firstNumber !== undefined && differingNumber !== undefined) {
+      throw ValidationError.form(
+        `This file says it describes account "${firstNumber}" on one row and ` +
+          `"${differingNumber}" on another, and a statement describes one account. ` +
+          "Check which account this export belongs to — nothing was recorded.",
+      );
+    }
+
+    // Account-number guard: never a selector.
+    if (draft.accountNumber !== null) {
+      const disagreeing = rows.find(
+        (row) => row.accountNumber !== null && row.accountNumber !== draft.accountNumber,
+      );
+      if (disagreeing !== undefined) {
+        throw ValidationError.form(
+          `This file says it describes account "${disagreeing.accountNumber}", and ` +
+            `${draft.accountName} — owned by ${draft.ownerName} — is recorded as account ` +
+            `"${draft.accountNumber}". A statement lands in the account it describes — check ` +
+            "which account this export belongs to.",
+        );
+      }
+    }
+
+    // All three multiplications the view performs; unchecked, the view raises on every request after.
+    for (const row of rows) {
+      if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
+        throw ValidationError.form(
+          `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
+            "application can hold, so nothing was recorded. Check both columns against the " +
+            "sample rows — a cost basis is what one share cost, not what the whole position did.",
+        );
+      }
+      if (!fitsTheMoneyColumn(row.quantity, row.price)) {
+        throw ValidationError.form(
+          `${row.name}'s quantity valued at its current price is a larger figure than this ` +
+            "application can hold, so nothing was recorded. Check the quantity column against " +
+            "the sample rows.",
+        );
+      }
+      if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
+        throw ValidationError.form(
+          `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
+            "dividend than this application can hold, so nothing was recorded. Check the " +
+            "quantity column against the sample rows.",
+        );
+      }
+    }
+
+    if (diff.majorityRemoved && raw.confirmRemovals !== "true") {
+      const ratio = diff.removesEverything
+        ? `This file removes every position this account holds — all ${diff.currentCount}.`
+        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ` +
+          "this account holds.";
+      throw ValidationError.form(
+        `${ratio} Nothing was recorded — confirm the removals to record this statement.`,
+      );
+    }
+
     // Deletion leads and guards the transaction: no second set behind a concurrent commit's back.
     const taken = await trx
       .deleteFrom("upload_draft")
@@ -820,7 +950,12 @@ export type UploadReceipt = {
   asOf: IsoDate;
   filename: string | null;
   firstStatement: boolean;
-  counts: { added: number; updated: number; unchanged: number; removed: number };
+  counts: {
+    added: number;
+    updated: number;
+    unchanged: number;
+    removed: number;
+  };
   holdingCount: number;
 };
 
@@ -866,11 +1001,7 @@ export async function uploadReceipt(
   const holdingRows = await db
     .selectFrom("holding")
     .select(["position_set_id", "instrument_id", "quantity", "cost_basis_per_share"])
-    .where(
-      "position_set_id",
-      "in",
-      predecessorId === null ? [set.id] : [set.id, predecessorId],
-    )
+    .where("position_set_id", "in", predecessorId === null ? [set.id] : [set.id, predecessorId])
     .execute();
 
   const before = new Map(

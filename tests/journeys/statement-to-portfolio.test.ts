@@ -11,10 +11,7 @@ process.env.DATABASE_URL ??=
 import { action as upload } from "../../app/routes/upload.tsx";
 import { action as saveColumns } from "../../app/routes/upload/columns.tsx";
 import { action as resolveInstruments } from "../../app/routes/upload/instruments.tsx";
-import {
-  action as commit,
-  loader as reviewScreen,
-} from "../../app/routes/upload/review.tsx";
+import { action as commit, loader as reviewScreen } from "../../app/routes/upload/review.tsx";
 import { loader as accountPage } from "../../app/routes/account.tsx";
 import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
 
@@ -91,8 +88,10 @@ function createAnswers(raws: readonly string[]): Record<string, string> {
 }
 
 /** The review screen's data, or a failure naming where it redirected instead — a redirect here means a prior step lied about the draft's state. */
-async function reviewPage(draftId: string) {
-  const outcome = await reviewScreen(args(get(`/upload/${draftId}/review`), { draftId }));
+async function reviewPage(draftId: string, asOf: string) {
+  const outcome = await reviewScreen(
+    args(get(`/upload/${draftId}/review?asOf=${asOf}`), { draftId }),
+  );
 
   if (outcome instanceof Response) {
     throw new Error(
@@ -122,9 +121,13 @@ describe("a first statement, from the drop screen to the account page", () => {
       const toColumns = await redirectTo(() =>
         upload(
           args(
-            postFile("/upload", { name: "January.csv", content: JANUARY }, {
+            postFile(
+              "/upload",
+              { name: "January.csv", content: JANUARY },
+              {
               accountId: account.id,
-            }),
+              },
+            ),
           ),
         ),
       );
@@ -139,15 +142,14 @@ describe("a first statement, from the drop screen to the account page", () => {
 
       const toReview = await redirectTo(() =>
         resolveInstruments(
-          args(
-            post(`/upload/${draftId}/instruments`, createAnswers(["VTI", "FZROX"])),
-            { draftId },
-          ),
+          args(post(`/upload/${draftId}/instruments`, createAnswers(["VTI", "FZROX"])), {
+            draftId,
+          }),
         ),
       );
       expect(toReview).toBe(`/upload/${draftId}/review`);
 
-      const review = await reviewPage(draftId);
+      const review = await reviewPage(draftId, "2026-01-31");
       expect(review.diff.added.map((row) => row.symbol).sort()).toEqual(["FZROX", "VTI"]);
       // No date column in this export, so the screen must ask for one.
       expect(review.diff.asOf.source).not.toBe("file");
@@ -160,6 +162,7 @@ describe("a first statement, from the drop screen to the account page", () => {
             post(`/upload/${draftId}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
+              reviewRevision: review.diff.reviewRevision,
             }),
             { draftId },
           ),
@@ -168,9 +171,7 @@ describe("a first statement, from the drop screen to the account page", () => {
       const receipt = receiptFrom(landing);
       expect(receipt.accountId).toBe(account.id);
 
-      const page = await accountPage(
-        args(get(landing), { accountId: receipt.accountId }),
-      );
+      const page = await accountPage(args(get(landing), { accountId: receipt.accountId }));
 
       // Quantities are the file's own, at the column's scale, as decimal strings.
       expect(page.receipt).toMatchObject({ holdingCount: 2 });
@@ -202,17 +203,23 @@ describe("the same brokerage's next statement", () => {
       const first = await redirectTo(() =>
         upload(
           args(
-            postFile("/upload", { name: "January.csv", content: JANUARY }, {
+            postFile(
+              "/upload",
+              { name: "January.csv", content: JANUARY },
+              {
               accountId: account.id,
-            }),
+              },
+            ),
           ),
         ),
       );
       const firstDraft = draftIdFrom(first);
       await redirectTo(() =>
-        saveColumns(args(post(`/upload/${firstDraft}/columns`, COLUMNS_FORM), {
+        saveColumns(
+          args(post(`/upload/${firstDraft}/columns`, COLUMNS_FORM), {
           draftId: firstDraft,
-        })),
+          }),
+        ),
       );
       await redirectTo(() =>
         resolveInstruments(
@@ -221,12 +228,14 @@ describe("the same brokerage's next statement", () => {
           }),
         ),
       );
+      const firstReview = await reviewPage(firstDraft, "2026-01-31");
       await redirectTo(() =>
         commit(
           args(
             post(`/upload/${firstDraft}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
+              reviewRevision: firstReview.diff.reviewRevision,
             }),
             { draftId: firstDraft },
           ),
@@ -236,9 +245,13 @@ describe("the same brokerage's next statement", () => {
       const toColumns = await redirectTo(() =>
         upload(
           args(
-            postFile("/upload", { name: "February.csv", content: FEBRUARY }, {
+            postFile(
+              "/upload",
+              { name: "February.csv", content: FEBRUARY },
+              {
               accountId: account.id,
-            }),
+              },
+            ),
           ),
         ),
       );
@@ -251,8 +264,11 @@ describe("the same brokerage's next statement", () => {
       expect(next).toBe(`/upload/${draftId}/review`);
 
       // instrumentsSkipped is the only surviving trace once aliases are indistinguishable from any other vocabulary (brief §7.5).
-      const review = await reviewPage(draftId);
-      expect(review.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
+      const review = await reviewPage(draftId, "2026-02-28");
+      expect(review.steps).toMatchObject({
+        current: 4,
+        instrumentsSkipped: true,
+      });
 
       expect(review.diff.added).toEqual([]);
       expect(review.diff.removed).toEqual([]);
@@ -264,6 +280,7 @@ describe("the same brokerage's next statement", () => {
             post(`/upload/${draftId}/review`, {
               accountId: account.id,
               asOf: "2026-02-28",
+              reviewRevision: review.diff.reviewRevision,
             }),
             { draftId },
           ),
@@ -274,9 +291,9 @@ describe("the same brokerage's next statement", () => {
         args(get(landing), { accountId: receiptFrom(landing).accountId }),
       );
 
-      expect(
-        page.holdings.find((holding) => holding.symbol === "VTI")?.quantity,
-      ).toBe("120.00000000");
+      expect(page.holdings.find((holding) => holding.symbol === "VTI")?.quantity).toBe(
+        "120.00000000",
+      );
       // Immutable spine: committing superseded January, never edited it.
       expect(await positionSetCount(ctx, account.id)).toBe(2);
     }),

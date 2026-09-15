@@ -16,7 +16,7 @@ import {
   sameRawStrings,
 } from "~/lib/instrument-resolution.server";
 import { socketProbe } from "~/lib/provider-socket.server";
-import { parseDraft, requireDraft } from "~/lib/uploads.server";
+import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
@@ -31,19 +31,21 @@ export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
+    const staleReview = new URL(request.url).searchParams.get("stale") === "true";
+    const stale = staleReview ? "?stale=true" : "";
 
     // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
-    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
     const screen = await resolutionScreen(result.parsed.positions);
 
     // A concurrent draft's submit resolving everything is the same skip as above.
-    if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
+    if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review${stale}`);
 
     return {
       steps: {
@@ -54,6 +56,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       screen,
       nameColumn: result.mapping.columns.name ?? null,
       newClassification: NEW_CLASSIFICATION,
+      staleReviewMessage: staleReview ? STALE_REVIEW_MESSAGE : null,
     };
   } catch (error) {
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
@@ -102,7 +105,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 }
 
 export default function Instruments({ loaderData, actionData }: Route.ComponentProps) {
-  const { screen, nameColumn, newClassification } = loaderData;
+  const { screen, nameColumn, newClassification, staleReviewMessage } = loaderData;
 
   const errors = actionData?.errors;
   // Typed wins over default on a refusal; `actionData` present means a refused submit.
@@ -131,6 +134,12 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
           Resolving writes the name down as vocabulary — the statement itself is still not
           recorded until the last step.
         </p>
+
+        {staleReviewMessage ? (
+          <p className="form-error" role="alert">
+            {staleReviewMessage}
+          </p>
+        ) : null}
 
         {actionData?.formError ? (
           <p className="form-error" role="alert">

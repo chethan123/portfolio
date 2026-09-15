@@ -8,9 +8,16 @@ import {
   earliestRecordableDate,
   formFields,
   latestRecordableDate,
+  recordedDate,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
-import { DraftNotReadyError, commitUpload, diffForDraft } from "~/lib/uploads.server";
+import {
+  DraftNotReadyError,
+  STALE_REVIEW_MESSAGE,
+  StaleReviewError,
+  commitUpload,
+  diffForDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
@@ -26,9 +33,21 @@ export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
   try {
-    const diff = await diffForDraft(params.draftId);
+    const url = new URL(request.url);
+    const today = new Date().toISOString().slice(0, 10);
+    const requestedAsOf = url.searchParams.get("asOf") ?? today;
+    const staleReview = url.searchParams.get("stale") === "true";
+    let asOfError: string | null = null;
+    let diff: Awaited<ReturnType<typeof diffForDraft>>;
+    try {
+      diff = await diffForDraft(params.draftId, { asOf: requestedAsOf });
+    } catch (error) {
+      if (!(error instanceof ValidationError)) throw error;
+      asOfError = error.fieldErrors.asOf ?? error.message;
+      diff = await diffForDraft(params.draftId, { asOf: today });
+    }
 
     return {
       steps: {
@@ -38,14 +57,17 @@ export async function loader({ params }: Route.LoaderArgs) {
         instrumentsSkipped: diff.instrumentsSkipped,
       } satisfies UploadStepsData,
       diff,
-      today: new Date().toISOString().slice(0, 10),
       earliestAsOf: earliestRecordableDate(),
       latestAsOf: latestRecordableDate(),
+      staleReview,
+      staleReviewMessage: staleReview ? STALE_REVIEW_MESSAGE : null,
+      asOfError,
     };
   } catch (error) {
     // An earlier step not genuinely passed redirects there, not an error.
     if (error instanceof DraftNotReadyError) {
-      return redirect(`/upload/${params.draftId}/${error.step}`);
+      const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
+      return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -56,7 +78,17 @@ export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
 
   try {
-    const written = await commitUpload(params.draftId, values);
+    if (values.intent === "review-date") {
+      await diffForDraft(params.draftId, { asOf: values.asOf });
+      return redirect(
+        `/upload/${params.draftId}/review?${new URLSearchParams({ asOf: values.asOf ?? "" })}`,
+      );
+    }
+
+    const written = await commitUpload(params.draftId, {
+      ...values,
+      reviewRevision: values.reviewRevision ?? "",
+    });
 
     // Here, not inside `commitUpload`: the statement is committed by now, so
     // new instruments are visible to a refresh, and a test transaction
@@ -70,10 +102,28 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     throw redirect(`/accounts/${written.accountId}?uploaded=${written.setId}`);
   } catch (error) {
+    if (error instanceof StaleReviewError) {
+      const query = new URLSearchParams({ stale: "true" });
+      if (
+        values.asOf !== undefined &&
+        recordedDate("The statement date").safeParse(values.asOf).success
+      ) {
+        query.set("asOf", values.asOf);
+      }
+      return redirect(`/upload/${params.draftId}/review?${query}`);
+    }
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      const safeValues = { ...values };
+      delete safeValues.confirmRemovals;
+      delete safeValues.reviewRevision;
+      return {
+        errors: fieldErrors,
+        formError: formError ?? null,
+        values: safeValues,
+        confirmationReset: globalThis.crypto.randomUUID(),
+      };
     }
     if (error instanceof DraftNotReadyError) {
       return redirect(`/upload/${params.draftId}/${error.step}`);
@@ -81,9 +131,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (error instanceof NotFoundError) {
       // Committed-draft re-POST — draft is gone, so the hidden field only feeds the expired page's link.
       const accountId =
-        values.accountId !== undefined && /^\d+$/.test(values.accountId)
-          ? values.accountId
-          : null;
+        values.accountId !== undefined && /^\d+$/.test(values.accountId) ? values.accountId : null;
       throw data({ accountId }, { status: 404 });
     }
     throw error;
@@ -120,9 +168,9 @@ function GroupHeading({ label }: { label: string }) {
 }
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
-  const { diff, today, earliestAsOf, latestAsOf } = loaderData;
+  const { diff, earliestAsOf, latestAsOf, staleReview, staleReviewMessage, asOfError } = loaderData;
 
-  const errors = actionData?.errors;
+  const errors = actionData?.errors ?? (asOfError === null ? undefined : { asOf: asOfError });
   const values = actionData?.values;
 
   // A first statement reads "14 ADDED" alone — three zero counts would dress an ordinary upload as strange.
@@ -140,14 +188,13 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       <div className="panel-body form-intro">
         <p>
           <strong>{diff.filename}</strong> · {diff.accountName}
-          {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
-          {diff.ownerName}
+          {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by {diff.ownerName}
         </p>
 
         {diff.firstStatement ? (
           <p>
-            This is the first statement recorded for {diff.accountName}, so every position in
-            it is added — there is nothing yet to have updated or removed.
+            This is the first statement recorded for {diff.accountName}, so every position in it is
+            added — there is nothing yet to have updated or removed.
           </p>
         ) : (
           <p>
@@ -168,8 +215,8 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {/* Named rather than silent — a silently vanished row is how "a missing row means sold" becomes an accident. */}
         {diff.skipped.map((skip) => (
           <p key={skip.row}>
-            Line <span className="u-data">{skip.row + 1}</span>'s "{skip.instrument}" states
-            no quantity, so it is not part of this statement.
+            Line <span className="u-data">{skip.row + 1}</span>'s "{skip.instrument}" states no
+            quantity, so it is not part of this statement.
           </p>
         ))}
       </div>
@@ -199,8 +246,12 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.added.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  <td className="is-numeric"><Amount value={row.quantity} shape="quantity" /></td>
-                  <td className="is-numeric"><BasisFigure value={row.costBasisPerShare} /></td>
+                  <td className="is-numeric">
+                    <Amount value={row.quantity} shape="quantity" />
+                  </td>
+                  <td className="is-numeric">
+                    <BasisFigure value={row.costBasisPerShare} />
+                  </td>
                   <td className="is-numeric">
                     <Amount value={row.value} />
                   </td>
@@ -219,7 +270,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   <td className="is-numeric">
                     {row.quantityChanged ? (
                       <>
-                        <span className="diff-was"><Amount value={row.quantityBefore} shape="quantity" /></span>{" "}
+                        <span className="diff-was">
+                          <Amount value={row.quantityBefore} shape="quantity" />
+                        </span>{" "}
                         → <Amount value={row.quantityAfter} shape="quantity" />
                       </>
                     ) : (
@@ -229,8 +282,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   <td className="is-numeric">
                     {row.basisChanged ? (
                       <>
-                        <span className="diff-was"><BasisFigure value={row.costBasisBefore} /></span> →{" "}
-                        <BasisFigure value={row.costBasisAfter} />
+                        <span className="diff-was">
+                          <BasisFigure value={row.costBasisBefore} />
+                        </span>{" "}
+                        → <BasisFigure value={row.costBasisAfter} />
                       </>
                     ) : (
                       <BasisFigure value={row.costBasisAfter} />
@@ -251,8 +306,12 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.removed.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  <td className="is-numeric"><Amount value={row.quantity} shape="quantity" /></td>
-                  <td className="is-numeric"><BasisFigure value={row.costBasisPerShare} /></td>
+                  <td className="is-numeric">
+                    <Amount value={row.quantity} shape="quantity" />
+                  </td>
+                  <td className="is-numeric">
+                    <BasisFigure value={row.costBasisPerShare} />
+                  </td>
                   {/* Dash, never $0.00 — that would claim the household sold something worthless. */}
                   <td className="is-numeric">
                     <Amount value={row.value} />
@@ -264,15 +323,31 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         </table>
       </div>
 
-      <Form method="post">
+      {staleReview ? (
+        <div className="panel-body form-intro">
+          <p className="form-error" role="alert">
+            {staleReviewMessage}
+          </p>
+        </div>
+      ) : null}
+
+      <Form method="post" id="commit-upload">
         {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
         <input type="hidden" name="accountId" value={diff.accountId} />
+        <input type="hidden" name="reviewRevision" value={diff.reviewRevision} />
+        {diff.asOf.source === "file" ? (
+          <input type="hidden" name="asOf" value={diff.asOf.date} />
+        ) : null}
 
         {/* Danger-zone weight, same as closing an account — half or less draws no confirmation. */}
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
               <input
+                key={
+                  `${diff.reviewRevision}:${staleReview ? "stale" : "fresh"}:` +
+                  (actionData?.confirmationReset ?? "initial")
+                }
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"
@@ -286,9 +361,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   </>
                 ) : (
                   <>
-                    This file removes <span className="u-data">{diff.removed.length}</span> of
-                    the <span className="u-data">{diff.currentCount}</span> positions this
-                    account holds.
+                    This file removes <span className="u-data">{diff.removed.length}</span> of the{" "}
+                    <span className="u-data">{diff.currentCount}</span> positions this account
+                    holds.
                   </>
                 )}
               </strong>
@@ -318,7 +393,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   id="review-as-of"
                   name="asOf"
                   type="date"
-                  defaultValue={values?.asOf ?? today}
+                  defaultValue={values?.asOf ?? diff.asOf.date}
                   min={earliestAsOf}
                   max={latestAsOf}
                   aria-invalid={errors?.asOf ? true : undefined}
@@ -329,8 +404,18 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   {errors.asOf}
                 </p>
               ) : (
-                <p className="form-note">This file does not date itself.</p>
+                <p className="form-note">
+                  This file does not date itself. Review again after changing the date.
+                </p>
               )}
+              <button
+                type="submit"
+                name="intent"
+                value="review-date"
+                className="button button--quiet"
+              >
+                Review this date
+              </button>
             </div>
           )}
 

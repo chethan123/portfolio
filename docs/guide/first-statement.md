@@ -56,8 +56,9 @@ explicit acknowledgement; a filtered export can otherwise remove holdings you me
 
 ### The statement date
 
-Use the file's date when present. Otherwise enter the date at review. Dates after tomorrow are
-refused; tomorrow accommodates households ahead of the server's time zone.
+Use the file's date when present. Otherwise enter the date at review and select **Review this date**
+before recording. Dates after tomorrow are refused; tomorrow accommodates households ahead of the
+server's time zone.
 
 ### Record it
 
