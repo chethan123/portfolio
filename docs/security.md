@@ -336,9 +336,9 @@ learns.
   is not a browser, and has no cookie to abuse.
 - **No authorization inside the app.** Everyone the allowlist admits sees everything. Choosing whose
   accounts a screen shows is a filter on the view, never a permission.
-- **Request bodies are effectively unbounded.** An upload that declares its size is refused if it is
-  too big. One that declares no size is not, only the file part is measured at all, and every other
-  form buffers whatever arrives. No size limit is set at either proxy.
+- **Most forms are bounded only by the bundled Caddy.** It caps every request body at 1 MiB, 16 MiB on
+  the upload page. Inside the app, only the upload counts bytes as they arrive. Every other form
+  buffers whatever Caddy lets through.
 - **The lock does not un-draw pixels.** A tab already showing figures keeps showing them until it
   next asks the server for something, and a browser's back/forward cache can serve a rendered stale
   page for minutes after a grant is revoked elsewhere.

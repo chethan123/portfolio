@@ -422,6 +422,9 @@ yourself:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
 ```
 
+Above 16, also raise `max_size` under `request_body @upload` in the `Caddyfile`. Caddy caps upload
+bodies at 16 MiB, and a larger upload the app would accept gets a bare 413 instead.
+
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
 app, which is why it is not in the table above.
 

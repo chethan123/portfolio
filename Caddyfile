@@ -15,6 +15,19 @@
 # 8080, not 80: the pinned unprivileged uid binds a high port with no kernel
 # grant. compose.yaml publishes host 80 onto it — change one, change both.
 :8080 {
+	# Body caps, before `app` or `gate` reads a byte. Counted as read, so a chunked
+	# body is capped too. Upload page's cap must be at least MAX_UPLOAD_MB (10), whole
+	# body counted, or an upload the app accepts gets a bare 413. Past 16, raise both.
+	# `not` on the second: both directives run, and the smaller cap would win.
+	@upload path /upload /upload/ /upload.data
+	request_body @upload {
+		max_size 16MiB
+	}
+	@notUpload not path /upload /upload/ /upload.data
+	request_body @notUpload {
+		max_size 1MiB
+	}
+
 	# The one exemption: machine-read, pinned body, no household data. Everything
 	# else, static assets included, is challenged.
 	handle /healthz {
