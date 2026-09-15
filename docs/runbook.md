@@ -484,9 +484,9 @@ Why: [ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), and
 
 **Do.** Under the bundled `compose.yaml` the cap is **not settable**: `MAX_UPLOAD_MB` is validated
 and read by the application but is absent from the `app` service's `environment:` block, so setting
-it in `.env` changes nothing. Add it to that block first. The snippet is in `operating.md`. Above 16,
-also raise `max_size` under `@upload` in the `Caddyfile`, or a large upload fails with a blank 413 or
-a generic error page instead of the sentence.
+it in `.env` changes nothing. Add it to that block first. The snippet is in `operating.md`. At 16 or
+more, also raise `max_size` under `@upload` in the `Caddyfile` above it and restart `caddy`, or a
+large upload fails with a blank 413 or a generic error page instead of the sentence.
 
 Two things that look like bugs and are not:
 

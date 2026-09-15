@@ -422,8 +422,9 @@ yourself:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
 ```
 
-Above 16, also raise `max_size` under `request_body @upload` in the `Caddyfile`. Caddy caps upload
-bodies at 16 MiB, and a larger upload the app would accept gets a bare 413 instead.
+At 16 or more, also raise `max_size` under `request_body @upload` in the `Caddyfile` above it, then
+`docker compose restart caddy`. Caddy caps upload bodies at 16 MiB, and past that an upload gets a
+bare 413 instead of the app's sentence.
 
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
 app, which is why it is not in the table above.
@@ -1406,6 +1407,12 @@ container; with the required `APP_VERSION=2` that is the newest `v2.x.y` release
 checkout of this repository is not needed to run or upgrade an instance, only `compose.yaml`,
 `Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
 `volumes/db/data` and `volumes/dumps` directories beside them.
+
+**A release that changes the `Caddyfile` needs it replaced and `caddy` restarted.** Caddy reads the
+file once, at start. Replacing it on disk, as a download or a `git checkout` does, puts a new file at
+that path, and the running container keeps reading the old one, so `docker compose up -d` leaves the
+old configuration serving. Replace `Caddyfile` with the copy at the release tag, then
+`docker compose restart caddy`. This release changes it: it adds the request body caps.
 
 **A release that adds a service or a volume needs `compose.yaml` replaced too, not just the image
 pulled.** The release that added `worker` and the `price-worker-sock` volume was the first to need

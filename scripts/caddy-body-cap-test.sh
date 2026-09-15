@@ -64,6 +64,7 @@ expect() {
 expect 200 chunked $((12 * MIB)) /upload.data
 expect 200 declared $((12 * MIB)) /upload
 expect 200 declared $((12 * MIB)) /upload/
+expect 200 declared $((12 * MIB)) /UPLOAD
 expect 413 chunked $((17 * MIB)) /upload.data
 expect 413 declared $((17 * MIB)) /upload
 expect 413 chunked $((2 * MIB)) /upload/1/columns.data

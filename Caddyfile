@@ -16,8 +16,9 @@
 # grant. compose.yaml publishes host 80 onto it — change one, change both.
 :8080 {
 	# Body caps, before `app` or `gate` reads a byte. Counted as read, so a chunked
-	# body is capped too. Upload page's cap must be at least MAX_UPLOAD_MB (10), whole
-	# body counted, or an upload the app accepts gets a bare 413. Past 16, raise both.
+	# body is capped too. Upload page's cap stays above MAX_UPLOAD_MB (10), or an
+	# oversized upload gets a bare 413 instead of the app's sentence. Path match
+	# ignores case, as React Router's does.
 	# `not` on the second: both directives run, and the smaller cap would win.
 	@upload path /upload /upload/ /upload.data
 	request_body @upload {
