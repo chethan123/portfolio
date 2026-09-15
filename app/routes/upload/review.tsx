@@ -10,7 +10,11 @@ import {
   latestRecordableDate,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
-import { DraftNotReadyError, commitUpload, diffForDraft } from "~/lib/uploads.server";
+import {
+  DraftNotReadyError,
+  commitUpload,
+  diffForDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
@@ -20,7 +24,8 @@ import type { Route } from "./+types/review";
  * Step four — the diff, then the commit (ingest brief §6), the flow's only
  * write. §5.2: a missing row means sold, so every removal is listed in
  * full, and removing more than half needs a ticked confirmation. Read-only
- * plus date and tick — a wrong figure is fixed by walking back to columns.
+ * plus date and tick — mapping errors go back to Columns; source-file errors
+ * need a corrected upload because a draft's bytes never change.
  */
 export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
@@ -43,8 +48,39 @@ export async function loader({ params }: Route.LoaderArgs) {
       latestAsOf: latestRecordableDate(),
     };
   } catch (error) {
-    // An earlier step not genuinely passed redirects there, not an error.
     if (error instanceof DraftNotReadyError) {
+      // A parser rule added after this draft saved its mapping must be visible at the
+      // bookmarked Review URL. No diff is safe to show while a source row is invalid.
+      if (
+        error.step === "columns" &&
+        error.problems.some((problem) => problem.code === "blank-instrument") &&
+        error.draft !== undefined
+      ) {
+        const { draft } = error;
+        return {
+          steps: {
+            current: 4,
+            draftId: draft.id,
+            instrumentsSkipped: draft.hadFirstSightings === false,
+          } satisfies UploadStepsData,
+          diff: null,
+          blocked: {
+            draftId: draft.id,
+            filename: draft.filename,
+            accountId: draft.accountId,
+            accountName: draft.accountName,
+            ownerName: draft.ownerName,
+            accountNumberTail: draft.accountNumberTail,
+            problems: error.problems.filter(
+              (problem) => problem.code === "blank-instrument",
+            ),
+          },
+          today: new Date().toISOString().slice(0, 10),
+          earliestAsOf: earliestRecordableDate(),
+          latestAsOf: latestRecordableDate(),
+        };
+      }
+
       return redirect(`/upload/${params.draftId}/${error.step}`);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
@@ -76,6 +112,12 @@ export async function action({ params, request }: Route.ActionArgs) {
       return { errors: fieldErrors, formError: formError ?? null, values };
     }
     if (error instanceof DraftNotReadyError) {
+      if (
+        error.step === "columns" &&
+        error.problems.some((problem) => problem.code === "blank-instrument")
+      ) {
+        return redirect(`/upload/${params.draftId}/review`);
+      }
       return redirect(`/upload/${params.draftId}/${error.step}`);
     }
     if (error instanceof NotFoundError) {
@@ -121,6 +163,49 @@ function GroupHeading({ label }: { label: string }) {
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
   const { diff, today, earliestAsOf, latestAsOf } = loaderData;
+
+  if (diff === null) {
+    const { blocked } = loaderData;
+
+    return (
+      <section className="panel">
+        <header className="panel-header">
+          <h2 className="panel-title">This statement cannot be reviewed yet</h2>
+        </header>
+
+        <div className="panel-body form-intro">
+          <p>
+            <strong>{blocked.filename}</strong> · {blocked.accountName}
+            {blocked.accountNumberTail ? ` ${blocked.accountNumberTail}` : ""} — owned by{" "}
+            {blocked.ownerName}
+          </p>
+          {blocked.problems.map((problem, index) => (
+            <p
+              key={`${problem.row ?? "mapping"}-${problem.column ?? "mapping"}-${index}`}
+              className="form-error"
+              role="alert"
+            >
+              {problem.message}
+            </p>
+          ))}
+          <p>
+            Go back to change the column mapping if the instrument is in another column. If the
+            instrument is missing from the source row, edit the CSV outside Portfolio and upload
+            the corrected file. This draft keeps the original file.
+          </p>
+        </div>
+
+        <div className="panel-form">
+          <Link className="button" to={`/upload/${blocked.draftId}/columns`}>
+            Back to columns
+          </Link>
+          <Link className="button button--text" to={`/upload?account=${blocked.accountId}`}>
+            Upload corrected file
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   const errors = actionData?.errors;
   const values = actionData?.values;

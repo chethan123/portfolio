@@ -326,6 +326,13 @@ thereafter. A new institution costs zero code.
 The parser must tolerate the reality of brokerage exports: preamble rows, footer disclaimers, `$`
 prefixes, parenthesised negatives, `n/a` strings, thousands separators.
 
+A blank instrument row is harmless only when its mapped quantity, cost basis, as-of date and
+account-number cells are all blank. Content in any of them, including zero, an absence spelling or
+an invalid figure — makes the row a blocking mapping problem. The Columns screen names its source
+line and populated columns before a mapping can be saved; a draft saved under an older rule shows
+the same block on Review and offers no commit. A mapping correction returns to Columns; a source-file
+correction starts a new upload because the draft retains its original bytes.
+
 A PDF-only 401k needs no new subsystem. Hand-author a CSV in the app's template, which is just
 another saved mapping.
 

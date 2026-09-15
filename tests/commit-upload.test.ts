@@ -422,6 +422,95 @@ describe("diffForDraft", () => {
 
 describe("commitUpload", () => {
   it(
+    "cannot commit a legacy blank-instrument row through majority confirmation, then accepts its repair",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
+      const aapl = await seedInstrument({ symbol: "AAPL", name: "Apple Inc." });
+      const vxus = await seedInstrument({ symbol: "VXUS", name: "Vanguard Total International" });
+      for (const instrument of [vti, aapl, vxus]) {
+        await seedInstrumentAlias({ instrument, rawString: instrument.symbol ?? "" });
+      }
+      const before = await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: vti, quantity: "282.144455", costBasisPerShare: "165.4961" },
+          { instrument: aapl, quantity: "139.153103", costBasisPerShare: "108.2561" },
+          { instrument: vxus, quantity: "10", costBasisPerShare: "50" },
+        ],
+      });
+
+      const invalidCsv =
+        "Instrument,Quantity,Basis,As Of,Account\n" +
+        "VTI,282.144455,165.4961,2026-09-13,Z12-345678\n" +
+        ",139.153103,108.2561,2026-09-13,Z12-345678\n";
+      const draft = await ctx.seedUploadDraft({
+        account,
+        filename: "blank-instrument.csv",
+        bytes: encode(invalidCsv),
+      });
+      const legacyMapping: StatementMapping = {
+        ...BASE_MAPPING,
+        columns: {
+          instrument: "Instrument",
+          quantity: "Quantity",
+          costBasis: "Basis",
+          asOf: "As Of",
+          accountNumber: "Account",
+        },
+      };
+      await db
+        .updateTable("upload_draft")
+        .set({ mapping: JSON.stringify(legacyMapping), had_first_sightings: false })
+        .where("id", "=", draft.id)
+        .execute();
+
+      let refusal: DraftNotReadyError | undefined;
+      try {
+        await commitUpload(
+          draft.id,
+          { accountId: account.id, confirmRemovals: "true" },
+          db,
+        );
+      } catch (error) {
+        if (error instanceof DraftNotReadyError) refusal = error;
+        else throw error;
+      }
+      expect(refusal?.step).toBe("columns");
+      expect(refusal?.problems[0]).toMatchObject({ row: 2, column: "Instrument" });
+      expect((await lastRecorded(account.id, db))?.id).toBe(before.id);
+      expect(await requireDraft(draft.id, db)).toMatchObject({ id: draft.id });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .execute(),
+      ).toHaveLength(1);
+
+      await db
+        .updateTable("upload_draft")
+        .set({
+          raw_file: Buffer.from(invalidCsv.replace("\n,139.153103", "\nAAPL,139.153103")),
+        })
+        .where("id", "=", draft.id)
+        .execute();
+      const remapped = await rememberMapping(draft.id, legacyMapping, db);
+      expect(remapped).toEqual({ nextStep: "review" });
+
+      const written = await commitUpload(
+        draft.id,
+        { accountId: account.id, confirmRemovals: "true" },
+        db,
+      );
+      expect(written.counts).toEqual({ added: 0, updated: 0, unchanged: 2, removed: 1 });
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+    }),
+  );
+
+  it(
     "writes the set with its holdings, deletes the draft, and every reader moves at once",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet, seedQuote } =

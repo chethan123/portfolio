@@ -91,6 +91,7 @@ export type ParseProblem = {
   row: number | null;
   column: string | null;
   message: string;
+  code?: "blank-instrument";
 };
 
 export type ParsedStatement = {
@@ -177,10 +178,11 @@ type RowRecord = {
 };
 
 // Applies a mapping to a file's rows (spec 0004 step 02): rows above the header are
-// preamble; blank-instrument rows are footers, skipped; an absent-quantity row is skipped
-// and reported; a nonsense or over-precise quantity/basis refuses the file naming the row,
-// never rounds; duplicate instrument rows combine (summed, quantity-weighted) when the
-// mapping allows it, else refuse — a position set holds one row per instrument.
+// preamble; blank-instrument rows are ignored only when every mapped financial/account cell
+// is empty; an absent-quantity row is skipped and reported; a nonsense or over-precise
+// quantity/basis refuses the file naming the row, never rounds; duplicate instrument rows
+// combine (summed, quantity-weighted) when the mapping allows it, else refuse — a position
+// set holds one row per instrument.
 export function parseStatement(
   rows: ReadonlyArray<ReadonlyArray<string>>,
   mapping: StatementMapping,
@@ -263,9 +265,42 @@ export function parseStatement(
   for (let row = mapping.headerRow + 1; row < rows.length; row++) {
     const cells = rows[row] ?? [];
     const instrument = cells[instrumentIndex] ?? "";
-    if (instrument.trim() === "") continue;
-
     const line = row + 1;
+
+    if (instrument.trim() === "") {
+      // Read raw cells before numeric normalisation: zero, "n/a" and malformed figures all
+      // say this is a data row. Name is descriptive, not financial; footer copy there is harmless.
+      const populated = [
+        { index: quantityIndex, name: columns.quantity },
+        { index: costBasisIndex, name: columns.costBasis },
+        { index: asOfIndex, name: columns.asOf },
+        { index: accountNumberIndex, name: columns.accountNumber },
+      ].flatMap(({ index, name }) =>
+        index !== null && typeof name === "string" && (cells[index] ?? "").trim() !== ""
+          ? [name]
+          : [],
+      );
+
+      if (populated.length > 0) {
+        const named = populated.map((name) => `"${name}"`);
+        const cellsNamed =
+          named.length === 1
+            ? named[0]
+            : `${named.slice(0, -1).join(", ")}, and ${named.at(-1)}`;
+        problems.push({
+          row,
+          column: columns.instrument,
+          code: "blank-instrument",
+          message:
+            `Line ${line} has a blank instrument, but its mapped ${cellsNamed} ` +
+            `${named.length === 1 ? "cell has" : "cells have"} content. ` +
+            "Choose the correct instrument column. If the instrument is missing from the " +
+            "source row, fix the source file and start a new upload.",
+        });
+      }
+      continue;
+    }
+
     const quantityCell = (cells[quantityIndex] ?? "").trim();
     const quantity = normaliseFigure(quantityCell);
 

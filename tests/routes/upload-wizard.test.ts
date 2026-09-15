@@ -7,12 +7,16 @@ import { afterAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
-import { action as reviewAction, loader as reviewLoader } from "../../app/routes/upload/review.tsx";
+import Review, {
+  action as reviewAction,
+  loader as reviewLoader,
+} from "../../app/routes/upload/review.tsx";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
 import { rememberMapping } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { renderRoute } from "../support/render.tsx";
 import { args, get, post, redirectTo } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
@@ -190,6 +194,78 @@ describe("a review over a draft that is not ready for one", () => {
       ).toBe(`/upload/${draftId}/columns`);
 
       expect(await lastRecorded(accountId, ctx.db)).toBeNull();
+    }),
+  );
+
+  it(
+    "renders a source-specific block for a legacy mapping that now exposes an invalid row",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "brokerage" });
+      const draft = await ctx.seedUploadDraft({
+        account,
+        filename: "blank-instrument.csv",
+        bytes: encode(
+          "Instrument,Quantity,Cost Basis,As Of,Account\n" +
+            "VTI,282.144455,165.4961,2026-09-13,Z12-345678\n" +
+            ",139.153103,108.2561,2026-09-13,Z12-345678\n",
+        ),
+      });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
+      await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+
+      const legacyMapping: StatementMapping = {
+        ...MAPPING,
+        columns: {
+          instrument: "Instrument",
+          quantity: "Quantity",
+          costBasis: "Cost Basis",
+          asOf: "As Of",
+          accountNumber: "Account",
+        },
+      };
+      await ctx.db
+        .updateTable("upload_draft")
+        .set({ mapping: JSON.stringify(legacyMapping), had_first_sightings: false })
+        .where("id", "=", draft.id)
+        .execute();
+
+      const page = await reviewPage(draft.id);
+      if (page.diff !== null) throw new Error("The invalid draft rendered a removal diff.");
+      expect(page.blocked.accountId).toBe(account.id);
+      expect(page.blocked).not.toHaveProperty("bytes");
+      expect(page.blocked).not.toHaveProperty("mapping");
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, { masked: true });
+
+      expect(markup).toContain("This statement cannot be reviewed yet");
+      expect(markup).toContain("Line 3");
+      expect(markup).toContain("Quantity");
+      expect(markup).toContain("Cost Basis");
+      expect(markup).toContain("As Of");
+      expect(markup).toContain("Account");
+      expect(markup).not.toContain("139.153103");
+      expect(markup).not.toContain("108.2561");
+      expect(markup).not.toContain("REMOVED");
+      expect(markup).not.toContain("Record this statement");
+      expect(markup).toContain("change the column mapping");
+      expect(markup).toContain("instrument is missing from the source row");
+      expect(markup).toContain("edit the CSV outside Portfolio and upload the corrected file");
+      expect(markup).toContain(`href="/upload/${draft.id}/columns"`);
+      expect(markup).toContain(`href="/upload?account=${account.id}"`);
+
+      expect(
+        await redirectTo(() =>
+          reviewAction(
+            args(
+              post(`/upload/${draft.id}/review`, {
+                asOf: AS_OF,
+                accountId: account.id,
+                confirmRemovals: "true",
+              }),
+              { draftId: draft.id },
+            ),
+          ),
+        ),
+      ).toBe(`/upload/${draft.id}/review`);
     }),
   );
 });
