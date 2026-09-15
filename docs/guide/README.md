@@ -53,7 +53,8 @@ Come back to these when you want to know what something on a screen means.
 **Almost nothing here deletes anything.** Accounts are closed rather than removed. Corrections
 retain earlier records. A correction dated today preserves earlier quantities; backdated uploads
 or balances can change historical values. What does delete, immediately and with no undo:
-removing a person once they own nothing at all, and removing a passkey. See
+removing a person once they own nothing at all, forgetting a name under
+[Settings → Instruments](settings.md#instruments), and removing a passkey. See
 [Passkeys and the lock](passkeys.md).
 
 **A number is withheld rather than guessed.** Where a holding cannot be priced it is left out of the
@@ -61,8 +62,9 @@ total and the screen says how much of the portfolio the total covers. A dash nev
 
 ## Not built yet
 
-So you are not left hunting for them: Settings names **Classifications**, **Instruments** and
-**History** as what later slices build. They are not drawn as tabs. There is also no export or
+So you are not left hunting for them: Settings names **Classifications** and **History** as what
+later slices build, and the rest of **Instruments**, which today holds the names a statement taught
+the app and nothing else. The unbuilt ones are not drawn as tabs. There is also no export or
 download of any kind.
 
 ---

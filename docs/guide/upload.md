@@ -158,11 +158,13 @@ Bonds, Cash or Other.
 
 There is no skip. A string left unanswered would be a holding silently missing from the statement.
 
-**The answer is remembered permanently**, so that spelling passes straight through on every later
-export.
+**The answer is remembered once the statement is recorded**, so that spelling passes straight
+through on every later export. An upload that is never recorded teaches the next one nothing, and the same name is asked
+about again. A wrong answer that was recorded is repointed or forgotten under
+[Settings → Instruments](settings.md#instruments).
 
-Resolving saves the instrument name even if you abandon the draft. It does not add a position;
-positions are recorded at commit.
+An instrument you create here exists at once, even if you abandon the draft. Resolving does not
+add a position; positions and names are recorded at the last step.
 
 **Non-USD is refused, never converted.** Creating an instrument that quotes in another currency is
 refused naming the currency; the instance holds dollars only.

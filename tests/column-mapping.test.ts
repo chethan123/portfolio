@@ -11,6 +11,7 @@ import {
 } from "~/lib/column-mapping.server";
 import { readCsv } from "~/lib/csv";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { resolveAll } from "~/lib/instrument-resolution.server";
 import { rememberMapping, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -190,6 +191,29 @@ describe("rememberMapping", () => {
     headerRow: 0,
     columns: { instrument: "Symbol", quantity: "Quantity" },
   };
+
+  it(
+    "counts the draft's own answers as sightings on a walk back to columns, sending the reader to review",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft, seedInstrument }) => {
+      // Re-saving the mapping after answering must not turn "passed" into "skipped" on the strip.
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nNEVER SEEN,50\n"),
+      });
+      await rememberMapping(draft.id, SIMPLE, db);
+      await resolveAll(
+        draft.id,
+        [{ raw: "NEVER SEEN", fields: { kind: "existing", instrumentId: vti.id } }],
+        { probe: async () => new Map() },
+        db,
+      );
+
+      await expect(rememberMapping(draft.id, SIMPLE, db)).resolves.toEqual({ nextStep: "review" });
+      expect((await requireDraft(draft.id, db)).hadFirstSightings).toBe(true);
+    }),
+  );
 
   it(
     "sends the reader to the step it just wrote onto the draft, both ways round",

@@ -67,6 +67,8 @@ export type Fixtures = {
     asOf: string;
     source?: "upload" | "manual";
     sourceFilename?: string;
+    /** The statement's own bytes, retained as an upload leaves them — what the alias screen searches for a name. */
+    rawFile?: Uint8Array;
     /** Tie-break for two sets sharing as_of reads this before id — corrections tests need control. */
     createdAt?: Date | string;
     /** Empty is legal: how "sold everything" is recorded. */
@@ -293,6 +295,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     asOf,
     source = "upload",
     sourceFilename,
+    rawFile,
     createdAt,
     holdings = [],
   }) => {
@@ -303,6 +306,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
         as_of_date: asOf,
         source,
         source_filename: sourceFilename ?? null,
+        raw_file: rawFile === undefined ? null : Buffer.from(rawFile),
         ...(createdAt === undefined ? {} : { created_at: createdAt }),
       })
       .returning(["id", "as_of_date"])

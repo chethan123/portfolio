@@ -38,7 +38,7 @@ travel the same code path as a share position, and net worth is one `SUM` with n
 Everything else supports those two spines: `person` and `account` say whose money it is,
 `instrument` / `classification` / `instrument_alias` say what a holding is and how to label and
 price it, `manual_networth` covers the years before the app existed, and `upload_draft` /
-`column_mapping` are the ingest machinery.
+`upload_draft_answer` / `column_mapping` are the ingest machinery.
 
 ## 2. Entity-relationship diagram
 
@@ -47,6 +47,8 @@ erDiagram
     person ||--o{ account : "owns (RESTRICT)"
     account ||--o{ position_set : "photographed by (RESTRICT)"
     account ||--o{ upload_draft : "stages (CASCADE)"
+    upload_draft ||--o{ upload_draft_answer : "answers (CASCADE)"
+    instrument ||--o{ upload_draft_answer : "answered as (CASCADE)"
     position_set ||--o{ holding : "contains (CASCADE)"
     instrument ||--o{ holding : "held as (RESTRICT)"
     classification ||--o{ instrument : "labels (RESTRICT)"
@@ -85,6 +87,11 @@ erDiagram
         text price_source
     }
     instrument_alias {
+        text raw_string PK
+        bigint instrument_id FK
+    }
+    upload_draft_answer {
+        bigint draft_id PK
         text raw_string PK
         bigint instrument_id FK
     }
@@ -267,11 +274,14 @@ and price history permanently; here it is a one-column update (DESIGN.md §4.3).
 
 Indexes: `instrument_classification_id_idx`, `instrument_symbol_idx`.
 
-**`instrument_alias`** is every string ever seen in a CSV, mapped to the instrument it means. The
-raw string is the primary key, `COLLATE "C"` so the match is byte-exact and case-sensitive
-regardless of the deployment's locale. Aliases are global, not per-institution: Fidelity's `CASH`
-and Schwab's `Cash & Cash Investments` are two rows pointing at the same `USD` instrument. A miss
-during upload prompts once and is remembered permanently, with no normalisation heuristics.
+**`instrument_alias`** is every string a recorded statement has named, mapped to the instrument it
+means. The raw string is the primary key, `COLLATE "C"` so the match is byte-exact and
+case-sensitive regardless of the deployment's locale. Aliases are global, not per-institution:
+Fidelity's `CASH` and Schwab's `Cash & Cash Investments` are two rows pointing at the same `USD`
+instrument. A miss during upload prompts once, with no normalisation heuristics; the answer is the
+draft's own (`upload_draft_answer`, §4.6) until the statement is recorded, when the commit writes it
+here. Settings → Instruments lists these rows and repoints or deletes one after a preview; a holding
+does not record which alias resolved it, so neither change touches `holding`.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -434,7 +444,7 @@ into any computed figure.
 | `date` | `date` | no | primary key |
 | `amount` | `numeric(20,4)` | no | net worth on that date, as typed |
 
-### 4.6 Ingest machinery: `upload_draft`, `column_mapping`
+### 4.6 Ingest machinery: `upload_draft`, `upload_draft_answer`, `column_mapping`
 
 **`upload_draft`** is the staging row behind an in-progress statement upload. The upload flow is a
 sequence of URLs with no client state, so everything a step needs lives here: the bytes, the
@@ -454,6 +464,21 @@ away (unlike `position_set`, which restricts).
 | `created_at` | `timestamptz` | no | default `now()`; what the sweep reads |
 
 Index: `upload_draft_created_at_idx`.
+
+**`upload_draft_answer`** is a draft's own answers to its first sightings, one row per string the
+resolution step resolved for that draft, read by that draft alone. The commit copies the rows whose
+strings the recorded file names into `instrument_alias` (existing rows win) and then deletes the
+draft, which cascades the rest away; an abandoned or swept draft takes all of them. This is what keeps
+a wrong match made in an upload nobody finished from resolving the next upload silently
+([ADR-0013](adr/0013-a-first-sighting-answer-is-the-drafts-until-recorded.md)).
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `draft_id` | `bigint` → `upload_draft` | no | half the primary key; `ON DELETE CASCADE` |
+| `raw_string` | `text collate "C"` | no | the other half; byte-exact, as `instrument_alias` |
+| `instrument_id` | `bigint` → `instrument` | no | `ON DELETE CASCADE` |
+
+Index: `upload_draft_answer_instrument_id_idx`.
 
 **`column_mapping`** is a saved CSV column mapping per institution and header shape, which is how a
 new institution costs zero code: the first upload maps its columns in a UI, the header row is
@@ -667,7 +692,9 @@ flowchart LR
         UD -->|"commit (app/lib/uploads.server.ts)"| PS[position_set + holding]
         MB[manual balance] -->|app/lib/balances.server.ts| PS
         PC[position correction] -->|app/lib/positions.server.ts| PS
-        UD -.->|first sightings resolved| IA[instrument_alias + instrument]
+        UD -.->|first sightings answered| UDA[upload_draft_answer + instrument]
+        UDA -->|"commit promotes (app/lib/uploads.server.ts)"| IA[instrument_alias]
+        SI[Settings → Instruments] -->|app/lib/instrument-aliases.server.ts| IA
         UD -.->|header fingerprinted| CM[column_mapping]
     end
     subgraph pricing [Pricing — app/lib/prices.server.ts]
@@ -681,10 +708,11 @@ flowchart LR
 ```
 
 - **Statement upload** stages an `upload_draft`, resolves unrecognised strings into
-  `instrument_alias` rows (creating `instrument` rows on first sighting, each given a
+  `upload_draft_answer` rows (creating `instrument` rows on first sighting, each given a
   classification at the prompt), saves the `column_mapping` when a new header shape is mapped, and
-  commits one new `position_set` with its `holding` rows, with `raw_file` retained. Commit consumes
-  the draft.
+  commits one new `position_set` with its `holding` rows, with `raw_file` retained, promoting the
+  draft's answers into `instrument_alias` in the same transaction. Commit consumes the draft.
+  Settings → Instruments repoints or deletes an `instrument_alias` row after a preview.
 - **Manual balance entries and position corrections** write a new `position_set` (`source =
   'manual'`, no file). A correction is a new photograph, never an edit. Setting a single-position
   account's balance is [`app/lib/balances.server.ts`](../app/lib/balances.server.ts); correcting
@@ -700,9 +728,11 @@ flowchart LR
   the same refresh and writes the other two: `price_daily` again, inserting only days the spine does
   not already hold, and one `price_backfill` row per instrument attempted.
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
-  `instrument` that lost an alias race, a `passkey` a person removes (cascading its own
-  `unlock_grant` rows away with it), and swept, consumed or explicitly-cleared scaffolding rows,
-  `upload_draft` rows and `unlock_grant` rows alike (§4.8). From a `psql` session only: a bad
+  `instrument` that lost the race for its string, an `instrument_alias` the household forgets
+  after its preview, a `passkey` a person removes (cascading its own `unlock_grant` rows away
+  with it), and swept, consumed or explicitly-cleared scaffolding rows, `upload_draft` rows with
+  their `upload_draft_answer` answers and `unlock_grant` rows alike (§4.8). From a `psql` session
+  only: a bad
   upload's `position_set`, which is the design's undo, with its holdings cascading. No screen
   offers it yet ([`importing-history.md`](importing-history.md) carries the statement). That guide
   also replaces `manual_networth` rows when reloading external history. Accounts close via

@@ -1,7 +1,8 @@
 // Upload draft: the staging row behind an in-progress upload (DESIGN.md §5.1,
 // docs/specs/0004-ingest.md). Everything a step needs is on the one row, so
-// reload/back/bookmark all work. Drafts are swept at 24h by the next createDraft — no cron.
-// Size capped twice: the body as it streams in, File.size after.
+// reload/back/bookmark all work. Its first-sighting answers ride with it (upload_draft_answer)
+// and become vocabulary only at commit. Drafts are swept at 24h by the next createDraft — no
+// cron. Size capped twice: the body as it streams in, File.size after.
 import { z } from "zod";
 
 import { sql } from "kysely";
@@ -13,9 +14,10 @@ import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
 import { getDb, type Database } from "./db.server.ts";
+import { describeInstrument } from "./format.ts";
 import { holdingNote } from "./holdings-view.ts";
 import { NotFoundError, ValidationError, parseInput, recordedDate } from "./input.server.ts";
-import { unresolvedStrings } from "./instrument-resolution.server.ts";
+import { aliasesFor, unresolvedStrings } from "./instrument-resolution.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, divide, render, toUnits } from "./money.ts";
 import { fitsTheMoneyColumn } from "./positions.server.ts";
 import { foldLots, parseStatement, statementMapping } from "./statement.ts";
@@ -48,7 +50,7 @@ export type UploadDraft = {
   bytes: Uint8Array;
   mapping: unknown;
   // Whether the columns parse raised a first sighting; null until that step decides. Written
-  // then because it's unrecoverable after — an alias doesn't say which draft wrote it.
+  // then because it's unrecoverable after — a promoted alias doesn't say which draft wrote it.
   hadFirstSightings: boolean | null;
   createdAt: Date;
 };
@@ -240,8 +242,9 @@ export async function requireDraft(
   return row;
 }
 
-// had_first_sightings is written here, the one moment the answer exists (once aliases are
-// written, "skipped" and "passed" look the same); nextStep hands back that same bit. Not one
+// had_first_sightings is written here, where the answer exists: vocabulary misses, plus the
+// strings this draft already answered (a walk back to columns must not turn "passed" into
+// "skipped"). nextStep sends the reader on only for what is still unanswered. Not one
 // transaction: the institution's remembered mapping is a rebuildable cache.
 export async function rememberMapping(
   draftId: string,
@@ -265,14 +268,18 @@ export async function rememberMapping(
     });
   }
 
-  // Asked once: this answer is both the bit the strip reads and the step the reader is sent to.
-  const hadFirstSightings =
-    (
-      await unresolvedStrings(
-        parsed.positions.map((position) => position.instrument),
-        db,
-      )
-    ).length > 0;
+  const strings = parsed.positions.map((position) => position.instrument);
+  const unresolved = await unresolvedStrings(strings, draft.id, db);
+  const answered =
+    strings.length === 0
+      ? undefined
+      : await db
+          .selectFrom("upload_draft_answer")
+          .select("raw_string")
+          .where("draft_id", "=", draft.id)
+          .where("raw_string", "in", strings)
+          .executeTakeFirst();
+  const hadFirstSightings = unresolved.length > 0 || answered !== undefined;
 
   await db
     .updateTable("upload_draft")
@@ -291,7 +298,7 @@ export async function rememberMapping(
     db,
   );
 
-  return { nextStep: hadFirstSightings ? "instruments" : "review" };
+  return { nextStep: unresolved.length > 0 ? "instruments" : "review" };
 }
 
 // step names the earliest step still owed; null = diffable and committable.
@@ -320,6 +327,7 @@ export async function parseDraft(
 
   const unresolved = await unresolvedStrings(
     parsed.positions.map((position) => position.instrument),
+    draft.id,
     db,
   );
   if (unresolved.length > 0) {
@@ -406,6 +414,9 @@ type FileRow = {
 type AssembledDiff = {
   diff: UploadDiff;
   rows: FileRow[];
+  // What each distinct instrument cell the file states resolved to — the strings the commit
+  // promotes the draft's answers for, and the meanings it must still find in vocabulary.
+  resolved: Map<string, string>;
   fileAccountNumber: string | null;
 };
 
@@ -442,16 +453,8 @@ async function assembleDiff(
   if (result.step !== null) throw new DraftNotReadyError(result.step);
   const { parsed } = result;
 
-  const strings = parsed.positions.map((position) => position.instrument);
-  const aliasRows =
-    strings.length === 0
-      ? []
-      : await db
-          .selectFrom("instrument_alias")
-          .select(["raw_string", "instrument_id"])
-          .where("raw_string", "in", strings)
-          .execute();
-  const aliases = new Map(aliasRows.map((row) => [row.raw_string, row.instrument_id]));
+  const strings = [...new Set(parsed.positions.map((position) => position.instrument))];
+  const aliases = await aliasesFor(strings, draft.id, db);
 
   const groups = new Map<string, ParsedPosition[]>();
   for (const position of parsed.positions) {
@@ -634,6 +637,7 @@ async function assembleDiff(
       instrumentsSkipped: draft.hadFirstSightings === false,
     },
     rows,
+    resolved: aliases,
     fileAccountNumber: rows.find((row) => row.accountNumber !== null)?.accountNumber ?? null,
   };
 }
@@ -661,11 +665,11 @@ export type CommittedUpload = {
   counts: { added: number; updated: number; unchanged: number; removed: number };
 };
 
-// The flow's one write: immutable position_set, one holding per parsed row, draft deleted — one
-// transaction under withAccountLock (§7.2), so the diff and every guard read the statement this
-// one lands on. Every refusal runs first, each commented below. A second upload for an
-// already-recorded date is allowed (latest_position_set's tie-break resolves it); re-posting a
-// committed draft is a NotFoundError.
+// The flow's one write: the draft's answers promoted to vocabulary, immutable position_set, one
+// holding per parsed row, draft deleted — one transaction under withAccountLock (§7.2), so the
+// diff and every guard read the statement this one lands on. Every refusal runs first, each
+// commented below. A second upload for an already-recorded date is allowed
+// (latest_position_set's tie-break resolves it); re-posting a committed draft is a NotFoundError.
 export async function commitUpload(
   draftId: string,
   raw: CommitInput,
@@ -705,7 +709,8 @@ async function commitUploadUnderLock(
     );
   }
 
-  const { diff, rows, fileAccountNumber } = await assembleDiff(draft, db);
+  const { diff, rows, resolved, fileAccountNumber } = await assembleDiff(draft, db);
+  const rawStrings = [...resolved.keys()];
 
   // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
   const numbers = rows.flatMap((row) =>
@@ -777,13 +782,72 @@ async function commitUploadUnderLock(
     );
   }
 
-  // Deletion leads the writes. A concurrent commit is refused by the re-read above; zero rows here
-  // is createDraft's sweep, which runs under no lock, taking a day-old draft in between.
+  // Promotion first, since the draft delete below cascades the answers away. Only the strings
+  // this file states: one answered, then mapped out of the instrument column, was never a
+  // fact about a recorded statement. A row vocabulary already holds wins, as at resolve time.
+  if (rawStrings.length > 0) {
+    await db
+      .insertInto("instrument_alias")
+      .columns(["raw_string", "instrument_id"])
+      .expression(
+        db
+          .selectFrom("upload_draft_answer")
+          .select(["raw_string", "instrument_id"])
+          .where("draft_id", "=", draft.id)
+          .where("raw_string", "in", rawStrings)
+          // Insert order is lock order: two commits promoting the same strings the other way round would deadlock.
+          .orderBy("raw_string"),
+      )
+      .onConflict((conflict) => conflict.column("raw_string").doNothing())
+      .execute();
+  }
+
+  // Deletion leads the rest of the writes. A concurrent commit is refused by the re-read above;
+  // zero rows here is createDraft's sweep, which runs under no lock, taking a day-old draft in
+  // between, and the throw takes the promotion back with it — no second set, no vocabulary.
   const taken = await db
     .deleteFrom("upload_draft")
     .where("id", "=", draft.id)
     .executeTakeFirst();
   if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
+
+  // Vocabulary as the transaction sees it must be what the diff resolved against: a string
+  // another upload recorded, or Settings repointed or forgot, in the gap would otherwise land
+  // this holding under an instrument the alias no longer names, for the next re-upload to diff
+  // away. Refused, promotion and all. Share-locked, so a repoint waits for this commit.
+  const meanings =
+    rawStrings.length === 0
+      ? []
+      : await db
+          .selectFrom("instrument_alias")
+          .innerJoin("instrument", "instrument.id", "instrument_alias.instrument_id")
+          .select([
+            "instrument_alias.raw_string",
+            "instrument.id",
+            "instrument.symbol",
+            "instrument.name",
+          ])
+          .where("instrument_alias.raw_string", "in", rawStrings)
+          .forShare("instrument_alias")
+          .execute();
+  const moved = meanings.find((meaning) => resolved.get(meaning.raw_string) !== meaning.id);
+  if (moved !== undefined) {
+    throw ValidationError.form(
+      `"${moved.raw_string}" now means ${describeInstrument(moved)} — recorded by another ` +
+        "upload or repointed under Settings while this review was open, so nothing was " +
+        "recorded. Reload the review and check what it is about to record.",
+    );
+  }
+  // Every string had a meaning at diff time, and the promotion restored the draft's own; one
+  // still missing was forgotten under Settings, and the next upload is meant to ask about it.
+  if (meanings.length !== rawStrings.length) {
+    const named = new Set(meanings.map((meaning) => meaning.raw_string));
+    const forgotten = rawStrings.find((raw) => !named.has(raw)) ?? "";
+    throw ValidationError.form(
+      `"${forgotten}" was forgotten under Settings while this review was open, so nothing ` +
+        "was recorded. Reload the review — it will ask what the name means.",
+    );
+  }
 
   const set = await db
     .insertInto("position_set")

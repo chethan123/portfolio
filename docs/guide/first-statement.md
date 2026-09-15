@@ -38,8 +38,9 @@ This step appears only for new instrument names. Otherwise the step strip shows 
 takes you straight to review. Known instrument names use saved aliases. Resolve each new name by linking an existing instrument
 or creating one with a classification and price source. A known non-USD quote is refused.
 
-These instrument and alias choices are saved before the statement is committed. Once every name
-is resolved, continue to review.
+An instrument you create here exists at once. The name-to-instrument answers travel with this
+upload and are saved as aliases when the statement is recorded at the last step, so an upload you
+walk away from teaches the next one nothing. Once every name is resolved, continue to review.
 
 ## Step 4: Review, then record
 

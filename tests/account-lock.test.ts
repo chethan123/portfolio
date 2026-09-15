@@ -206,7 +206,7 @@ describe("the account lock", () => {
       const database = await testDatabase();
       const { account, x, y } = await plant(database, "older-waiter");
 
-      // Both land today; created_at decides. Stamped at the insert (0013), not at BEGIN — a BEGIN
+      // Both land today; created_at decides. Stamped at the insert (0014), not at BEGIN — a BEGIN
       // stamp would sort the waiter's set, the one carrying both edits, behind the one it copied.
       await behindTheLock(
         database,

@@ -5,6 +5,7 @@ import { sql } from "kysely";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
+import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import { createDraft, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -69,6 +70,33 @@ describe("createDraft", () => {
         id: onTheLine.id,
       });
       await expect(requireDraft(justPast.id, db)).rejects.toThrow(NotFoundError);
+    }),
+  );
+
+  it(
+    "sweeps an abandoned draft's first-sighting answers with it, leaving no vocabulary behind",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedUploadDraft }) => {
+      // Issue #291: the answer was never reviewed against a recorded statement, so it must not outlive its draft.
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const abandoned = await seedUploadDraft({ account });
+      await resolveAll(
+        abandoned.id,
+        [{ raw: "QAALIAS", fields: { kind: "existing", instrumentId: vti.id } }],
+        { probe: async () => new Map() },
+        db,
+      );
+      await db
+        .updateTable("upload_draft")
+        .set({ created_at: sql`now() - interval '25 hours'` })
+        .where("id", "=", abandoned.id)
+        .execute();
+
+      const next = await createDraft({ accountId: account.id, filename: "next.csv", bytes: CSV }, db);
+
+      expect(await db.selectFrom("upload_draft_answer").select("draft_id").execute()).toEqual([]);
+      expect(await db.selectFrom("instrument_alias").select("raw_string").execute()).toEqual([]);
+      expect(await unresolvedStrings(["QAALIAS"], next.id, db)).toEqual(["QAALIAS"]);
     }),
   );
 

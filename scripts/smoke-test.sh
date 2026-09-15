@@ -866,4 +866,7 @@ printf 'GET /oauth2/auth -> %s from the gate\n' "$auth_status"
 # The one exemption still holds — if this ever needs credentials, every uptime monitor pointed here goes blind at once.
 expect_status 200
 
+log "Checking Caddy caps request bodies"
+./scripts/caddy-body-cap-test.sh
+
 log "Smoke test passed"
