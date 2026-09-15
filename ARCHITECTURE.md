@@ -2223,12 +2223,13 @@ and resource routes last. `root.tsx` and `routes.ts` sit one level up and lead t
 everything below is drawn inside the first and listed by the second. The one stylesheet,
 `app/app.css`, belongs to this tree too: several component headers argue decisions, the chart's
 custom properties, `.panel-form`'s wrapping and the mobile card reflow, that are only enforceable
-there.
+there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 
 | File | Role |
 |---|---|
 | `../root.tsx` | The shell every page is drawn inside: the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its `middleware` export, last in the array, starts the price poller, because `react-router-serve` leaves no server entry to hook and the middleware pipeline is the one server path every *request* passes through, resource routes included; a loader would miss `/healthz`, which has no `default`/`ErrorBoundary` to run one for. Also where the lock's `middleware` export lives (`lockMiddleware`, docs/adr/0012), the first rule ever to fill the slot the gate's own middleware never did, refusing a request with no valid grant before `next()` is called, except for the two exempt paths (`/unlock`, `/healthz`). The same file still records, in the same place, that the gate's verified email rides in on every request and is read by nothing |
 | `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons: two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
+| `../fonts/` | Inter, self-hosted, subset to latin, with no third-party round trip to draw a household's finances (DESIGN.md §13.4). Under `app/` rather than `public/` so Vite hashes it into `/assets/`, the one mount served `immutable`; `app.css` names it by relative `url()` and `root.tsx` preloads the same import |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
 | `holdings.tsx` | Every position across every account, §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
 | `analysis.tsx` | The portfolio cut four ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All four breakdowns group one read, since four `GROUP BY` queries would be four more of the hand-rolled dashboard queries §8.2 names as the weakest point |
@@ -2307,7 +2308,6 @@ Static files, served as-is, and all behind the gate like everything else.
 | `sw.js` | The whole service worker (§7.7, ADR-0007): network-only, stores nothing, exists for the inlined offline page. Deliberately hand-written and short enough to verify by eye |
 | `manifest.webmanifest` | The install manifest. Hand-written except the `icons` array, which `scripts/render-icons.ts` owns and rewrites. Its entries are `data:` URIs so installation works from behind the gate (§7.7) |
 | `icon.svg`, `icons/` | The drawing, and the committed rasterisations `render-icons.ts` produces from it |
-| `fonts/` | Inter, self-hosted, subset to latin, with no third-party round trip to draw a household's finances (DESIGN.md §13.4) |
 
 ### `scripts/`
 
