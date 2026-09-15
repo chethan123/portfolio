@@ -3,16 +3,17 @@
 Everything that changes what the app knows, apart from [uploading a statement](upload.md).
 
 **Settings** sits at the foot of the left-hand navigation. Inside it, a strip of tabs: **Overview**,
-**People**, **Accounts**, **Tax**, **Prices**, **Display** and **Passkeys**.
+**People**, **Accounts**, **Instruments**, **Tax**, **Prices**, **Display** and **Passkeys**.
 
 ## Overview
 
-A one-line description of each tab, and a link into it. It also names the three tabs that are **not
-built yet**, so nobody hunts for them:
+A one-line description of each tab, and a link into it. It also names what is **not built yet**,
+so nobody hunts for it:
 
 - **Classifications.** The asset labels an instrument is filed under.
-- **Instruments.** Managing tickers, and typing a price by hand for something with no public quote.
 - **History.** The hand-typed net worth series from before this instance existed.
+- The rest of **Instruments**: managing tickers, and typing a price by hand for something with no
+  public quote. The tab today holds the names a statement taught the app, below.
 
 They are named together, with a sentence and nothing to click. See [Not built
 yet](../../README.md#not-built-yet).
@@ -52,6 +53,24 @@ historical labels and groupings.
 Closing requires acknowledgement and removes the account from current totals. Existing snapshots
 remain for historical queries. Closed accounts cannot accept new uploads or corrections, and
 there is no reopen control. See [account lifecycle](people-and-accounts.md#correcting-or-retiring-an-account).
+
+## Instruments
+
+Every name a recorded statement has taught the app, exactly as the file wrote it, beside the
+instrument it means and how many open accounts hold that instrument today. The next upload reads
+this list before asking anything, so a wrong match here is what silently files a holding under the
+wrong security. Two repairs, each behind a preview:
+
+- **Repoint.** Pick the instrument the name should mean and press **Repoint**. The preview says what
+  the next upload will read the name as, lists the accounts that hold the old instrument today, and
+  lists the recorded statements whose file carries the name. Nothing recorded changes: a holding
+  does not remember which name produced it, so a wrong figure already recorded is fixed by
+  uploading that account's statement again. Confirm with **Repoint it**, or **Keep it as it is**.
+- **Forget.** The next upload naming the string asks what it means, as it did the first time. Use
+  this when the right instrument does not exist yet, since creating one happens on that step.
+
+A change made from another tab in between is refused, not applied over the top: the confirm carries
+the instrument the preview was drawn against.
 
 ## Tax
 

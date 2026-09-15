@@ -202,6 +202,27 @@ to believe that state means, and it is what makes the filter belong to "the read
 the Owner filter entry above names.
 _Avoid_: the filter (for this, since that is the raw selection), the selection, narrowed owners.
 
+### How a statement's names are learned
+
+**First sighting**:
+A name in a statement's instrument column that neither an alias nor that upload's own answers
+resolve. It is asked about once per upload, matched byte for byte, so a respelling of a fund already
+held is a first sighting too.
+_Avoid_: unknown symbol, unresolved ticker, new security, unrecognised instrument.
+
+**Answer**:
+The resolution one upload gave a first sighting: an instrument already listed, or one created there
+and then. It belongs to that upload and is read by it alone until the statement is recorded, when it
+becomes an alias. An upload that is abandoned takes its answers with it.
+_Avoid_: pending alias, draft alias, provisional alias, mapping.
+
+**Alias**:
+A name exactly as a recorded statement wrote it, mapped to the instrument it means. It is the
+household's vocabulary: every upload from every institution reads it before asking anything. It is
+written only when a statement is recorded, and repointed or forgotten under Settings → Instruments,
+never rewriting a holding already recorded.
+_Avoid_: symbol map, lookup, synonym, ticker alias, mapping.
+
 ### How an account is told apart
 
 **Account number**:
