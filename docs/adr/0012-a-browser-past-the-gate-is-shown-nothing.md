@@ -94,7 +94,7 @@ second, unlocked way in.
 ## Consequences
 
 - **The app holds per-request state again**, for the first time since the password gate was deleted.
-  The grant is a session cookie in the mechanical sense, so the documents that say this app
+  The grant cookie is a session cookie in the mechanical sense, so the documents that say this app
   issues none become false and ticket 07 corrects them. It is not a session in the sense those
   documents meant, which was an identity the app authenticates and carries. A grant says one browser
   was unlocked and when, nothing else.

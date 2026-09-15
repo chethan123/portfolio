@@ -321,8 +321,8 @@ them in, and the order that keeps you from chasing `quotes` while `worker` is th
   leaves. There is no line whose presence or absence tells the two apart.
   `docker compose restart app` is the fix either way. Before restarting, `docker compose logs db`
   for a long-running or blocked query is worth a look regardless of which cause this is. The check
-  costs nothing if the timer stopped, and a blocked query is the one thing that would explain a hung
-  tick and be worth fixing before the next one wedges the same way.
+  costs nothing if the timer stopped, and a long-running or blocked query is the one thing that
+  would explain a hung tick and be worth fixing before the next one wedges the same way.
 - **`scheduler`: `running`** with no other symptom is ordinary. A tick is in flight. Poll again; if
   it is still `running` well past when a tick should have finished, treat it the same as `overdue`'s
   second case above.

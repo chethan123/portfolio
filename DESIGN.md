@@ -1548,7 +1548,7 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     statement (§6.2, [ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)).
     Detecting it would need a source of symbol history this instance does not have. One more limit
     comes with it: while a gap is still open, the chart draws a partially-priced past date on the
-    ordinary solid line and says nothing. That gap is the half of
+    ordinary solid line and says nothing. That silence is the half of
     [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer. It
     is filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
 15. **A browser without a live grant cannot unlock without running the passkey ceremony, once the

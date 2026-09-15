@@ -302,8 +302,8 @@ learns.
   only guarantees you keep getting the bytes it recorded, whether or not those were the bytes the
   registry published. CI also blocks on `npm audit --omit=dev --audit-level=high`.
 - CI **fails the build if any production entry in the lockfile declares `hasInstallScript`, `os` or
-  `cpu`**, and the image publish depends on that job. The flag removes the most common way a poisoned
-  package runs. It checks what the lockfile *declares*, not what a tarball holds: a package
+  `cpu`**, and the image publish depends on that job. The check removes the most common way a poisoned
+  package runs. It reads what the lockfile *declares*, not what a tarball holds: a package
   shipping a prebuilt native addon or a WASM blob and loading it at import time declares none of the
   three and passes.
 - The release image prunes the dev tree and unreachable runtime dependencies, and deletes the
