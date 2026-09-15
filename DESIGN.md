@@ -211,8 +211,8 @@ unresolved-instruments step; renaming or retiring one is the Classifications tab
 
 Each classification rolls up to an `asset_class` (`equity | bond | cash | other`) so the app can
 answer both "how much in S&P500 funds" and "what is my overall stock/bond split". The user's labels
-mix axes: instrument kind, index tracked, geography, asset class. That is fine for labelling but
-does not aggregate on its own; the rollup column supplies that.
+mix axes: instrument kind, index tracked, geography, asset class. Mixing axes is fine for labelling
+but does not aggregate on its own; the rollup column supplies that.
 
 A target-date fund maps to `other`, which honestly reports "cannot be split" rather than silently
 landing in equity or bonds.
@@ -226,12 +226,13 @@ about the instrument and the user's labels mix axes. A label list that aggregate
 cannot answer it. So the provider's vocabulary does reach the screen, in exactly one place, matched
 against an explicit list of three values. The column is written from the provider's answer at the
 moment an instrument is created, since the resolution step already probes the symbol and that probe
-now carries the type back rather than discarding it. It is refreshed on every poll, which is what
-makes it true of instruments created before it was written at all. The consequence is worth stating
-plainly. An instrument nobody quotes, a workplace-plan trust priced by hand with no `quote_type`
-at all, lands in that panel's catch-all row rather than under stocks or funds. The mitigation is that the catch-all is a
-row on the table with its own figures and not a discard, so the holding is visible, it is counted,
-and the panel's total still reconciles with the portfolio behind it.
+now carries the type back rather than discarding it. The column is refreshed on every poll, which is
+what makes it true of instruments created before it was written at all. The consequence is worth
+stating plainly. An instrument nobody quotes, a workplace-plan trust priced by hand with no
+`quote_type` at all, lands in that panel's catch-all row rather than under stocks or funds. The
+mitigation is that the catch-all is a row on the table with its own figures and not a discard, so
+the holding is visible, it is counted, and the panel's total still reconciles with the portfolio
+behind it.
 
 ### 4.5 Tax treatment
 
@@ -422,10 +423,11 @@ interface PriceProvider {
 }
 ```
 
-Two implementations answer to this interface today, and only one of them imports the library at
-all: inside the separate `worker` container (§10.1), reached through `server/yahoo-client.ts`. The
-app's own implementation dials the worker's unix socket instead and never touches `yahoo-finance2`
-directly. That is the split spec 0018 made, argued in §10.1 and [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
+Two implementations answer to this interface today, and only one of them imports the library at all:
+inside the separate `worker` container (§10.1), reached through `server/yahoo-client.ts`. The app's
+own implementation dials the worker's unix socket instead and never touches `yahoo-finance2`
+directly. Spec 0018 made that split. The argument for it is in §10.1 and
+[ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
 
 Chosen after comparing alternatives against the requirement that actually discriminates them,
 **mutual fund NAV coverage**, since 401k and IRA accounts are overwhelmingly mutual funds:
@@ -452,13 +454,13 @@ foreign-listed instrument cannot silently sum GBP into a USD total.
 
 Background polling runs on the **household's refresh cadence from 15 minutes before through 15
 minutes after regular market hours**, a whole number of minutes set at Settings → Prices, seeded to
-15 (§8.4). There is also **Refresh now**, a control beside the as-of line on every figure screen,
-which spends one provider request on demand (spec `pricing/06`). The padding can recover the prior
-close before open and a delayed close afterward without introducing a separate boundary-aligned
-scheduler. The press calls the refresh directly rather than waking the poller, so it works outside
-market hours. That is how a position added on a Saturday gets its first price. What the pricing UI
-still owes is `pricing/05`: the page-level stale summary and the Settings → Instruments tab.
-Pages read the database and never fan out to the API on render.
+15 (§8.4). Alongside it sits **Refresh now**, a control beside the as-of line on every figure
+screen, which spends one provider request on demand (spec `pricing/06`). The padding can recover the
+prior close before open and a delayed close afterward without introducing a separate
+boundary-aligned scheduler. The press calls the refresh directly rather than waking the poller, so
+it works outside market hours, which is how a position added on a Saturday gets its first price.
+What the pricing UI still owes is `pricing/05`: the page-level stale summary and the Settings →
+Instruments tab. Pages read the database and never fan out to the API on render.
 
 Streaming was rejected on the grounds that mutual funds have no intraday price at all, striking
 one NAV after the close, so a live tick pipeline would leave a large share of the balance sheet
@@ -527,7 +529,7 @@ value carrying forward until changed. The form belongs to the unbuilt Settings �
 
 **History starts at day zero, for positions.** The first upload creates the first position set, and
 nothing loads position history the household did not upload. The *price* spine is no longer bound by
-that rule. It is filled backwards from the feed as far as the positions reach
+that rule, and is filled backwards from the feed as far as the positions reach
 ([ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), §6.2), because a
 statement dated before the spine began would otherwise be valued without its securities.
 
@@ -880,8 +882,8 @@ Compose names the first missing value and stops, so a half-configured instance n
 
 The image is **published, not built on the host**. Pushing a `v*` tag builds it once for
 `linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry; the Compose file pulls
-it. This is what removes the Node build, and the memory to run it, from the list of things a NAS
-or a small VPS has to be able to do. Two consequences that are load-bearing:
+it. Publishing the image removes the Node build, and the memory to run it, from the list of things a
+NAS or a small VPS has to be able to do. Two consequences that are load-bearing:
 
 - **The deployment file cannot build.** `compose.yaml` has no `build:` stanza, so an unreachable
   registry or a tag that does not exist fails immediately instead of quietly starting a
@@ -1055,18 +1057,19 @@ Postgres rather than on disk (§5.2) specifically to preserve this property.
 the repository root. It is the only container that publishes a port, which is what keeps the app and
 the gate off the host's network. Everything inside speaks plain HTTP and believes what Caddy puts on
 a request, and that is only sound while the set of things that can connect to them is Caddy alone.
-It is also what makes the gate airtight, by the same fact. There is no way to the app that does not
-pass the front door.
+That same fact also makes the gate airtight. There is no way to the app that does not pass the
+front door.
 
 **Two proxies, and the split is deliberate.** This stack's Caddy enforces sign-in and nothing else
-touches it. The operator's house-wide proxy in front owns TLS and the public hostname. This is a
-household that already runs one for every other self-hosted app, and duplicating certificate
-lifecycle inside the stack would buy nothing. It is deliberately *not* trusted with enforcement,
-because a device on the LAN can dial this box's published port and land on this stack's Caddy
-directly, and that device is exactly the threat. The consequence for the app is one hop more of
-forwarded headers to survive, which `ARCHITECTURE.md` §2 and §7.6 are the place for. The consequence
-for the operator is that `PUBLIC_ORIGIN` must be the `https://` origin their proxy serves, which is
-also what supplies the secure context the installed app (§11, ADR-0007) requires.
+touches it. The operator's house-wide proxy in front owns TLS and the public hostname. The reader
+here is a household that already runs one for every other self-hosted app, and duplicating
+certificate lifecycle inside the stack would buy nothing. That house-wide proxy is deliberately
+*not* trusted with enforcement, because a device on the LAN can dial this box's published port and
+land on this stack's Caddy directly, and that device is exactly the threat. The consequence for the
+app is one hop more of forwarded headers to survive, which `ARCHITECTURE.md` §2 and §7.6 are the
+place for. The consequence for the operator is that `PUBLIC_ORIGIN` must be the `https://` origin
+their proxy serves, which is also what supplies the secure context the installed app (§11, ADR-0007)
+requires.
 
 ---
 
@@ -1338,10 +1341,10 @@ to be one group. The grey also holds its own against its wedge neighbours under 
 simulation (ΔE 8.7 light / 10.8 dark beside rank 5). Each folded row keeps its own value and
 percentage in the table; only the picture merges them, and the panel says so when it happens.
 
-These are fills, not text, so 3:1 against the panel is the bar they have to clear. The lightest
-slots do not clear it: yellow (2.2:1) and magenta (2.7:1) on white, blue (2.6:1) on the dark panel.
-The slices are large enough to be identifiable anyway; the 12px legend dots are not, so **every
-legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
+These colours are fills, not text, so 3:1 against the panel is the bar they have to clear.
+The lightest slots do not clear it: yellow (2.2:1) and magenta (2.7:1) on white, blue (2.6:1) on the
+dark panel. The slices are large enough to be identifiable anyway; the 12px legend dots are not, so
+**every legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
 which carries every figure the wedges do not.
 
 Colour is also never the only way to tell a wedge from its row. **Every arc carries a browser
@@ -1520,7 +1523,7 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    nobody reads. The UI labels it a **lower bound**, but that label is not a mathematical guarantee when
    borrowing costs are missing. Lifting this means deciding per row from whether the
    instrument was ever quoted, where a refreshed `quote` row means the provider answered and `fixed`
-   or `manual` means it was never asked. That is a change to one derivation, not to the schema.
+   or `manual` means it was never asked. That would change one derivation, not the schema.
 10. **There is no sign-out control, and the gate's sign-out URL is not one.** It clears the gate's
     own cookie and nothing else, so with sign-in going straight to Google the next visit re-admits
     silently. To the person who used it, that looks exactly like it did not work. The levers that
@@ -1560,9 +1563,9 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     statement (§6.2, [ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)).
     Detecting it would need a source of symbol history this instance does not have. One more limit
     comes with it: while a gap is still open, the chart draws a partially-priced past date on the
-    ordinary solid line and says nothing. That is the half of
-    [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer,
-    filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
+    ordinary solid line and says nothing. That silence is the half of
+    [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer. It
+    is filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
 15. **A browser without a live grant cannot unlock without running the passkey ceremony, once the
     household holds one.** Ordinary requests never touch the ceremony at all. The root middleware
     checks only whether this browser already holds a live grant, so one that does keeps reading
@@ -1582,14 +1585,14 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     carries no timestamp a server could compare against, so a provider whose vault is already
     unlocked may return a verified assertion without prompting anyone. A passkey the household
     enrols may be *eligible* to sync too, and Settings marks that capability, never proof a copy has
-    actually been made anywhere. That is the same limit restated:
+    actually been made anywhere. That restates the same limit:
     **the lock is only as strong as whatever unlocks the passkey provider on that device**
     ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) states all three as
     properties of the web platform, not of this implementation).
 17. **A compromised worker can poison a price, and nothing downstream can check it against a second
     source.** What crosses the socket (§6.2) is checked for shape only: a ceiling on the price
     itself, a window on how recent a quote's date may be, a floor on how far back a backfilled close
-    may reach. It is never checked for truth, so a hostile symbol still prices the wrong instrument
+    may reach. None of it is checked for truth, so a hostile symbol still prices the wrong instrument
     and a hostile answer can rewrite the stocks-versus-funds split a screen reads by. Bounding the
     price does not bound `quantity × price`; a large enough holding still overflows the column the
     ceiling was meant to protect, caught instead by a write-time guard on the quantity side. Closing
@@ -1609,9 +1612,9 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     scoped to what the app actually needs is real work, opened by this slice and not done in it.
 20. **A legitimate symbol can be too long for the worker to accept.** The pattern the worker checks
     binds at fifteen characters; the app's own rule on a stored symbol tolerates up to forty. A
-    symbol that uses the difference never refreshes. It is shown stale, with a log line naming it,
-    and the fix is narrowing where the longer bound is still needed, not widening the worker's
-    pattern back out toward the internet.
+    symbol that uses the difference never refreshes and is shown stale, with a log line naming it.
+    The fix is narrowing where the longer bound is still needed, not widening the worker's pattern
+    back out toward the internet.
 21. **The app's last route out is an application-layer one, not closed.** Neither network `app` sits
     on carries a default route, so it reaches nothing off them at IP level. It can still reach
     `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which has egress of its own, so a

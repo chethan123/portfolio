@@ -16,8 +16,8 @@ counting as zero. See [prices.md](prices.md).
 - **Net worth by owner**: who owns what.
 - **Value by account type**: Brokerage, Workplace plan, IRA, Bank, Liability.
 - **Value by asset class**: Equity, Bonds, Cash, Other.
-- **Value by classification**: your own labels, exactly as instruments were filed under them
-  when first uploaded. It is the finer cut the asset-class rollup coarsens.
+- **Value by classification**: your own labels, exactly as instruments were filed under them when
+  first uploaded. That breakdown is the finer cut the asset-class rollup coarsens.
 
 Each table has three columns: the name, its **Value**, and its **% of total**. The ring beside it
 is a picture of the same rows, and the figure in the hole of it is total net worth.
@@ -40,10 +40,10 @@ reasoning is in [the project tour](../../README.md#analysis-where-the-money-actu
 
 ### More than five rows
 
-Everything past the fifth row shares one grey wedge. It is grey on purpose, so the merged
-remainder never looks like one of the five coloured groups. Each row keeps its own value and its
-own percentage in the table; only the picture merges them. The panel says so when two or more rows
-share the wedge; a lone sixth row is grey on its own, with nothing to explain.
+Everything past the fifth row shares one grey wedge. The wedge is grey on purpose, so the merged
+remainder never looks like one of the five coloured groups. Each row keeps its own value and its own
+percentage in the table; only the picture merges them. The panel says so when two or more rows share
+the wedge; a lone sixth row is grey on its own, with nothing to explain.
 
 You never have to match a wedge to its row by colour. **Hover any wedge** and it names the group
 and its exact share, or lists the members of the grey wedge.
@@ -65,9 +65,10 @@ holdings contribute. Potential tax is dashed when there is no positive taxable g
 ### Only a taxable account can owe the tax
 
 A gain inside an IRA or a 401k appears under **Unrealized** and contributes nothing to **Potential
-tax**. The panel says so under the table. That is not a rounding decision. A Roth withdrawal is
-not taxed at all, and a traditional one is taxed as ordinary income on the way out, so neither
-belongs at a capital gains rate.
+tax**. The panel says so under the table. Excluding them from **Potential tax** is not a rounding
+decision. A Roth
+withdrawal is not taxed at all, and a traditional one is taxed as ordinary income on the way out, so
+neither belongs at a capital gains rate.
 
 The rows stay in the table either way, because dropping them would hide the largest distinction
 on the balance sheet.
@@ -77,9 +78,9 @@ on the balance sheet.
 The panel header reads "Taxed at 23.8% · change rate". The link goes to Settings → Tax, where the
 household's own rate is set; see [settings.md](settings.md).
 
-23.8% is only the starting value. It is the 20% long-term capital gains rate plus the 3.8% net
-investment income tax. A household in a lower bracket, or in a state that taxes gains of its own,
-has a different number.
+23.8% is only the starting value, the 20% long-term capital gains rate plus the 3.8% net investment
+income tax. A household in a lower bracket, or in a state that taxes gains of its own, has a
+different number.
 
 Nothing anywhere else on any screen uses this rate, and no figure is filed with it.
 

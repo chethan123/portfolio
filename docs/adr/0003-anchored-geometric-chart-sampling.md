@@ -33,7 +33,8 @@ exact spans the redesign exists to fix.
 ## Consequences
 
 - Computing the geometric ratio needs a small numeric solve (bisection over a strictly monotonic
-  function), rather than a closed-form formula. It is confined to one pure function with no I/O.
+  function), rather than a closed-form formula. The solve is confined to one pure function with no
+  I/O.
 - The 180-sample budget is a new tunable this module didn't previously have; raising or lowering it
   changes chart density for every long-range preset at once.
 - The output stays the same shape, an ordered list of ISO dates, so every other consumer of the
