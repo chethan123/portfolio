@@ -518,6 +518,27 @@ describe("the canonical bounce, through a real URL", () => {
 
 describe("correcting one row", () => {
   it(
+    "refuses a correction against a position the account no longer carries, keeping what was typed and writing nothing",
+    withDatabase(async (ctx) => {
+      const { account, instrument, rowKey } = await seedOnePosition(ctx);
+      // A later statement without the row: the editor was opened before it landed.
+      await ctx.seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
+
+      const outcome = await outcomeOf(() =>
+        action(args(post(`/holdings?edit=${rowKey}`, { quantity: "150", costBasisPerShare: "" }))),
+      );
+
+      // Rendered beside the form with what was typed kept, not a redirect claiming it landed.
+      expect(outcome).not.toBeInstanceOf(Response);
+      expect(outcome).toMatchObject({
+        errors: { form: expect.stringMatching(/no longer carries this position/) },
+        values: { quantity: "150", costBasisPerShare: "" },
+      });
+      expect(await currentPosition(account.id, instrument.id, ctx.db)).toBeNull();
+    }),
+  );
+
+  it(
     "refuses a correction whose address names no row, and writes nothing",
     withDatabase(async (ctx) => {
       const { account, instrument } = await seedOnePosition(ctx);

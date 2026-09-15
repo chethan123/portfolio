@@ -400,18 +400,19 @@ grep. They come in three tiers.
 | Everything read off a closed vocabulary: an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind, one for which kinds hold their whole position in one number and one for which run negative, are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data, because the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 | Settling the owner-filter reading: the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading`, what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it. For the chart's reads they name it to the module that makes them, which §6.3 sets out. Either way, whose money a loader reads stays visible in review rather than hidden inside this one. |
+| Appending to an account's history, and closing the account | `app/lib/accounts.server.ts` | `withAccountLock` takes `select … for no key update` on the account row inside one transaction and hands the writer the row it locked. The obligation is on every writer that inserts a `position_set`, and on `closeAccount`: run inside it from the read decided on to the insert, and thread its transaction through every query on the way. A writer that reads the latest set outside it reintroduces #283 (§7.2). |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:125` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:132` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 | Whose money a screen is reading | The readers' own signatures, where the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons, both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip, since a new screen can pass `ALL_OWNERS` and draw no control. It can only make the filter **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:783` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:775` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -422,7 +423,7 @@ grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:413` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
   compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -521,12 +522,15 @@ rather than a number to notice.
 | Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes, a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes, a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:528`) |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:520`) |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No. The intraday tier is overwritten by design |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes. It fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
+The first three, the writers of history, run inside `withAccountLock` (§4.2, §7.2), and
+`closeAccount` with them; the rest touch no account's history.
+
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:161` edits an account and `:238` closes one, `people.server.ts:117`
+CRUD should: `accounts.server.ts:189` edits an account and `:268` closes one, `people.server.ts:117`
 renames a person and `:138` deletes one outright when they own no accounts, `settings.server.ts:29`
 writes the tax rate, `column-mapping.server.ts:50` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
@@ -734,7 +738,7 @@ split is exact and each side is a decision:
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
 performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
-instrument that lost an alias race (`instrument-resolution.server.ts:528`) are the only two
+instrument that lost an alias race (`instrument-resolution.server.ts:520`) are the only two
 application deletes reaching that half, there is no account delete and no position-set delete
 anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
 about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
@@ -781,10 +785,14 @@ in `0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per accoun
 `created_at desc` then `id desc`. Re-uploading a correction for an as-of date that already has a set
 is a real occurrence; without the tie-break the answer is a coin flip. Surrogate keys are `bigint
 generated always as identity` precisely so that "tie-break by id descending" means "the later insert
-wins". A random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
-exactly, so this is an index scan stopping at the first row.
+wins". A random UUID would make it arbitrary. `created_at` is stamped by `statement_timestamp()` at
+the insert, not `now()` at `BEGIN` (`0013_position_set_created_at.sql`): a writer that waited for
+the account lock (§7.2) began its transaction before the set it then copies forward, and a
+`BEGIN`-time stamp would sort its set, the one carrying both edits, behind the one it waited for.
+The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping
+at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:852`) needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -958,7 +966,7 @@ button and a bookmarked half-finished upload all behave, and it is why the mappi
 delimiter rather than letting a second sniff reach a different verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:437`) folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -1095,13 +1103,16 @@ There is deliberately **no skip**. A skipped row is a holding silently missing f
 
 #### Commit: the flow's one write
 
-`commitUpload` is the deepest function in the codebase, three parameters over an entry check, seven
-guards and a transaction. The order is the design:
+`commitUpload` is the deepest function in the codebase, three parameters over an entry check, the
+account lock, seven guards and a transaction. The order is the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> A1{"draft still there?"}
-    A1 -->|no| R0["404 — swept, or already committed"]
+    A["commitUpload(draftId, input)"] --> A0{"draft still there?<br/>(only to learn which account)"}
+    A0 -->|no| R0["404 — swept, or already committed"]
+    A0 -->|yes| T["BEGIN, lock the account row<br/>(withAccountLock, §7.2)"]
+    T --> A1{"draft still there,<br/>read under the account lock?"}
+    A1 -->|no| R0
     A1 -->|yes| B{"account closed?"}
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
@@ -1120,9 +1131,7 @@ flowchart TD
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
     H -->|no| I{"majority removed and<br/>not confirmed?"}
     I -->|yes| R7["refuse, stating the ratio"]
-    I -->|no| T["BEGIN"]
-
-    T --> T1["DELETE the draft FIRST"]
+    I -->|no| T1["DELETE the draft FIRST"]
     T1 --> T2{"0 rows deleted?"}
     T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT"]
     T2 -->|no| T3["INSERT position_set"]
@@ -1144,17 +1153,20 @@ Three of those deserve emphasis:
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking both multiplications before storing turns a site-wide outage into one sentence
   about one row.
-- **Delete-first as the transaction's guard.** The draft's deletion leads: a concurrent commit that
-  got here first has already taken the row, so `numDeletedRows === 0` aborts everything, and nothing
-  before that point wrote anything. The entry check at the top is the cheap version of the same
-  question; this one is the version that is safe under a race.
+- **Everything under the account lock, and delete-first inside it.** The first draft read only
+  learns which account to lock; the draft is read again once the row is held, so a concurrent
+  commit of the same draft waits, finds the row gone, and gets its 404 before it has decided
+  anything. The deletion still leads the writes, and `numDeletedRows === 0` still aborts
+  everything: no commit reaches it now, but `createDraft`'s 24-hour sweep runs under no lock, so a
+  day-old draft can still vanish between the re-read and the delete.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:776-782`, guarded by
-`where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
-itself on the first upload, and every later statement is checked against it.
+file carries one, the commit writes it onto the account (`uploads.server.ts:817-824`, guarded by
+`where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
+predicate stays as the write's own statement of the rule). The guard arms itself on the first upload,
+and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
@@ -1508,25 +1520,29 @@ more ceremony than the fact deserves.
 | The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL, so a correction can never file *behind* the statement it corrects |
 | The sign | **Derived, never typed.** The household types what they owe and the module negates it | **Refused if it flips in one edit.** Zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
 | Guards, in order | Account exists → kind accepts it → not closed → the seeded `USD` row exists → the current statement lists nothing but that row → fields parse | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
-| Atomicity | One statement, a data-modifying CTE, with the pre-check repeated **inside** the write; zero rows written is the refusal | The same, asked of one position rather than of the whole statement |
+| Atomicity | One transaction under the account lock (§7.2), and inside it one statement, a data-modifying CTE, so the set and its row land together or not at all; the pre-check is repeated **inside** the write, and zero rows written is still a refusal | The same, asked of one position rather than of the whole statement |
 
 **Why one statement and not two.** A `position_set` that landed without its holdings would not read as
 a failed write. It would read as a *successful* one meaning "this account now holds nothing", and by
 the tie-break it would outrank every earlier statement. Both writers are therefore a single
 data-modifying CTE, so the set and its rows exist together or not at all.
 
-**Why both writers ask their question twice.** `currentPosition` and `currentStatement` run before
-the write as ordinary pre-checks, so the form can refuse politely and name what is in the way. Those
-reads race. The checks that do not are inside the writes themselves: `revisePosition`'s `source` CTE
-selects `latest_position_set(...)` *and* requires the instrument still be in it
-(`positions.server.ts:220-235`), and `setBalance`'s `guard` CTE requires that same set to hold
-nothing but the cash row it is replacing (`balances.server.ts:122-141`). Both inserts select from
-those CTEs, so an account that changed underneath an open form produces no rows at all, no position
-set and no holding, and "nothing landed" is what becomes the refusal.
+**Why both writers take the account lock.** `currentPosition` and `currentStatement` run before the
+write so the form can refuse politely and name what is in the way, and until #283 those reads
+raced: two corrections to different rows each copied the same latest set forward, and whichever
+landed last restated the account without the other's edit. Every writer that appends a position
+set, and `closeAccount`, now runs inside `withAccountLock` (`accounts.server.ts:141-159`): `select
+… for no key update` on the account row, one transaction from the read the writer decides on to its
+insert, so the later writer's read is the earlier writer's commit. The in-write checks stay, because
+the data-modifying CTE is what makes the set and its rows one statement: `revisePosition`'s `source`
+CTE still requires the instrument be in the latest set (`positions.server.ts:234-262`) and
+`setBalance`'s `guard` CTE still requires that set to hold nothing but the cash row
+(`balances.server.ts:132-149`), and a write that selects nothing is still a refusal rather than a
+half-landed set.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
-change behind it, because `createDraft` (`uploads.server.ts:120`) reads only whether the account is
+change behind it, because `createDraft` (`uploads.server.ts:137`) reads only whether the account is
 closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1569,26 +1585,30 @@ an address is not a refusal.
 ### 7.2 Transactions and concurrency
 
 Single-instance deployment makes contention unlikely rather than impossible. A restart can overlap a
-still-shutting-down container, and a determined operator can run two.
+still-shutting-down container, a determined operator can run two, and two browser tabs are two
+requests on one process whatever the deployment, which is how #283 was reproduced.
 
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
 | Two refreshes anywhere, from a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's. The checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
-| Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
+| Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Deleting the draft still leads the writes, and zero rows deleted still aborts everything, which only the unlocked 24-hour sweep can now cause | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:159` is the earlier, racing pre-check | `positions.server.ts:220-235` |
-| A balance typed against a statement that changed under it | The same shape: the write's own `guard` CTE requires the latest set to list nothing but the cash row being replaced, so a statement that landed in the gap leaves both inserts nothing to select from. `currentStatement` at `:95` is the earlier, racing pre-check | `balances.server.ts:122-141` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows, never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:161` |
-| An account closed while a draft sat open | Checked *before* field validation, in every write path | all three writers |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts:141-159`, taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
+| A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0013_position_set_created_at.sql` |
+| A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
+| A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
+| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock. Its `update` does queue behind a writer holding the account row, but the read it decided on may predate that writer; what the gap can cost is a label briefly disagreeing with the rows, never a row, because `setBalance` re-reads the rows under the lock | `accounts.server.ts:189` |
+| An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:268` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
 `7295380114023641` (migrations) and `…42` (poller). With a shared key the collision would be
 one-directional rather than mutual: the migration takes a blocking `pg_advisory_lock` and would queue
 behind a poll, while the poller takes `pg_try_advisory_lock` and would simply drop its tick.
 
-**`inTransaction` and the test seam.** Three modules carry the same small helper:
+**`inTransaction` and the test seam.** One helper in `db.server.ts`, used by `prices.server.ts`,
+`instrument-resolution.server.ts` and `withAccountLock`:
 
 ```ts
 db.isTransaction ? body(db) : db.transaction().execute(body)
@@ -1973,6 +1993,9 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 │  migrations.test.ts · numeric.test.ts                                    │
 │  They open their own pool because what they test IS the pool and the     │
 │  migration runner — the things withDatabase depends on.                  │
+│  lock · lock-schema · account-lock, and one price-backfill case: they    │
+│  commit (races on two connections, a real ledger write) and sweep        │
+│  their own rows, so the database is still left as found                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -2111,9 +2134,6 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **`inTransaction` exists three times**, identically, in `prices.server.ts`,
-  `instrument-resolution.server.ts` and `uploads.server.ts`. All three already import from
-  `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
@@ -2157,16 +2177,16 @@ still live in the current code:
 | `validate-config.ts` | The startup gate. It fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:220`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
 | `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host. The `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/`: domain (`.server`) and pure
 
 | File | Role |
 |---|---|
-| `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
+| `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write |
+| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write, run inside the account lock (§7.2) |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill: its candidate query, its batch, its ledger, and the composition every refresh runs |
@@ -2178,9 +2198,9 @@ still live in the current code:
 | `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
-| `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
-| `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
-| `accounts.server.ts` | Accounts. Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
+| `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
+| `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
+| `accounts.server.ts` | Accounts, and `withAccountLock`, the row lock every position-set writer and `closeAccount` run inside (§7.2). Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading`, what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
@@ -2297,6 +2317,7 @@ also export pure helpers for testing.
 | `0010_price_backfill.sql` | `price_backfill`, one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
 | `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
+| `0013_position_set_created_at.sql` | `position_set.created_at` defaults to `statement_timestamp()`, the insert, not `now()`, the `BEGIN`, so a writer that waited for the account lock still sorts after the set it copied (§7.2) |
 
 ### `public/`
 

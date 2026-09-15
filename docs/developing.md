@@ -645,8 +645,10 @@ rm -rf .react-router build && npm run typecheck     # regenerate route types and
 An afternoon of clicking around leaves rows the seed did not write, and a database in that state
 without a `demo_seed` marker is exactly what it refuses. Drop it and recreate it instead.
 
-There is nothing to clean up after a test run: every test body is rolled back, so the suite leaves the
-database exactly as it found it, including after a failure.
+There is nothing to clean up after a test run: every test body is rolled back, and the few tests
+that have to commit (the two-connection races in `lock`, `lock-schema` and `account-lock`, and one
+`price-backfill` case) sweep their own rows, so the suite leaves the database exactly as it found
+it, including after a failure.
 
 **What is not available**, so you stop looking:
 

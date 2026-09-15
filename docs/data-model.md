@@ -297,7 +297,7 @@ the set's holdings go with it by cascade. No screen offers the delete.
 | `source` | `text` | no | `upload` \| `manual` (CHECK) |
 | `source_filename` | `text` | yes | null for a manual balance entry |
 | `raw_file` | `bytea` | yes | the original CSV bytes, retained so a mis-mapped column can be re-parsed into a *new* set without re-downloading a statement the brokerage may no longer offer |
-| `created_at` | `timestamptz` | no | default `now()`; the tie-break when two sets share an `as_of_date` |
+| `created_at` | `timestamptz` | no | default `statement_timestamp()`, the insert rather than the transaction's start, so a writer that waited for the account lock still sorts after the set it copied ([ARCHITECTURE.md §7.2](../ARCHITECTURE.md#72-transactions-and-concurrency)); the tie-break when two sets share an `as_of_date` |
 
 Index: `position_set_account_as_of_idx` on
 `(account_id, as_of_date desc, created_at desc, id desc)`, the exact ordering

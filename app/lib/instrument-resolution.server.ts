@@ -2,7 +2,7 @@
 // step 04). Byte-exact lookup (raw_string collate "C") — no fuzzy merge onto the wrong fund; a
 // miss prompts once, remembered forever. Written here, not at commit, so a re-upload of a fixed file doesn't ask again.
 import { isAssetClass } from "./account-options.ts";
-import { getDb, type Database } from "./db.server.ts";
+import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
 
 import type { ProbeSymbols } from "./price-provider.server.ts";
@@ -172,14 +172,6 @@ type CreatePlan = {
 };
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
-
-// Kysely refuses .transaction() on a transaction; the test seam is one (prices.server.ts has the same helper).
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
 
 // Resolves every unresolved string in one submit, refusing the whole with a message per field
 // (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name
