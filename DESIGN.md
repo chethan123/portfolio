@@ -191,7 +191,9 @@ Three reasons:
    any retail API. These carry `symbol = NULL` and `price_source = manual`.
 3. **The alias table is the CSV symbol resolver.** Brokerages disagree on naming: `VTI`,
    `VANGUARD TOTAL STOCK MARKET ETF`, or a bare CUSIP. Rather than normalisation heuristics, the
-   importer looks up the raw string; a miss prompts you once and is remembered permanently.
+   importer looks up the raw string; a miss prompts you once, and the answer becomes vocabulary
+   when the statement is recorded. An upload abandoned before then teaches the next one nothing,
+   and a wrong answer is repointed or forgotten under Settings → Instruments (§8.4).
 
 Aliases are **global, not per-brokerage**. Fidelity's `CASH` and Schwab's `Cash & Cash Investments`
 are two alias rows pointing at the same `USD` instrument. Genuine collisions across brokerages
@@ -747,15 +749,16 @@ mutation. Everything else that writes lives behind Settings.
 | Accounts | Create, edit, close. Owner, kind, institution, tax treatment. Closing preserves history (`closed_at`) |
 | People | Create, edit |
 | Classifications | Create, rename, assign `asset_class` |
-| Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
+| Instruments | View, repoint and forget aliases, each change previewed against what is recorded. Edit symbol, price source, classification. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
 | Prices | The refresh cadence, meaning how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours. Also the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
 | Display | The masking policy; theme follows the system until §12's toggle is built |
 | Passkeys | Enrol and remove credentials used by the household browser lock |
 
-Classifications, Instruments and History are not built yet: the strip today is People, Accounts,
-Tax, Prices, Display and Passkeys. The Settings index names the other three as future work.
+Classifications and History are not built yet, and Instruments holds only its alias half so far: the
+strip today is People, Accounts, Instruments, Tax, Prices, Display and Passkeys. The Settings index
+names the rest as future work.
 
 Tax rate, masking policy, and refresh cadence are household preferences stored in `app_setting`.
 Environment variables configure the deployment; changing a household preference needs no redeploy.
@@ -787,8 +790,9 @@ gate in front of the instance (§10) keeps a *person* out while the lock
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments
 have gone stale?", a question you must revisit on a schedule, since CIT prices don't update
-themselves. It's also where a ticker change (§4.3) gets applied and where a bad alias gets
-repointed. Buried as row affordances, those are undiscoverable exactly when needed.
+themselves. It's also where a ticker change (§4.3) gets applied, and it is already where a bad
+alias gets repointed or forgotten, behind a preview of what stays recorded. Buried as row
+affordances, those are undiscoverable exactly when needed.
 
 **Manual balance editing is the exception and does not live in Settings.** It's the one write
 allowed on mobile (§11), so it lives on the account's own page, one tap from the account cell on

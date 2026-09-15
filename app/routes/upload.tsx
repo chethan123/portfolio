@@ -94,7 +94,8 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
             <p>
               Map the file's columns once per institution — the mapping is remembered and
               applied to every later export with the same header. Anything the file names that
-              has never been seen before is resolved once, then remembered forever.
+              has never been seen before is resolved once, and remembered once the statement
+              is recorded.
             </p>
             <p>
               The last step shows exactly what this statement changes — every removal listed in
