@@ -4,7 +4,7 @@
 // recorded, when commitUpload promotes it to vocabulary (issue #291): an abandoned draft's wrong
 // match must not resolve the next upload silently. A global row wins over a draft's answer.
 import { isAssetClass } from "./account-options.ts";
-import { getDb, type Database } from "./db.server.ts";
+import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError } from "./input.server.ts";
 
 import type { ProbeSymbols } from "./price-provider.server.ts";
@@ -207,14 +207,6 @@ type CreatePlan = {
 };
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
-
-// Kysely refuses .transaction() on a transaction; the test seam is one (prices.server.ts has the same helper).
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
 
 // Resolves every unresolved string in one submit, refusing the whole with a message per field
 // (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name

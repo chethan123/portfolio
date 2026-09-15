@@ -9,7 +9,7 @@ import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
-import { getAccount } from "./accounts.server.ts";
+import { getAccount, withAccountLock, type Account } from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
@@ -163,10 +163,10 @@ export async function createDraft(
   return { id: row.id, accountId: account.id };
 }
 
-// The two account facts only the commit reads: closed underneath it, and the guarded number.
+// One account fact beyond the draft: closed underneath it, which requireDraft reads as expired.
+// commitUpload reads the account from the row it locked instead.
 type DraftRecord = UploadDraft & {
   accountClosedAt: Date | null;
-  accountNumber: string | null;
 };
 
 // Closed accounts stay in: requireDraft reads one as expired, commitUpload owes it a sentence.
@@ -211,8 +211,23 @@ async function findDraft(
     hadFirstSightings: row.had_first_sightings,
     createdAt: row.created_at,
     accountClosedAt: row.closed_at,
-    accountNumber: row.external_account_number,
   };
+}
+
+// Ahead of the lock, deciding only which account to take it on; the draft is read again under it.
+async function draftAccountId(
+  draftId: string,
+  db: Kysely<Database>,
+): Promise<string | undefined> {
+  if (!/^\d+$/.test(draftId)) return undefined;
+
+  const row = await db
+    .selectFrom("upload_draft")
+    .select("account_id")
+    .where("id", "=", draftId)
+    .executeTakeFirst();
+
+  return row?.account_id;
 }
 
 export async function requireDraft(
@@ -404,14 +419,6 @@ type AssembledDiff = {
   resolved: Map<string, string>;
   fileAccountNumber: string | null;
 };
-
-// Kysely refuses .transaction() on a transaction, and the test seam is one.
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
 
 // quantity x price for a row holding_valued cannot compute yet; same digits the view produces.
 function valueAt(quantity: string, price: string | null): string | null {
@@ -659,7 +666,8 @@ export type CommittedUpload = {
 };
 
 // The flow's one write: the draft's answers promoted to vocabulary, immutable position_set, one
-// holding per parsed row, draft deleted — one transaction. Every refusal runs first, each
+// holding per parsed row, draft deleted — one transaction under withAccountLock (§7.2), so the
+// diff and every guard read the statement this one lands on. Every refusal runs first, each
 // commented below. A second upload for an already-recorded date is allowed
 // (latest_position_set's tie-break resolves it); re-posting a committed draft is a NotFoundError.
 export async function commitUpload(
@@ -667,13 +675,28 @@ export async function commitUpload(
   raw: CommitInput,
   db: Kysely<Database> = getDb(),
 ): Promise<CommittedUpload> {
+  const accountId = await draftAccountId(draftId, db);
+  if (accountId === undefined) throw new NotFoundError(EXPIRED);
+
+  return withAccountLock(accountId, db, (account, trx) =>
+    commitUploadUnderLock(draftId, account, raw, trx),
+  );
+}
+
+async function commitUploadUnderLock(
+  draftId: string,
+  account: Account,
+  raw: CommitInput,
+  db: Kysely<Database>,
+): Promise<CommittedUpload> {
+  // Gone by now: a concurrent commit took it while this one waited, or the 24h sweep did.
   const draft = await findDraft(draftId, db);
   if (draft === undefined) throw new NotFoundError(EXPIRED);
 
   // First: a closed account isn't fixable by a ticked box or typed date.
-  if (draft.accountClosedAt !== null) {
+  if (account.isClosed) {
     throw ValidationError.form(
-      `${draft.accountName} is closed, and a closed account's history does not change. ` +
+      `${account.name} is closed, and a closed account's history does not change. ` +
         "Reopen it from Settings if this statement is still real.",
     );
   }
@@ -704,15 +727,15 @@ export async function commitUpload(
   }
 
   // Account-number guard: never a selector.
-  if (draft.accountNumber !== null) {
+  if (account.externalAccountNumber !== null) {
     const disagreeing = rows.find(
-      (row) => row.accountNumber !== null && row.accountNumber !== draft.accountNumber,
+      (row) => row.accountNumber !== null && row.accountNumber !== account.externalAccountNumber,
     );
     if (disagreeing !== undefined) {
       throw ValidationError.form(
         `This file says it describes account "${disagreeing.accountNumber}", and ` +
           `${draft.accountName} — owned by ${draft.ownerName} — is recorded as account ` +
-          `"${draft.accountNumber}". A statement lands in the account it describes — check ` +
+          `"${account.externalAccountNumber}". A statement lands in the account it describes — check ` +
           "which account this export belongs to.",
       );
     }
@@ -759,124 +782,124 @@ export async function commitUpload(
     );
   }
 
-  return inTransaction(db, async (trx) => {
-    // Promotion first, since the draft delete below cascades the answers away. Only the strings
-    // this file states: one answered, then mapped out of the instrument column, was never a
-    // fact about a recorded statement. A row vocabulary already holds wins, as at resolve time.
-    if (rawStrings.length > 0) {
-      await trx
-        .insertInto("instrument_alias")
-        .columns(["raw_string", "instrument_id"])
-        .expression(
-          trx
-            .selectFrom("upload_draft_answer")
-            .select(["raw_string", "instrument_id"])
-            .where("draft_id", "=", draft.id)
-            .where("raw_string", "in", rawStrings)
-            // Insert order is lock order: two commits promoting the same strings the other way round would deadlock.
-            .orderBy("raw_string"),
-        )
-        .onConflict((conflict) => conflict.column("raw_string").doNothing())
-        .execute();
-    }
+  // Promotion first, since the draft delete below cascades the answers away. Only the strings
+  // this file states: one answered, then mapped out of the instrument column, was never a
+  // fact about a recorded statement. A row vocabulary already holds wins, as at resolve time.
+  if (rawStrings.length > 0) {
+    await db
+      .insertInto("instrument_alias")
+      .columns(["raw_string", "instrument_id"])
+      .expression(
+        db
+          .selectFrom("upload_draft_answer")
+          .select(["raw_string", "instrument_id"])
+          .where("draft_id", "=", draft.id)
+          .where("raw_string", "in", rawStrings)
+          // Insert order is lock order: two commits promoting the same strings the other way round would deadlock.
+          .orderBy("raw_string"),
+      )
+      .onConflict((conflict) => conflict.column("raw_string").doNothing())
+      .execute();
+  }
 
-    // The delete guards the transaction: zero rows means a concurrent commit got here first,
-    // and the throw takes the promotion above back with it — no second set, no vocabulary.
-    const taken = await trx
-      .deleteFrom("upload_draft")
-      .where("id", "=", draft.id)
-      .executeTakeFirst();
-    if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
+  // Deletion leads the rest of the writes. A concurrent commit is refused by the re-read above;
+  // zero rows here is createDraft's sweep, which runs under no lock, taking a day-old draft in
+  // between, and the throw takes the promotion back with it — no second set, no vocabulary.
+  const taken = await db
+    .deleteFrom("upload_draft")
+    .where("id", "=", draft.id)
+    .executeTakeFirst();
+  if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
 
-    // Vocabulary as the transaction sees it must be what the diff resolved against: a string
-    // another upload recorded, or Settings repointed or forgot, in the gap would otherwise land
-    // this holding under an instrument the alias no longer names, for the next re-upload to diff
-    // away. Refused, promotion and all. Share-locked, so a repoint waits for this commit.
-    const meanings =
-      rawStrings.length === 0
-        ? []
-        : await trx
-            .selectFrom("instrument_alias")
-            .innerJoin("instrument", "instrument.id", "instrument_alias.instrument_id")
-            .select([
-              "instrument_alias.raw_string",
-              "instrument.id",
-              "instrument.symbol",
-              "instrument.name",
-            ])
-            .where("instrument_alias.raw_string", "in", rawStrings)
-            .forShare("instrument_alias")
-            .execute();
-    const moved = meanings.find((meaning) => resolved.get(meaning.raw_string) !== meaning.id);
-    if (moved !== undefined) {
-      throw ValidationError.form(
-        `"${moved.raw_string}" now means ${describeInstrument(moved)} — recorded by another ` +
-          "upload or repointed under Settings while this review was open, so nothing was " +
-          "recorded. Reload the review and check what it is about to record.",
-      );
-    }
-    // Every string had a meaning at diff time, and the promotion restored the draft's own; one
-    // still missing was forgotten under Settings, and the next upload is meant to ask about it.
-    if (meanings.length !== rawStrings.length) {
-      const named = new Set(meanings.map((meaning) => meaning.raw_string));
-      const forgotten = rawStrings.find((raw) => !named.has(raw)) ?? "";
-      throw ValidationError.form(
-        `"${forgotten}" was forgotten under Settings while this review was open, so nothing ` +
-          "was recorded. Reload the review — it will ask what the name means.",
-      );
-    }
+  // Vocabulary as the transaction sees it must be what the diff resolved against: a string
+  // another upload recorded, or Settings repointed or forgot, in the gap would otherwise land
+  // this holding under an instrument the alias no longer names, for the next re-upload to diff
+  // away. Refused, promotion and all. Share-locked, so a repoint waits for this commit.
+  const meanings =
+    rawStrings.length === 0
+      ? []
+      : await db
+          .selectFrom("instrument_alias")
+          .innerJoin("instrument", "instrument.id", "instrument_alias.instrument_id")
+          .select([
+            "instrument_alias.raw_string",
+            "instrument.id",
+            "instrument.symbol",
+            "instrument.name",
+          ])
+          .where("instrument_alias.raw_string", "in", rawStrings)
+          .forShare("instrument_alias")
+          .execute();
+  const moved = meanings.find((meaning) => resolved.get(meaning.raw_string) !== meaning.id);
+  if (moved !== undefined) {
+    throw ValidationError.form(
+      `"${moved.raw_string}" now means ${describeInstrument(moved)} — recorded by another ` +
+        "upload or repointed under Settings while this review was open, so nothing was " +
+        "recorded. Reload the review and check what it is about to record.",
+    );
+  }
+  // Every string had a meaning at diff time, and the promotion restored the draft's own; one
+  // still missing was forgotten under Settings, and the next upload is meant to ask about it.
+  if (meanings.length !== rawStrings.length) {
+    const named = new Set(meanings.map((meaning) => meaning.raw_string));
+    const forgotten = rawStrings.find((raw) => !named.has(raw)) ?? "";
+    throw ValidationError.form(
+      `"${forgotten}" was forgotten under Settings while this review was open, so nothing ` +
+        "was recorded. Reload the review — it will ask what the name means.",
+    );
+  }
 
-    const set = await trx
-      .insertInto("position_set")
-      .values({
-        account_id: draft.accountId,
-        as_of_date: asOf,
-        source: "upload",
-        source_filename: draft.filename,
-        raw_file: Buffer.from(draft.bytes),
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
+  const set = await db
+    .insertInto("position_set")
+    .values({
+      account_id: draft.accountId,
+      as_of_date: asOf,
+      source: "upload",
+      source_filename: draft.filename,
+      raw_file: Buffer.from(draft.bytes),
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
 
-    if (rows.length > 0) {
-      await trx
-        .insertInto("holding")
-        .values(
-          rows.map((row) => ({
-            position_set_id: set.id,
-            instrument_id: row.instrumentId,
-            // Zero stays zero, null stays null: a defaulted basis reports a fake gain (§5.4, 0001).
-            quantity: row.quantity,
-            cost_basis_per_share: row.costBasisPerShare,
-          })),
-        )
-        .execute();
-    }
+  if (rows.length > 0) {
+    await db
+      .insertInto("holding")
+      .values(
+        rows.map((row) => ({
+          position_set_id: set.id,
+          instrument_id: row.instrumentId,
+          // Zero stays zero, null stays null: a defaulted basis reports a fake gain (§5.4, 0001).
+          quantity: row.quantity,
+          cost_basis_per_share: row.costBasisPerShare,
+        })),
+      )
+      .execute();
+  }
 
-    // Only where the column is still empty: never overwrite a hand-recorded or concurrent number.
-    if (fileAccountNumber !== null && draft.accountNumber === null) {
-      await trx
-        .updateTable("account")
-        .set({ external_account_number: fileAccountNumber })
-        .where("id", "=", draft.accountId)
-        .where("external_account_number", "is", null)
-        .execute();
-    }
+  // Only where the column is still empty: never overwrite a hand-recorded number. The lock makes
+  // a concurrent one impossible; the predicate stays as the write's own statement of the rule.
+  if (fileAccountNumber !== null && account.externalAccountNumber === null) {
+    await db
+      .updateTable("account")
+      .set({ external_account_number: fileAccountNumber })
+      .where("id", "=", draft.accountId)
+      .where("external_account_number", "is", null)
+      .execute();
+  }
 
-    return {
-      setId: set.id,
-      accountId: draft.accountId,
-      accountName: draft.accountName,
-      filename: draft.filename,
-      asOf,
-      counts: {
-        added: diff.added.length,
-        updated: diff.updated.length,
-        unchanged: diff.unchangedCount,
-        removed: diff.removed.length,
-      },
-    };
-  });
+  return {
+    setId: set.id,
+    accountId: draft.accountId,
+    accountName: draft.accountName,
+    filename: draft.filename,
+    asOf,
+    counts: {
+      added: diff.added.length,
+      updated: diff.updated.length,
+      unchanged: diff.unchangedCount,
+      removed: diff.removed.length,
+    },
+  };
 }
 
 export type UploadReceipt = {

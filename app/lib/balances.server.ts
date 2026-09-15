@@ -1,8 +1,9 @@
 // Sets the balance of a single-position account (DESIGN.md §5.2, §11) via the same
 // append-a-position-set mechanism as an upload (source='manual', no filename).
 // Sign is derived from kind, never typed in. Refusals read actual current holdings, not just
-// `kind` (a label that can lie, SET-1). Both inserts are one statement: a data-modifying CTE
-// so a position_set can never land without its holding row.
+// `kind` (a label that can lie, SET-1), and read them under withAccountLock (§7.2) so a
+// statement can't land between the check and the write. Both inserts are one statement: a
+// data-modifying CTE so a position_set can never land without its holding row.
 import { sql } from "kysely";
 import { z } from "zod";
 
@@ -16,7 +17,7 @@ import {
   parseInput,
   recordedDate,
 } from "./input.server.ts";
-import { getAccount } from "./accounts.server.ts";
+import { withAccountLock, type Account } from "./accounts.server.ts";
 import { currentStatement } from "./current-statement.server.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
@@ -73,7 +74,15 @@ export async function setBalance(
   raw: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<RecordedBalance> {
-  const account = await getAccount(accountId, db);
+  return withAccountLock(accountId, db, (account, trx) => setBalanceUnderLock(account, raw, trx));
+}
+
+async function setBalanceUnderLock(
+  account: Account,
+  raw: unknown,
+  db: Kysely<Database>,
+): Promise<RecordedBalance> {
+  const accountId = account.id;
 
   // Before field validation: wrong account kind isn't fixable by correcting the form.
   if (!acceptsSetBalance(account.kind)) {
@@ -115,10 +124,10 @@ export async function setBalance(
   const zero = /^0+(\.0+)?$/.test(input.amount);
   const quantity = isOwed(account.kind) && !zero ? `-${input.amount}` : input.amount;
 
-  // Guard re-checks inside the write (revisePosition's pattern): a statement committed between
-  // the pre-check and this insert would otherwise get sold off. No guard row => no insert at all,
-  // even with no prior statement (latest_position_set is NULL, so `not exists` still holds).
-  // Race untested deliberately: rollback isolation means it can't be reproduced in a test.
+  // Guard repeated inside the write (revisePosition's pattern), the statement's own answer now
+  // that the lock keeps anything from landing between the pre-check and this insert. No guard
+  // row => no insert at all, even with no prior statement (latest_position_set is NULL, so
+  // `not exists` still holds).
   const written = await sql<{ position_set_id: string }>`
     with guard as (
       select 1
