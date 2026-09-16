@@ -119,7 +119,29 @@ export async function action({ params, request }: Route.ActionArgs) {
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       // Carries the diff the refusal was decided against (#181) — the loader's earlier read can
       // predate the account state the commit just refused against.
-      const diff = error instanceof RefusedUpload ? error.diff : null;
+      let diff: UploadDiff;
+      if (error instanceof RefusedUpload) {
+        diff = error.diff;
+      } else {
+        try {
+          // A generic guard can fire before commit assembles a diff. Rebuild through the domain so
+          // the submitted date and the figures stay one review on this same-page response.
+          diff = await reviewForDraft(params.draftId, values.asOf ?? "");
+        } catch (reviewError) {
+          if (reviewError instanceof DraftNotReadyError) {
+            const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
+            return redirect(`/upload/${params.draftId}/${reviewError.step}${stale}`);
+          }
+          if (reviewError instanceof NotFoundError) {
+            const accountId =
+              values.accountId !== undefined && /^\d+$/.test(values.accountId)
+                ? values.accountId
+                : null;
+            throw data({ accountId }, { status: 404 });
+          }
+          throw reviewError;
+        }
+      }
       // The domain's own comparison (uploads.server.ts), not restated here (CLAUDE.md) — false
       // when there was no refusal to carry it, since nothing then moved under this render.
       const baselineMoved = error instanceof RefusedUpload ? error.baselineMoved : false;

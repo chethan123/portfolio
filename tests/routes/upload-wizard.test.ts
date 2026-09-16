@@ -213,13 +213,14 @@ describe("a review over a draft that is not ready for one", () => {
         ),
       ).toBe(`/upload/${draftId}/columns?stale=true`);
 
-      // A POST carrying the earlier review is stale even when the changed mapping is no longer parseable.
+      // Even when the account-id guard fires first, rebuilding its response finds the changed
+      // mapping unready and carries the stale review to the step that can repair it.
       const staleReview = await redirectTo(() =>
         reviewAction(
           args(
             post(`/upload/${draftId}/review`, {
               asOf: AS_OF,
-              accountId,
+              accountId: "0",
               reviewRevision: reviewed.diff.reviewRevision ?? "",
             }),
             { draftId },
@@ -418,6 +419,68 @@ describe("the review revision carried by the form", () => {
   );
 
   it(
+    "keeps a dated refusal's diff through a later validation and clears both acknowledgements",
+    withDatabase(async (ctx) => {
+      const { draftId, account, instrument: vti } = await stageDraft(ctx, { resolved: true });
+      if (vti === null) throw new Error("The resolved fixture did not seed its instrument.");
+      const b = await ctx.seedInstrument({ symbol: "BB", name: "Fund B" });
+      const c = await ctx.seedInstrument({ symbol: "CC", name: "Fund C" });
+      const holdings = [vti, b, c].map((instrument) => ({ instrument, quantity: "1" }));
+      await ctx.seedPositionSet({ account, asOf: "2026-03-31", holdings });
+      await ctx.seedPositionSet({ account, asOf: "2026-07-31", holdings });
+
+      const bareReview = await reviewPage(draftId);
+      const datedRefusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId: account.id,
+            baselineSetId: bareReview.diff.baselineSetId ?? "",
+            confirmRemovals: "true",
+            reviewRevision: bareReview.diff.reviewRevision ?? "",
+          }),
+          { draftId },
+        ),
+      );
+      if (datedRefusal instanceof Response) throw new Error("Expected the dated refusal.");
+      if (datedRefusal.diff === null) throw new Error("Expected its freshly dated diff.");
+      expect(datedRefusal.diff.asOf).toEqual({ source: "asked", date: AS_OF });
+      expect(datedRefusal.diff.filedBehind).not.toBeNull();
+      expect(datedRefusal.diff.majorityRemoved).toBe(true);
+
+      const validation = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId: "0",
+            baselineSetId: datedRefusal.diff.baselineSetId ?? "",
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+            reviewRevision: datedRefusal.diff.reviewRevision ?? "",
+          }),
+          { draftId },
+        ),
+      );
+      if (validation instanceof Response) throw new Error("Expected validation data.");
+      expect(validation.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
+      expect(validation.diff?.filedBehind).not.toBeNull();
+      expect(validation.diff?.majorityRemoved).toBe(true);
+      expect(validation.values.confirmFiledBehind).toBeUndefined();
+      expect(validation.values.confirmRemovals).toBeUndefined();
+
+      const markup = renderRoute(Review, `/upload/${draftId}/review`, bareReview, {
+        actionData: validation,
+      });
+      expect(markup).toContain(`value="${AS_OF}"`);
+      expect(markup).toContain('name="confirmFiledBehind"');
+      expect(markup).not.toMatch(/name="confirmFiledBehind"[^>]*checked/);
+      expect(markup).toContain('name="confirmRemovals"');
+      expect(markup).not.toMatch(/name="confirmRemovals"[^>]*checked/);
+      expect((await lastRecorded(account.id, ctx.db))?.asOf).toBe("2026-07-31");
+    }),
+  );
+
+  it(
     "clears removal and filed-behind acknowledgements after validation or a stale revision",
     withDatabase(async (ctx) => {
       const { draftId, account, instrument: vti } = await stageDraft(ctx, { resolved: true });
@@ -559,12 +622,40 @@ describe("the review revision carried by the form", () => {
     "rejects missing revisions and turns an invalid date query into an accessible field error",
     withDatabase(async (ctx) => {
       const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
+      const initial = await reviewPage(draftId);
       const missing = await reviewAction(
         args(post(`/upload/${draftId}/review`, { asOf: AS_OF, accountId }), { draftId }),
       );
       if (missing instanceof Response) throw new Error("Expected a stale-review refusal.");
       expect(missing.formError).toContain("This statement or its account changed");
       expect(missing.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
+
+      const invalidAfterGuard = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: "2026-02-30",
+            accountId: "0",
+            reviewRevision: initial.diff.reviewRevision ?? "",
+          }),
+          { draftId },
+        ),
+      );
+      if (invalidAfterGuard instanceof Response) throw new Error("Expected validation data.");
+      expect(invalidAfterGuard.diff?.asOfError).toMatch(/not a date on the calendar/);
+      expect(invalidAfterGuard.diff?.reviewRevision).toBeNull();
+
+      const missingDateAfterGuard = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            accountId: "0",
+            reviewRevision: initial.diff.reviewRevision ?? "",
+          }),
+          { draftId },
+        ),
+      );
+      if (missingDateAfterGuard instanceof Response) throw new Error("Expected validation data.");
+      expect(missingDateAfterGuard.diff?.asOfError).toMatch(/required/);
+      expect(missingDateAfterGuard.diff?.reviewRevision).toBeNull();
 
       const invalid = await reviewPage(draftId, "?asOf=2026-02-30");
       expect(invalid.diff.asOfError).toMatch(/not a date on the calendar/);
