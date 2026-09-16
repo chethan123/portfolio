@@ -1179,7 +1179,7 @@ describe("uploadReceipt", () => {
         currentAsOf: "2026-06-30",
       });
 
-      // The set the account owns but no longer reads gets a receipt of its own now (§2.4) —
+      // The set the account owns but no longer reads gets a receipt of its own now (#181) —
       // not null, since the household still needs telling, just not the current one.
       expect(await receiptFor(account.id, prior.id)).toMatchObject({
         setId: prior.id,
@@ -1224,7 +1224,7 @@ describe("uploadReceipt", () => {
       const { db, seedAccount } = ctx;
       const account = await seedAccount({ kind: "bank" });
 
-      // The relaxed gate (§2.4) only widens what counts as "recorded"; it must not describe a
+      // The relaxed gate (#181) only widens what counts as "recorded"; it must not describe a
       // typed balance as a statement.
       const written = await setBalance(account.id, { amount: "500.00", asOf: "2026-06-30" }, db);
       const set = await db
