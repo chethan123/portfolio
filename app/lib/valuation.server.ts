@@ -335,6 +335,17 @@ export async function accountHoldings(
   return readHoldings(db, valuedNow(), isAccount("holding_valued.account_id", accountId));
 }
 
+// accountHoldings, for a past date — the dated half of the pair (#181's baseline). Quantity, cost
+// basis and instrument identity are what a caller should read off this; price and staleness are
+// the historical close, not today's quote, so a diff pricing a removed row must use `quote` instead.
+export async function accountHoldingsAt(
+  accountId: string,
+  date: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedAt(date), isAccount("holding_valued.account_id", accountId));
+}
+
 // One round trip: a lateral evaluates holding_valued_at once per date, not netWorthAt in a loop.
 async function readSeries(
   db: Kysely<Database>,

@@ -128,12 +128,54 @@ describe("the receipts", () => {
         asOf: "2026-02-28",
         filename: "February.csv",
         holdingCount: 2,
+        isCurrent: true,
+        currentAsOf: "2026-02-28",
       });
 
-      // A set this account really owns, but not the one it's reading — a URL-trusted receipt would announce January while the page prints February.
-      expect((await at(`?uploaded=${january.id}`)).receipt).toBeNull();
+      // A set this account really owns, but not the one it's reading, now gets a receipt of its
+      // own (docs/specs/0005-report-remediation.md §5) rather than silence — naming what the
+      // account actually reports instead of pretending January's own figures ("now holds 1
+      // position") are still true.
+      const stale = await at(`?uploaded=${january.id}`);
+      expect(stale.receipt).toMatchObject({
+        setId: january.id,
+        asOf: "2026-01-31",
+        filename: "January.csv",
+        isCurrent: false,
+        currentAsOf: "2026-02-28",
+      });
       expect((await at("?uploaded=999999999")).receipt).toBeNull();
       expect((await at("?uploaded=%20or%201=1")).receipt).toBeNull();
+
+      // A zero-padded id names the same set (`isCurrent` must compare the fetched row's own id,
+      // not the raw URL parameter that only had to match /^\d+$/).
+      const padded = await at(`?uploaded=${february.id.padStart(february.id.length + 3, "0")}`);
+      expect(padded.receipt).toMatchObject({ setId: february.id, isCurrent: true });
+    }),
+  );
+
+  it(
+    "prints the current-set closing line only for the set the account is actually reading",
+    withDatabase(async (ctx) => {
+      const { account, january, february } = await seedTwoStatements(ctx);
+      const path = (search: string) => `/accounts/${account.id}${search}`;
+      const at = (search: string) => loader(args(get(path(search)), { accountId: account.id }));
+
+      const currentMarkup = renderRoute(
+        Account,
+        path(`?uploaded=${february.id}`),
+        await at(`?uploaded=${february.id}`),
+      );
+      expect(currentMarkup).toContain("now holds");
+      expect(currentMarkup).not.toContain("Filed behind");
+
+      const behindMarkup = renderRoute(
+        Account,
+        path(`?uploaded=${january.id}`),
+        await at(`?uploaded=${january.id}`),
+      );
+      expect(behindMarkup).toContain("Filed behind what");
+      expect(behindMarkup).not.toContain("now holds");
     }),
   );
 

@@ -7,7 +7,7 @@ import { sql } from "kysely";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
-import { lastRecorded } from "~/lib/balances.server";
+import { lastRecorded, setBalance } from "~/lib/balances.server";
 import {
   DraftNotReadyError,
   commitUpload,
@@ -150,7 +150,7 @@ describe("diffForDraft", () => {
       expect(diff.unchangedCount).toBe(1);
       expect(diff.majorityRemoved).toBe(false);
       expect(diff.removesEverything).toBe(false);
-      expect(diff.asOf).toEqual({ source: "asked" });
+      expect(diff.asOf).toEqual({ source: "asked", date: null });
 
       expect(diff.added).toHaveLength(1);
       expect(diff.added[0]).toMatchObject({
@@ -434,7 +434,7 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: vxus, rawString: "VXUS" });
       await seedQuote({ instrument: vti, price: "400.00" });
 
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: [{ instrument: vti, quantity: "100", costBasisPerShare: "380.00" }],
@@ -447,7 +447,11 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await commitUpload(draftId, { accountId: account.id }, db);
+      const written = await commitUpload(
+        draftId,
+        { accountId: account.id, baselineSetId: prior.id },
+        db,
+      );
 
       expect(written.accountId).toBe(account.id);
       expect(written.asOf).toBe("2026-06-30");
@@ -522,7 +526,7 @@ describe("commitUpload", () => {
 
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: diff.baselineSetId ?? "" },
         db,
       );
       const holdings = await db
@@ -928,9 +932,10 @@ describe("commitUpload", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nMA,1,\n");
+      const baselineSetId = (await diffForDraft(draftId, db)).baselineSetId ?? "";
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30", baselineSetId }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes 2 of the 3 positions this account holds/,
@@ -945,7 +950,7 @@ describe("commitUpload", () => {
 
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30", confirmRemovals: "true" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId, confirmRemovals: "true" },
         db,
       );
       expect(written.counts.removed).toBe(2);
@@ -964,7 +969,7 @@ describe("commitUpload", () => {
         await seedInstrumentAlias({ instrument: fund, rawString: symbol });
         funds.push(fund);
       }
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: funds.map((fund) => ({ instrument: fund, quantity: "1" })),
@@ -972,7 +977,11 @@ describe("commitUpload", () => {
 
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
       const refusal = await refusalOf(() =>
-        commitUpload(majority, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(
+          majority,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes 3 of the 4 positions/);
 
@@ -980,7 +989,7 @@ describe("commitUpload", () => {
       expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
       const written = await commitUpload(
         half,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
       );
       expect(written.counts.removed).toBe(2);
@@ -1002,7 +1011,7 @@ describe("commitUpload", () => {
       ] as const) {
         await seedInstrumentAlias({ instrument, rawString: raw });
       }
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: [
@@ -1014,7 +1023,11 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNW,5,\n");
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes every position this account holds — all 2\./,
@@ -1099,7 +1112,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nTIE,12,\n");
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: first.id },
         db,
       );
 
@@ -1147,7 +1160,7 @@ describe("uploadReceipt", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRA,12,\nRB,3,\n");
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
       );
 
@@ -1162,9 +1175,18 @@ describe("uploadReceipt", () => {
         firstStatement: false,
         counts: { added: 1, updated: 1, unchanged: 0, removed: 1 },
         holdingCount: 2,
+        isCurrent: true,
+        currentAsOf: "2026-06-30",
       });
 
-      expect(await receiptFor(account.id, prior.id)).toBeNull();
+      // The set the account owns but no longer reads gets a receipt of its own now (#181) —
+      // not null, since the household still needs telling, just not the current one.
+      expect(await receiptFor(account.id, prior.id)).toMatchObject({
+        setId: prior.id,
+        asOf: "2026-03-31",
+        isCurrent: false,
+        currentAsOf: "2026-06-30",
+      });
       expect(await receiptFor(other.id, written.setId)).toBeNull();
       expect(await receiptFor(account.id, "abc")).toBeNull();
     }),
@@ -1193,6 +1215,32 @@ describe("uploadReceipt", () => {
         counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
         holdingCount: 1,
       });
+    }),
+  );
+
+  it(
+    "yields no receipt for a manually-typed set reached by a hand-edited ?uploaded=",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount } = ctx;
+      const account = await seedAccount({ kind: "bank" });
+
+      // The relaxed gate (#181) only widens what counts as "recorded"; it must not describe a
+      // typed balance as a statement.
+      const written = await setBalance(account.id, { amount: "500.00", asOf: "2026-06-30" }, db);
+      const set = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .executeTakeFirstOrThrow();
+
+      const receipt = await uploadReceipt(
+        account.id,
+        set.id,
+        await lastRecorded(account.id, db),
+        db,
+      );
+      expect(receipt).toBeNull();
+      expect(written.asOf).toBe("2026-06-30"); // sanity: the balance really did land
     }),
   );
 });
@@ -1314,7 +1362,7 @@ describe("commitUpload — the draft's answers", () => {
       const aapl = await seedInstrument({ symbol: "AAPL" });
       await seedInstrumentAlias({ instrument: bnd, rawString: "BND" });
       await seedInstrumentAlias({ instrument: aapl, rawString: "AAPL" });
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: [
@@ -1332,7 +1380,11 @@ describe("commitUpload — the draft's answers", () => {
 
       // Removes both current positions: refused until the removals are confirmed.
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes every position/);
 
