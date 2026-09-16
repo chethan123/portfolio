@@ -73,7 +73,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      // Carries the diff the refusal was decided against (§2.5) — a re-run loader would show the
+      // Carries the diff the refusal was decided against (#181) — a re-run loader would show the
       // undated one again, and the household would tick a box against figures already rejected.
       const diff = error instanceof RefusedUpload ? error.diff : null;
       return { errors: fieldErrors, formError: formError ?? null, values, diff };
@@ -124,7 +124,7 @@ function GroupHeading({ label }: { label: string }) {
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
   const { today, earliestAsOf, latestAsOf } = loaderData;
-  // The refusal's own diff when there was one (§2.5) — the loader's is undated for an asked date
+  // The refusal's own diff when there was one (#181) — the loader's is undated for an asked date
   // and would otherwise show the household figures the commit already rejected.
   const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
@@ -132,9 +132,20 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
   const values = actionData?.values;
 
   // A tick given against a baseline that has since moved describes figures no longer on screen
-  // (§2.5) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
+  // (#181) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
   const baselineMoved =
     values !== undefined && (values.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+
+  // "this account holds" is only true of today's holdings — wrong once filed behind means these
+  // counts are the baseline's own (uploads.server.ts's matching guard).
+  const removalScope =
+    diff.filedBehind !== null ? (
+      <>
+        recorded on <span className="u-data">{diff.baselineAsOf}</span>
+      </>
+    ) : (
+      "this account holds"
+    );
 
   // A first statement reads "14 ADDED" alone — three zero counts would dress an ordinary upload as strange.
   const summary = diff.firstStatement
@@ -292,7 +303,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       <Form method="post">
         {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
         <input type="hidden" name="accountId" value={diff.accountId} />
-        {/* The confirmation's binding (§2.3) — "" is null's wire form, so a first statement's
+        {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
             missing baseline round-trips as the empty string on every side of the comparison. */}
         <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />
 
@@ -330,14 +341,14 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               <strong>
                 {diff.removesEverything ? (
                   <>
-                    This file removes every position this account holds — all{" "}
+                    This file removes every position {removalScope} — all{" "}
                     <span className="u-data">{diff.currentCount}</span>.
                   </>
                 ) : (
                   <>
                     This file removes <span className="u-data">{diff.removed.length}</span> of
-                    the <span className="u-data">{diff.currentCount}</span> positions this
-                    account holds.
+                    the <span className="u-data">{diff.currentCount}</span> positions{" "}
+                    {removalScope}.
                   </>
                 )}
               </strong>

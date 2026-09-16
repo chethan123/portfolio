@@ -2,9 +2,9 @@
 // statement (audit finding QA-02), and a liability account's majority-removal tick gets demanded
 // for a removal a backdated upload will never actually make. Real Postgres — the risk is what
 // `assembleDiff` reads against, not CSV parsing (already covered by commit-upload.test.ts).
-// Rewritten per PLAN.md §2.6 to the four-part assertion: a refusal naming both dates, a second
-// submit that lands once bound to the refusal's own baseline, the receipt agreeing with what the
-// refusal carried, and the statement itself landing as history rather than as nothing.
+// Rewritten to the four-part assertion: a refusal naming both dates, a second submit that lands
+// once bound to the refusal's own baseline, the receipt agreeing with what the refusal carried,
+// and the statement itself landing as history rather than as nothing.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
@@ -150,6 +150,8 @@ describe("Review's diff for a statement dated between two existing ones", () => 
         unchanged: refusal.diff.unchangedCount,
         removed: refusal.diff.removed.length,
       });
+      // Freshly committed and already filed behind — the receipt gate must say so from the start.
+      expect(page.receipt?.isCurrent).toBe(false);
 
       // 4. accountHoldings is unchanged (2026-09-09 is still current), and holdingsAt this
       // statement's own date shows what it actually recorded, proving it became history.
@@ -225,6 +227,8 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
         unchanged: refusal.diff.unchangedCount,
         removed: refusal.diff.removed.length,
       });
+      // Freshly committed and already filed behind — the receipt gate must say so from the start.
+      expect(page.receipt?.isCurrent).toBe(false);
 
       // 4. The typed balance is still what the account reports today — this statement changes
       // nothing current — and holdingsAt its own date shows what it actually recorded.

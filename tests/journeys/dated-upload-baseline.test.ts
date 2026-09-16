@@ -1,9 +1,9 @@
 // Reproduces #181: an upload dated behind the account's current statement lands without anyone
 // noticing. Review's diff, the commit, and the account page each read a different "now" — no
-// single unit test sees all three disagree at once, which is why this is a journey. Rewritten per
-// PLAN.md §2.6: the fix refuses the first submit rather than silently no-opping or saying nothing,
-// so the four-part assertion below is what "fixed" actually means, not the `landed || told`
-// disjunction the original repro settled for.
+// single unit test sees all three disagree at once, which is why this is a journey. Rewritten:
+// the fix refuses the first submit rather than silently no-opping or saying nothing, so the
+// four-part assertion below is what "fixed" actually means, not the `landed || told` disjunction
+// the original repro settled for.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
@@ -103,6 +103,9 @@ describe("an upload dated behind the account's current statement", () => {
       }
       expect(refusal.fieldErrors.form).toMatch(/2026-08-31/);
       expect(refusal.fieldErrors.form).toMatch(new RegExp(corrected.asOf));
+      // Reason 2 (filed behind) subsumes reason 1 (stale baseline) here: this is the ordinary
+      // first submit of a backdated, undated file, and nothing was ticked yet to go stale.
+      expect(refusal.fieldErrors.form).not.toMatch(/recorded history changed/);
 
       // 2. A second submit, carrying the refusal's own baselineSetId and its confirmation, lands.
       const committed = await commitUpload(
@@ -127,6 +130,8 @@ describe("an upload dated behind the account's current statement", () => {
         unchanged: refusal.diff.unchangedCount,
         removed: refusal.diff.removed.length,
       });
+      // Freshly committed and already filed behind — the receipt gate must say so from the start.
+      expect(page.receipt?.isCurrent).toBe(false);
 
       // 4. accountHoldings is unchanged — the correction is still what the account reports today,
       // because the backdated statement sits behind it — and holdingsAt the statement's own date

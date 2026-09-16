@@ -50,7 +50,7 @@ export type LastRecorded = {
 // Returns null when the account has no statement of any kind yet.
 // `asOf` is latest_position_set's own second parameter, unused by every caller until #181's
 // dated baseline: undated is the account's current set; dated is the latest one at or before it.
-// Kept last, after `db`, so the 17 existing callers passing `db` second need no change.
+// Kept last, after `db`, so existing callers passing `db` second need no change.
 export async function lastRecorded(
   accountId: string,
   db: Kysely<Database> = getDb(),

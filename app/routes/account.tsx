@@ -245,8 +245,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               {receipt.holdingCount === 1 ? "position" : "positions"}.
             </>
           ) : (
-            // holdingCount describes this set, not the account (§2.4) — a later statement is the
-            // one it actually reports, so that is the figure named here instead.
+            // holdingCount describes this set, not the account
+            // (docs/specs/0005-report-remediation.md §5) — a later statement is the one it
+            // actually reports, so that is the figure named here instead.
             <>
               Filed behind what {total.accountName} already reports — it still shows its{" "}
               <b className="u-data">{receipt.currentAsOf}</b> figures.

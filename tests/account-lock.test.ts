@@ -9,7 +9,7 @@ import { closeAccount } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
-import { commitUpload } from "~/lib/uploads.server";
+import { RefusedUpload, commitUpload } from "~/lib/uploads.server";
 
 import {
   backendPid,
@@ -96,7 +96,7 @@ type Planted = {
   y: SeededInstrument;
   z: SeededInstrument;
   // The seeded set's own id — every commitUpload call here is dated after it, so it is the
-  // baseline every one of them must post to avoid an unrelated stale-baseline refusal (§2.3).
+  // baseline every one of them must post to avoid an unrelated stale-baseline refusal (#181).
   baselineSetId: string;
 };
 
@@ -264,8 +264,10 @@ describe("the account lock", () => {
       const second = await stagedUpload(database, account, [[x.name, "10"]]);
 
       // `second` is drawn before the race against the plant's own set — it cannot know the id of
-      // the set `first` is about to land while it waits, so its stale posted baseline is the
-      // refusal (§2.3 reason 1), not the majority-removal tick a same-baseline diff would ask for.
+      // the set `first` is about to land while it waits, so its posted baseline is stale by the
+      // time it runs. This is its first-ever submission, with no tick to go stale, so it is told
+      // the majority removal the set it actually landed on asks for (#181), not blamed for a
+      // round trip it never had a chance to take.
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
@@ -274,7 +276,12 @@ describe("the account lock", () => {
         ),
       );
 
-      expect(refusal.fieldErrors.form).toMatch(/recorded history changed after this review was drawn/);
+      // The waiter re-classified against the set it actually landed on (issue #283), not the one
+      // it was staged against: 3 positions, 2 of them gone in its own one-row file.
+      expect(refusal.fieldErrors.form).toMatch(/removes 2 of the 3 positions/);
+      if (!(refusal instanceof RefusedUpload)) throw refusal;
+      expect(refusal.diff.currentCount).toBe(3);
+      expect(refusal.diff.removed).toHaveLength(2);
       expect(await latestQuantities(database, account.id)).toEqual({
         [x.id]: "10.00000000",
         [y.id]: "20.00000000",

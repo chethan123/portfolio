@@ -1154,7 +1154,7 @@ flowchart TD
     F -->|no| H{"quantity × basis, price or<br/>dividend rate overflows<br/>numeric(20,4)?"}
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
     H -->|no| J{"posted baselineSetId ≠ the<br/>diff's; filed behind and<br/>unconfirmed; or majority removed<br/>and unconfirmed?"}
-    J -->|any| R7["refuse, naming every applicable<br/>reason — a stale-baseline sentence<br/>dropped whenever filed-behind<br/>fires too (§2.3)"]
+    J -->|any| R7["refuse, naming every applicable<br/>reason — the stale-baseline<br/>sentence fires only once the<br/>household had already confirmed<br/>something (#181)"]
     J -->|none| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
     T0 --> T1["DELETE the draft"]
     T1 --> T2{"0 rows deleted?"}
@@ -1183,10 +1183,11 @@ Five of those deserve emphasis:
   classifies against the latest set at or before the resolved date, not always "now"; `J` collects
   every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
   the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
-  majority removal — and throws once, naming every applicable one. A stale baseline and a
-  filed-behind statement fire together on the ordinary first submit of a backdated, undated file,
-  so the stale-baseline sentence is dropped in that case rather than blaming the reader for a
-  round trip the design chose (see §7.2's baseline-moving row).
+  majority removal — and throws once, naming every applicable one. The stale-baseline sentence
+  fires only once the household had already ticked something: an untouched first submit of a
+  backdated, undated file also has its baseline "move" between the loader's guess and the commit's
+  own resolved date, and that is not the reader's round trip to answer for (see §7.2's
+  baseline-moving row).
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking every multiplication before storing turns a site-wide outage into one sentence

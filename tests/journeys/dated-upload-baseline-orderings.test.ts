@@ -1,6 +1,6 @@
-// Coverage PLAN.md §2.6 asks for beyond the three rewritten repro tests: the four chronological
-// orderings a statement's date can take against an account's history, the confirmation's binding
-// to the baseline it was drawn against, and the one case that must never loop — a first statement.
+// Coverage beyond the three rewritten repro tests (#181): the four chronological orderings a
+// statement's date can take against an account's history, the confirmation's binding to the
+// baseline it was drawn against, and the one case that must never loop — a first statement.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Review, {
@@ -115,8 +115,8 @@ describe("baseline resolution against an account's history", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "ORD", name: "Ordering Fund" });
       await seedInstrumentAlias({ instrument: fund, rawString: "ORD" });
-      // A past, explicit createdAt — never a future one (PLAN.md §2.3/§2.6): created_at must stay
-      // monotonic, or the tie-break this test pins would not hold.
+      // A past, explicit createdAt — never a future one: created_at must stay monotonic, or the
+      // tie-break this test pins would not hold.
       const existing = await seedPositionSet({
         account,
         asOf: "2026-06-30",
@@ -263,6 +263,9 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         ),
       );
       expect(second.diff.baselineSetId).not.toBe(early.id);
+      // The tick this submit carried was real, so a baseline that still moved under it is
+      // genuinely stale — unlike an untouched first submission, this one names the sentence.
+      expect(second.fieldErrors.form).toMatch(/recorded history changed after this review was drawn/);
 
       const holdings = await db
         .selectFrom("holding")
@@ -272,6 +275,79 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         .where("position_set.as_of_date", "=", "2026-07-31")
         .execute();
       expect(holdings).toHaveLength(0); // the draft's own statement never landed
+    }),
+  );
+
+  it(
+    "names the true removal once a majority-removal tick given against the undated baseline is superseded by a typed date",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const alpha = await seedInstrument({ symbol: "ALPHA", name: "Alpha Fund" });
+      const beta = await seedInstrument({ symbol: "BETA", name: "Beta Fund" });
+      const gamma = await seedInstrument({ symbol: "GAMMA", name: "Gamma Fund" });
+      const delta = await seedInstrument({ symbol: "DELTA", name: "Delta Fund" });
+      const epsilon = await seedInstrument({ symbol: "EPSILON", name: "Epsilon Fund" });
+      const zeta = await seedInstrument({ symbol: "ZETA", name: "Zeta Fund" });
+      const eta = await seedInstrument({ symbol: "ETA", name: "Eta Fund" });
+      await seedInstrumentAlias({ instrument: alpha, rawString: "ALPHA" });
+
+      // The true baseline for a statement dated between these: 5 positions, of which the file
+      // below keeps only one.
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: alpha, quantity: "100" },
+          { instrument: beta, quantity: "50" },
+          { instrument: gamma, quantity: "20" },
+          { instrument: delta, quantity: "10" },
+          { instrument: epsilon, quantity: "5" },
+        ],
+      });
+      // The account's current set: 3 positions, 2 of which the same file would also drop —
+      // this is what the undated loader shows before any date is typed.
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-09",
+        holdings: [
+          { instrument: alpha, quantity: "150" },
+          { instrument: zeta, quantity: "30" },
+          { instrument: eta, quantity: "15" },
+        ],
+      });
+
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nALPHA,120,\n");
+
+      // The undated review (the loader's own view, before a date is typed) shows the
+      // majority-removal box against the account's current set — 2 of its 3 positions.
+      const undated = await diffForDraft(draftId, db);
+      expect(undated.baselineSetId).not.toBeNull();
+      expect(undated.currentCount).toBe(3);
+      expect(undated.majorityRemoved).toBe(true);
+
+      // The household ticks that box, types a backdated date, and submits — the review's first
+      // POST is the round trip (there is no GET in between to re-render against the real baseline).
+      const response = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            accountId: account.id,
+            asOf: "2026-07-31",
+            baselineSetId: undated.baselineSetId ?? "",
+            confirmRemovals: "true",
+          }),
+          { draftId },
+        ),
+      );
+      if (response instanceof Response) throw new Error("Expected data back, got a redirect.");
+
+      // The dated diff is against 2026-06-30 (5 positions), not the undated one the tick answered
+      // for — a tick given against the wrong baseline must not silence the real removal it never
+      // actually confirmed.
+      expect(response.diff?.baselineSetId).not.toBe(undated.baselineSetId);
+      expect(response.diff?.currentCount).toBe(5);
+      expect(response.diff?.removed).toHaveLength(4);
+      expect(response.formError).toMatch(/removes 4 of the 5 positions recorded on 2026-06-30/);
     }),
   );
 
@@ -339,6 +415,8 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       const markup = renderRoute(Review, `/upload/${draftId}/review`, loaderData, {
         actionData: secondResponse,
       });
+      // Both boxes still render — proving the checkbox is unticked, not gone.
+      expect(markup).toContain('name="confirmFiledBehind"');
       expect(markup).not.toContain("checked");
     }),
   );
@@ -391,7 +469,7 @@ describe("a removed row against a dated baseline", () => {
       await seedInstrumentAlias({ instrument: kept, rawString: "KPT" });
 
       // The historical close on the baseline's own date disagrees with today's quote — the
-      // removed row must use the quote, exactly as an added or updated row would (§2.3).
+      // removed row must use the quote, exactly as an added or updated row would (#181).
       await seedQuote({ instrument: priced, price: "50.00" });
       await seedDailyClose({ instrument: priced, date: "2026-06-30", close: "40.00" });
 

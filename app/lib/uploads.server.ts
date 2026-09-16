@@ -399,10 +399,15 @@ export type UploadDiff = {
   // True only when columns recorded no first sightings; false for a pre-bit draft too.
   instrumentsSkipped: boolean;
   // The set this diff was computed against — null for "nothing recorded on or before this date"
-  // (§2.0). The commit's binding confirmation: a form posting a different value was drawn
-  // against figures a later read has moved past. "" is null's wire form (§2.3) — every reader
-  // and every poster of this value must treat the two the same way.
+  // (CONTEXT.md, "Baseline"). The commit's binding confirmation: a form posting a different value
+  // was drawn against figures a later read has moved past. "" is null's wire form (#181) — every
+  // reader and every poster of this value must treat the two the same way.
   baselineSetId: string | null;
+  // The baseline's own recorded date — null exactly when baselineSetId is null. Distinct from
+  // asOf.date (the statement's own date) and filedBehind.currentAsOf (what the account reports
+  // today): `added`/`updated`/`removed` above are all counted against this baseline, not today's
+  // holdings, whenever it differs from the current set.
+  baselineAsOf: IsoDate | null;
   // Non-null when the account's current statement is dated after this one: recording it still
   // rewrites history between its date and the next statement, even though it changes nothing the
   // account reports today.
@@ -410,7 +415,7 @@ export type UploadDiff = {
 };
 
 // A refusal decided after assembleDiff has already run, carrying the diff it was decided against
-// so the review can re-render exactly what it refused rather than the loader's stale one (§2.5).
+// so the review can re-render exactly what it refused rather than the loader's stale one (#181).
 // `diff` is a field assigned in the body, not a parameter property — erasableSyntaxOnly
 // (tsconfig.json) forbids those. Precedent for a payload-carrying domain error: DraftNotReadyError.
 export class RefusedUpload extends ValidationError {
@@ -470,9 +475,10 @@ function sameQuantity(before: string, after: string): boolean {
   return toUnits(before, QUANTITY_SCALE) === toUnits(after, QUANTITY_SCALE);
 }
 
-// Classified against the statement's own baseline (§2.0): the latest set on or before its date,
-// or — while the loader has no date yet to see — the account's current one. Two spellings of one
-// fund fold as the parser folds a duplicate: quantities summed, basis quantity-weighted.
+// Classified against the statement's own baseline (CONTEXT.md, "Baseline"): the latest set on or
+// before its date, or — while the loader has no date yet to see — the account's current one. Two
+// spellings of one fund fold as the parser folds a duplicate: quantities summed, basis
+// quantity-weighted.
 async function assembleDiff(
   draft: UploadDraft,
   // null: the loader, which reads no request body and so can never name a date. An object: the
@@ -547,8 +553,8 @@ async function assembleDiff(
     });
   }
 
-  // The baseline (§2.0, §2.3): the latest set at or before the resolved date, or — while the
-  // date is still unknown to the loader — the account's own current one, exactly as before.
+  // The baseline (CONTEXT.md, "Baseline"): the latest set at or before the resolved date, or —
+  // while the date is still unknown to the loader — the account's own current one, exactly as before.
   // `latestRecorded` is always the account's current set (undated), read alongside so filedBehind
   // needs no second query later.
   const [latestRecorded, baselineRecord] =
@@ -565,9 +571,9 @@ async function assembleDiff(
       : await accountHoldingsAt(draft.accountId, asOfResolved, db);
   const currentById = new Map(current.map((holding) => [holding.instrumentId, holding]));
 
-  // Moved above the read it feeds (round 2/3 finding): `ids` must cover the baseline's own
-  // instruments too, or a removed row (below) has no fact row to price from `quote`. Deduped —
-  // an instrument both filed and held needs one row, not two identical ones.
+  // `ids` must cover the baseline's own instruments too, or a removed row (below) has no fact row
+  // to price from `quote`. Deduped — an instrument both filed and held needs one row, not two
+  // identical ones.
   const ids = [
     ...new Set([
       ...folded.map((row) => row.instrumentId),
@@ -666,7 +672,7 @@ async function assembleDiff(
 
   // Priced from `quote`, never the dated read's own price: a removed row sits in a column headed
   // "Value (at the current quote)" (review.tsx), and the dated read's price is a historical close
-  // (§2.2). `fact` is unreachable-undefined here the same way it is above — `ids` now covers
+  // (#181). `fact` is unreachable-undefined here the same way it is above — `ids` now covers
   // every baseline instrument too.
   const removed: DiffRemoved[] = [];
   for (const holding of current) {
@@ -690,8 +696,9 @@ async function assembleDiff(
     });
   }
 
-  // "" is null's wire form (§2.3) — every reader of this value must agree, starting here.
+  // "" is null's wire form (#181) — every reader of this value must agree, starting here.
   const baselineSetId = baselineRecord?.id ?? null;
+  const baselineAsOf = baselineRecord?.asOf ?? null;
   // Nothing recorded on or before the date — including the fallback undated read, so a truly
   // empty account and a date before all its history read the same way.
   const firstStatement = baselineSetId === null;
@@ -726,6 +733,7 @@ async function assembleDiff(
           : { source: "asked", date: asOfResolved },
       instrumentsSkipped: draft.hadFirstSightings === false,
       baselineSetId,
+      baselineAsOf,
       filedBehind,
     },
     rows,
@@ -747,7 +755,7 @@ export type CommitInput = {
   asOf?: string;
   confirmRemovals?: string;
   accountId?: string;
-  // The diff's own baselineSetId, echoed back (§2.3). "" is null's wire form — posting nothing
+  // The diff's own baselineSetId, echoed back (#181). "" is null's wire form — posting nothing
   // reads the same as posting "", which is what makes a first statement commit without a loop.
   baselineSetId?: string;
   confirmFiledBehind?: string;
@@ -808,7 +816,7 @@ async function commitUploadUnderLock(
     );
   }
 
-  // Resolves the date and classifies against its baseline in one place (§2.3) — every guard from
+  // Resolves the date and classifies against its baseline in one place (#181) — every guard from
   // here on reads the dated diff. A bad or missing date throws here as a plain ValidationError:
   // no diff exists yet, so it cannot be a RefusedUpload.
   const { diff, rows, resolved, fileAccountNumber, asOf } = await assembleDiff(
@@ -883,19 +891,24 @@ async function commitUploadUnderLock(
   }
 
   // Every reason to refuse the statement itself, collected once rather than three round trips
-  // (§2.3), and thrown together: the household reloading a stale review should not have to walk
-  // it back one tick at a time. Reason 2 subsumes reason 1 whenever both fire — which they do
-  // together on the ordinary first POST of a backdated, undated file, since the loader's baseline
-  // is the current set and a dated re-read only disagrees with it when filed behind — so that
-  // path is never told its own round trip was someone else's doing.
+  // (#181), and thrown together: the household reloading a stale review should not have to walk
+  // it back one tick at a time.
   const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
-  const unconfirmedFiledBehind = diff.filedBehind !== null && raw.confirmFiledBehind !== "true";
-  const unconfirmedRemoval = diff.majorityRemoved && raw.confirmRemovals !== "true";
+  // A confirmation is given against the figures on screen; when the baseline moved, those are not
+  // these, so the ticks are void and have to be given again against what is now shown.
+  const confirmedFiledBehind = !baselineMoved && raw.confirmFiledBehind === "true";
+  const confirmedRemovals = !baselineMoved && raw.confirmRemovals === "true";
+  const unconfirmedFiledBehind = diff.filedBehind !== null && !confirmedFiledBehind;
+  const unconfirmedRemoval = diff.majorityRemoved && !confirmedRemovals;
 
   if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
     const reasons: string[] = [];
 
-    if (baselineMoved && !unconfirmedFiledBehind) {
+    // Reason 1's sentence is for a review that went stale under the household, not for the first
+    // POST of an undated file — there the baseline "moves" only because the loader could not know
+    // the date. What separates them is whether the household had already confirmed anything.
+    const carriedConfirmation = raw.confirmFiledBehind === "true" || raw.confirmRemovals === "true";
+    if (baselineMoved && carriedConfirmation) {
       reasons.push(
         `${draft.accountName}'s recorded history changed after this review was drawn — another ` +
           "upload or correction landed while it was open. Nothing was recorded here. Reload the " +
@@ -915,10 +928,13 @@ async function commitUploadUnderLock(
     }
 
     if (unconfirmedRemoval) {
+      // "this account holds" is only true of today's holdings — wrong once filed behind means
+      // these counts are the baseline's own, not what the account currently reports (#181).
+      const held =
+        diff.filedBehind !== null ? `recorded on ${diff.baselineAsOf}` : "this account holds";
       const ratio = diff.removesEverything
-        ? `This file removes every position this account holds — all ${diff.currentCount}.`
-        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ` +
-          "this account holds.";
+        ? `This file removes every position ${held} — all ${diff.currentCount}.`
+        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ${held}.`;
       reasons.push(`${ratio} Nothing was recorded — confirm the removals to record this statement.`);
     }
 
@@ -1055,7 +1071,8 @@ export type UploadReceipt = {
   counts: { added: number; updated: number; unchanged: number; removed: number };
   holdingCount: number;
   // Whether this is the set the account is actually reading. False for a statement filed behind
-  // a later one — still a real receipt (§2.4), because the household still needs to be told.
+  // a later one — still a real receipt (docs/specs/0005-report-remediation.md §5), because the
+  // household still needs to be told.
   isCurrent: boolean;
   // What the account reports today regardless of isCurrent — the figures a filed-behind
   // statement's own holdingCount would otherwise be mistaken for.
@@ -1064,8 +1081,9 @@ export type UploadReceipt = {
 
 // Recomputed from the database, never trusted from the URL: ?uploaded= names which set, not what
 // is in it. Null only when the account has no statement at all — a stale bookmark to a set the
-// account never owned, or one it owns but no longer reads, gets a receipt of its own (§2.4): the
-// household filed something, and silence is how #181 went unnoticed.
+// account never owned, or one it owns but no longer reads, gets a receipt of its own
+// (docs/specs/0005-report-remediation.md §5): the household filed something, and silence is how
+// #181 went unnoticed.
 export async function uploadReceipt(
   accountId: string,
   setId: string,
@@ -1148,7 +1166,7 @@ export async function uploadReceipt(
     firstStatement: predecessorId === null,
     counts: { added, updated, unchanged, removed: before.size },
     holdingCount,
-    isCurrent: latest.id === setId,
+    isCurrent: latest.id === set.id,
     currentAsOf: latest.asOf,
   };
 }
