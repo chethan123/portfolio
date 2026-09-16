@@ -9,7 +9,12 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
 import { setBalance } from "~/lib/balances.server";
-import { RefusedUpload, commitUpload, rememberMapping } from "~/lib/uploads.server";
+import {
+  RefusedUpload,
+  commitUpload,
+  rememberMapping,
+  reviewForDraft,
+} from "~/lib/uploads.server";
 import { accountHoldings, holdingsAt } from "~/lib/valuation.server";
 
 import { loader as accountPage } from "../app/routes/account.tsx";
@@ -106,11 +111,16 @@ describe("Review's diff for a statement dated between two existing ones", () => 
         "Symbol,Quantity,Basis,AsOf\nALP,120,,2026-07-31\n",
         { columns: { asOf: "AsOf" } },
       );
+      const reviewed = await reviewForDraft(draftId, null, db);
 
       // 1. The first submit is refused, and the message names both dates.
       let refusal: RefusedUpload;
       try {
-        await commitUpload(draftId, { accountId: account.id }, db);
+        await commitUpload(
+          draftId,
+          { accountId: account.id, reviewRevision: reviewed.reviewRevision ?? "" },
+          db,
+        );
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -136,6 +146,7 @@ describe("Review's diff for a statement dated between two existing ones", () => 
           accountId: account.id,
           baselineSetId: refusal.diff.baselineSetId ?? "",
           confirmFiledBehind: "true",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
         },
         db,
       );
@@ -187,12 +198,21 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
         "Symbol,Quantity,Basis\nPrincipal Balance,15000,\n",
         { owedAsPositive: true },
       );
+      const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
 
       // 1. The first submit is refused on the filed-behind date alone — nothing recorded on or
       // before 2026-07-31 means an empty baseline, so there is no majority to ask about.
       let refusal: RefusedUpload;
       try {
-        await commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db);
+        await commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-07-31",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
+          db,
+        );
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -212,6 +232,7 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
           asOf: "2026-07-31",
           baselineSetId: refusal.diff.baselineSetId ?? "",
           confirmFiledBehind: "true",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
         },
         db,
       );

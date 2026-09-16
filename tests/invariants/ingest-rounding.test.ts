@@ -64,11 +64,7 @@ describe("folding a position twice", () => {
     const mapping: StatementMapping = {
       headerRow: 0,
       delimiter: ",",
-      columns: {
-        instrument: "Symbol",
-        quantity: "Quantity",
-        costBasis: "Basis",
-      },
+      columns: { instrument: "Symbol", quantity: "Quantity", costBasis: "Basis" },
       costBasisIs: "per_share",
       owedAsPositive: true,
       combineDuplicateRows: true,
@@ -90,11 +86,7 @@ async function stage(
   >,
   csv: string,
   mapping: StatementMapping,
-  vocabulary: ReadonlyArray<{
-    raw: string;
-    symbol?: string;
-    price?: string;
-  }> = [],
+  vocabulary: ReadonlyArray<{ raw: string; symbol?: string; price?: string }> = [],
 ): Promise<{ draftId: string; accountId: string }> {
   const account = await ctx.seedAccount({ kind: "brokerage" });
 
@@ -124,11 +116,7 @@ async function stage(
 const TOTAL_BASIS: StatementMapping = {
   headerRow: 0,
   delimiter: ",",
-  columns: {
-    instrument: "Symbol",
-    quantity: "Quantity",
-    costBasis: "Total Cost",
-  },
+  columns: { instrument: "Symbol", quantity: "Quantity", costBasis: "Total Cost" },
   costBasisIs: "total",
   owedAsPositive: false,
   combineDuplicateRows: true,

@@ -209,6 +209,7 @@ function problemFieldsOf(mapping: StatementMapping, problems: ParseProblem[]): s
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const draft = await requireDraft(params.draftId);
@@ -230,7 +231,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       };
     }
 
-    return redirect(`/upload/${draft.id}/${outcome.nextStep}`);
+    return redirect(`/upload/${draft.id}/${outcome.nextStep}${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.

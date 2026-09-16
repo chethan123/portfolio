@@ -9,7 +9,7 @@ import { closeAccount } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
-import { RefusedUpload, commitUpload } from "~/lib/uploads.server";
+import { RefusedUpload, commitUpload, reviewForDraft } from "~/lib/uploads.server";
 
 import {
   backendPid,
@@ -182,6 +182,14 @@ async function positionSetCount(database: Kysely<Database>, accountId: string): 
   return rows.length;
 }
 
+async function revisionFor(
+  database: Kysely<Database>,
+  draftId: string,
+  asOf: string,
+): Promise<string> {
+  return (await reviewForDraft(draftId, asOf, database)).reviewRevision ?? "";
+}
+
 describe("the account lock", () => {
   it(
     "keeps both of two corrections to different holdings, the second carrying the first forward",
@@ -235,10 +243,16 @@ describe("the account lock", () => {
         [x.name, "100"],
         [y.name, "200"],
       ]);
+      const reviewRevision = await revisionFor(database, draftId, today());
 
       await behindTheLock(
         database,
-        (trx) => commitUpload(draftId, { accountId: account.id, asOf: today(), baselineSetId }, trx),
+        (trx) =>
+          commitUpload(
+            draftId,
+            { accountId: account.id, asOf: today(), baselineSetId, reviewRevision },
+            trx,
+          ),
         (trx) => revisePosition(account.id, x.id, { quantity: "111", costBasisPerShare: "" }, trx),
       );
 
@@ -262,6 +276,8 @@ describe("the account lock", () => {
         [z.name, "5"],
       ]);
       const second = await stagedUpload(database, account, [[x.name, "10"]]);
+      const firstRevision = await revisionFor(database, first, today());
+      const secondRevision = await revisionFor(database, second, today());
 
       // `second` is drawn before the race against the plant's own set — it cannot know the id of
       // the set `first` is about to land while it waits, so its posted baseline (undefined, i.e.
@@ -273,8 +289,18 @@ describe("the account lock", () => {
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
-          (trx) => commitUpload(first, { accountId: account.id, asOf: today(), baselineSetId }, trx),
-          (trx) => commitUpload(second, { accountId: account.id, asOf: today() }, trx),
+          (trx) =>
+            commitUpload(
+              first,
+              { accountId: account.id, asOf: today(), baselineSetId, reviewRevision: firstRevision },
+              trx,
+            ),
+          (trx) =>
+            commitUpload(
+              second,
+              { accountId: account.id, asOf: today(), reviewRevision: secondRevision },
+              trx,
+            ),
         ),
       );
 
@@ -323,6 +349,7 @@ describe("the account lock", () => {
         [name("CASH"), "200"],
         [fund.name, "5"],
       ]);
+      const reviewRevision = await revisionFor(database, draftId, today());
 
       const refusal = await refusalOf(() =>
         behindTheLock(
@@ -330,7 +357,12 @@ describe("the account lock", () => {
           (trx) =>
             commitUpload(
               draftId,
-              { accountId: account.id, asOf: today(), baselineSetId: baseline.id },
+              {
+                accountId: account.id,
+                asOf: today(),
+                baselineSetId: baseline.id,
+                reviewRevision,
+              },
               trx,
             ),
           (trx) => setBalance(account.id, { amount: "300", asOf: today() }, trx),

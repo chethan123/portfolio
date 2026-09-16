@@ -313,6 +313,15 @@ if AAPL is not on the new statement, the position is gone. The diff preview is t
 against the failure mode this creates. A filtered export showing 2 of 30 positions would otherwise
 silently delete real holdings.
 
+**Review is the authorization boundary.** Recording is allowed only for the statement the server
+actually drew: the draft and its raw file, the saved mapping, each raw instrument string's effective
+meaning (recorded vocabulary wins over the draft's own answer), the folded rows, the chosen date,
+the dated baseline set and the account's latest-set context. A change to any of those makes the old
+review unusable; the server draws the current one and asks for its confirmations again. Quote and
+price changes are deliberately absent from that boundary: values on Review are context, not part of
+the position set being authorized. A form opened before this rule was deployed carries no review
+revision, so it too must pass through Review again before it can record anything.
+
 **As-of date** comes from the statement if the CSV carries one, otherwise chosen at upload with
 today as default. Never the upload timestamp, because a statement uploaded three days late describes
 the statement date.

@@ -4,6 +4,8 @@
 // byte-exact collate "C" lookup.
 import { afterAll, describe, expect, it } from "vitest";
 
+import { sql } from "kysely";
+
 import {
   findMapping,
   headerFingerprint,
@@ -304,6 +306,38 @@ describe("rememberMapping", () => {
 
       const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
       await expect(findMapping("Fidelity", fingerprint, db)).resolves.toEqual(SIMPLE);
+    }),
+  );
+
+  it(
+    "does not remember a losing Columns save as the institution default",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      const account = await seedAccount({ kind: "brokerage", institution: "Race Broker" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
+      });
+
+      await sql.raw(`
+        create function refuse_mapping_update() returns trigger language plpgsql as $$
+        begin
+          return null;
+        end
+        $$
+      `).execute(db);
+      await sql.raw(`
+        create trigger refuse_mapping_update
+        before update on upload_draft
+        for each row
+        when (old.id = ${draft.id})
+        execute function refuse_mapping_update()
+      `).execute(db);
+
+      await expect(rememberMapping(draft.id, SIMPLE, db)).rejects.toThrow(NotFoundError);
+
+      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
+      await expect(findMapping("Race Broker", fingerprint, db)).resolves.toBeNull();
+      expect((await requireDraft(draft.id, db)).mapping).toBeNull();
     }),
   );
 

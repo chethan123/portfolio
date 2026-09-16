@@ -24,6 +24,7 @@ import { args, get, post, redirectTo } from "../support/routes.ts";
 import { renderRoute } from "../support/render.tsx";
 
 import type { TestContext } from "../support/database.ts";
+import type { SeededAccount, SeededInstrument } from "../support/fixtures.ts";
 import type { StatementMapping } from "~/lib/statement";
 
 afterAll(closeTestDatabase);
@@ -45,7 +46,12 @@ const MAPPING: StatementMapping = {
 /** A statement date in the past, which is the only kind `recordedDate` takes. */
 const AS_OF = "2026-06-30";
 
-type Staged = { draftId: string; accountId: string };
+type Staged = {
+  draftId: string;
+  accountId: string;
+  account: SeededAccount;
+  instrument: SeededInstrument | null;
+};
 
 // A draft that has passed the columns step. `resolved` picks the fork: aliased already → rememberMapping sends it straight
 // to review; not aliased → instruments step is owed. Written once at this moment, unrecoverable after — must choose before saving the mapping.
@@ -63,8 +69,9 @@ async function stageDraft(
     bytes: encode(CSV),
   });
 
+  let instrument: SeededInstrument | null = null;
   if (resolved) {
-    const instrument = await ctx.seedInstrument({
+    instrument = await ctx.seedInstrument({
       symbol: "VTI",
       name: "Vanguard Total Stock",
     });
@@ -76,7 +83,7 @@ async function stageDraft(
     throw new Error("This fixture's mapping does not parse its own file.");
   }
 
-  return { draftId: draft.id, accountId: account.id };
+  return { draftId: draft.id, accountId: account.id, account, instrument };
 }
 
 /** The review screen's own data, or a failure naming where it bounced instead. */
@@ -120,7 +127,7 @@ async function commitStaged(ctx: Parameters<typeof stageDraft>[0]): Promise<Stag
         post(`/upload/${staged.draftId}/review`, {
           asOf: AS_OF,
           accountId: staged.accountId,
-          reviewRevision: review.diff.reviewRevision,
+          reviewRevision: review.diff.reviewRevision ?? "",
       }),
         { draftId: staged.draftId },
       ),
@@ -200,6 +207,11 @@ describe("a review over a draft that is not ready for one", () => {
       expect(
         await redirectTo(() => reviewLoader(args(get(`/upload/${draftId}/review`), { draftId }))),
       ).toBe(`/upload/${draftId}/columns`);
+      expect(
+        await redirectTo(() =>
+          reviewLoader(args(get(`/upload/${draftId}/review?stale=true`), { draftId })),
+        ),
+      ).toBe(`/upload/${draftId}/columns?stale=true`);
 
       // A POST carrying the earlier review is stale even when the changed mapping is no longer parseable.
       const staleReview = await redirectTo(() =>
@@ -208,22 +220,19 @@ describe("a review over a draft that is not ready for one", () => {
             post(`/upload/${draftId}/review`, {
               asOf: AS_OF,
               accountId,
-              reviewRevision: reviewed.diff.reviewRevision,
+              reviewRevision: reviewed.diff.reviewRevision ?? "",
             }),
             { draftId },
           ),
         ),
       );
-      expect(staleReview).toBe(`/upload/${draftId}/review?stale=true&asOf=${AS_OF}`);
+      expect(staleReview).toBe(`/upload/${draftId}/columns?stale=true`);
 
-      const finalDestination = await redirectTo(() =>
-        reviewLoader(args(get(staleReview), { draftId })),
-      );
-      expect(finalDestination).toBe(`/upload/${draftId}/columns?stale=true`);
+      const finalDestination = staleReview;
       const page = await columnsLoader(args(get(finalDestination), { draftId }));
       if (page instanceof Response) throw new Error(`Expected Columns, got ${page.status}.`);
       const markup = renderRoute(Columns, finalDestination, page);
-      expect(markup).toContain("This upload changed in another tab; review it again.");
+      expect(markup).toContain("The previous attempt was refused");
       expect(markup).toContain('role="alert"');
 
       expect(await lastRecorded(accountId, ctx.db)).toBeNull();
@@ -253,21 +262,19 @@ describe("a review over a draft that is not ready for one", () => {
             post(`/upload/${draftId}/review`, {
               asOf: AS_OF,
               accountId,
-              reviewRevision: reviewed.diff.reviewRevision,
+              reviewRevision: reviewed.diff.reviewRevision ?? "",
             }),
             { draftId },
           ),
         ),
       );
-      const finalDestination = await redirectTo(() =>
-        reviewLoader(args(get(staleReview), { draftId })),
-      );
+      const finalDestination = staleReview;
       expect(finalDestination).toBe(`/upload/${draftId}/instruments?stale=true`);
 
       const page = await instrumentsLoader(args(get(finalDestination), { draftId }));
       if (page instanceof Response) throw new Error(`Expected Instruments, got ${page.status}.`);
       const markup = renderRoute(Instruments, finalDestination, page);
-      expect(markup).toContain("This upload changed in another tab; review it again.");
+      expect(markup).toContain("The previous attempt was refused");
       expect(markup).toContain('role="alert"');
       expect(await lastRecorded(accountId, ctx.db)).toBeNull();
       await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
@@ -294,29 +301,26 @@ describe("a review submitted after another tab changes the mapping", () => {
       );
       expect(tabB).toEqual({ nextStep: "review" });
 
-      const destination = await redirectTo(() =>
-        reviewAction(
-          args(
-            post(`/upload/${draftId}/review`, {
-              asOf: AS_OF,
-              accountId,
-              reviewRevision: tabA.diff.reviewRevision,
-            }),
-            { draftId },
-          ),
+      const refusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId,
+            reviewRevision: tabA.diff.reviewRevision ?? "",
+          }),
+          { draftId },
         ),
       );
-      expect(destination).toBe(`/upload/${draftId}/review?stale=true&asOf=${AS_OF}`);
-
-      const refreshed = await reviewPage(draftId, `?stale=true&asOf=${AS_OF}`);
-      expect(refreshed.staleReview).toBe(true);
-      expect(refreshed.diff.added[0]?.quantity).toBe("40");
+      if (refusal instanceof Response) throw new Error("Expected the current review, not a redirect.");
+      expect(refusal.diff?.added[0]?.quantity).toBe("40");
       const markup = renderRoute(
         Review,
-        `/upload/${draftId}/review?stale=true&asOf=${AS_OF}`,
-        refreshed,
+        `/upload/${draftId}/review?asOf=${AS_OF}`,
+        tabA,
+        { actionData: refusal },
       );
-      expect(markup).toContain("This upload changed in another tab; review it again.");
+      expect(markup).toContain("This statement or its account changed after this review");
+      expect(markup).toContain("Nothing was recorded");
       expect(markup).toContain('role="alert"');
       expect(markup).toContain('name="reviewRevision"');
 
@@ -330,6 +334,49 @@ describe("a review submitted after another tab changes the mapping", () => {
 
 describe("the review revision carried by the form", () => {
   it(
+    "reviews a changed date without recording and keeps an empty date invalid",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
+
+      expect(
+        await redirectTo(() =>
+          reviewAction(
+            args(
+              post(`/upload/${draftId}/review`, {
+                intent: "review-date",
+                asOf: AS_OF,
+                accountId,
+              }),
+              { draftId },
+            ),
+          ),
+        ),
+      ).toBe(`/upload/${draftId}/review?asOf=${AS_OF}`);
+      expect(await lastRecorded(accountId, ctx.db)).toBeNull();
+
+      const empty = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            intent: "review-date",
+            asOf: "",
+            accountId,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          }),
+          { draftId },
+        ),
+      );
+      if (empty instanceof Response) throw new Error("Expected a date error, not a redirect.");
+      if (empty.diff === null) throw new Error("Expected the invalid dated review.");
+      expect(empty.errors.asOf).toMatch(/required/);
+      expect(empty.diff.reviewRevision).toBeNull();
+      expect(empty.values.confirmFiledBehind).toBeUndefined();
+      expect(empty.values.confirmRemovals).toBeUndefined();
+      expect(empty.confirmationReset).toBeTypeOf("string");
+    }),
+  );
+
+  it(
     "makes a changed typed date a new review before it can be recorded",
     withDatabase(async (ctx) => {
       const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
@@ -337,24 +384,22 @@ describe("the review revision carried by the form", () => {
       expect(firstReview.diff.asOf.source).toBe("asked");
       expect(firstReview.diff.asOf.date).not.toBe(AS_OF);
 
-      const destination = await redirectTo(() =>
-        reviewAction(
-          args(
-            post(`/upload/${draftId}/review`, {
-              asOf: AS_OF,
-              accountId,
-              reviewRevision: firstReview.diff.reviewRevision,
-            }),
-            { draftId },
-          ),
+      const changedDate = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId,
+            reviewRevision: firstReview.diff.reviewRevision ?? "",
+          }),
+          { draftId },
         ),
       );
-      expect(destination).toBe(`/upload/${draftId}/review?stale=true&asOf=${AS_OF}`);
+      if (changedDate instanceof Response)
+        throw new Error("Expected the newly dated review, not a redirect.");
       expect(await lastRecorded(accountId, ctx.db)).toBeNull();
 
-      const reviewedDate = await reviewPage(draftId, `?asOf=${AS_OF}`);
-      expect(reviewedDate.diff.asOf).toEqual({ source: "asked", date: AS_OF });
-      expect(reviewedDate.diff.reviewRevision).not.toBe(firstReview.diff.reviewRevision);
+      expect(changedDate.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
+      expect(changedDate.diff?.reviewRevision).not.toBe(firstReview.diff.reviewRevision);
 
       const recorded = await redirectTo(() =>
         reviewAction(
@@ -362,7 +407,7 @@ describe("the review revision carried by the form", () => {
             post(`/upload/${draftId}/review`, {
               asOf: AS_OF,
               accountId,
-              reviewRevision: reviewedDate.diff.reviewRevision,
+              reviewRevision: changedDate.diff?.reviewRevision ?? "",
             }),
             { draftId },
           ),
@@ -373,24 +418,23 @@ describe("the review revision carried by the form", () => {
   );
 
   it(
-    "clears a majority-removal acknowledgement after validation or a stale revision",
+    "clears removal and filed-behind acknowledgements after validation or a stale revision",
     withDatabase(async (ctx) => {
-      const { draftId } = await stageDraft(ctx, { resolved: true });
-      const draft = await requireDraft(draftId, ctx.db);
-      const vti = await ctx.db
-        .selectFrom("instrument")
-        .select(["id", "symbol", "name"])
-        .where("symbol", "=", "VTI")
-        .executeTakeFirstOrThrow();
+      const { draftId, account, instrument: vti } = await stageDraft(ctx, { resolved: true });
+      if (vti === null) throw new Error("The resolved fixture did not seed its instrument.");
       const b = await ctx.seedInstrument({ symbol: "BB", name: "Fund B" });
       const c = await ctx.seedInstrument({ symbol: "CC", name: "Fund C" });
       await ctx.seedPositionSet({
-        account: {
-          id: draft.accountId,
-          name: draft.accountName,
-          ownerId: "unused",
-        },
+        account,
         asOf: "2026-03-31",
+        holdings: [vti, b, c].map((instrument) => ({
+          instrument,
+          quantity: "1",
+        })),
+      });
+      await ctx.seedPositionSet({
+        account,
+        asOf: "2026-07-31",
         holdings: [vti, b, c].map((instrument) => ({
           instrument,
           quantity: "1",
@@ -399,27 +443,33 @@ describe("the review revision carried by the form", () => {
 
       const reviewed = await reviewPage(draftId, `?asOf=${AS_OF}`);
       expect(reviewed.diff.majorityRemoved).toBe(true);
+      expect(reviewed.diff.filedBehind).not.toBeNull();
       const validation = await reviewAction(
         args(
           post(`/upload/${draftId}/review`, {
             asOf: AS_OF,
             accountId: "999999",
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            confirmFiledBehind: "true",
             confirmRemovals: "true",
-            reviewRevision: reviewed.diff.reviewRevision,
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
           }),
           { draftId },
         ),
       );
       if (validation instanceof Response)
         throw new Error("Expected validation data, not a redirect.");
+      expect(validation.values.confirmFiledBehind).toBeUndefined();
       expect(validation.values.confirmRemovals).toBeUndefined();
       const repeated = await reviewAction(
         args(
           post(`/upload/${draftId}/review`, {
             asOf: AS_OF,
             accountId: "999999",
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            confirmFiledBehind: "true",
             confirmRemovals: "true",
-            reviewRevision: reviewed.diff.reviewRevision,
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
           }),
           { draftId },
         ),
@@ -433,6 +483,8 @@ describe("the review revision carried by the form", () => {
         reviewed,
         { actionData: validation },
       );
+      expect(validationMarkup).toContain('name="confirmFiledBehind"');
+      expect(validationMarkup).not.toMatch(/name="confirmFiledBehind"[^>]*checked/);
       expect(validationMarkup).toContain('name="confirmRemovals"');
       expect(validationMarkup).not.toMatch(/name="confirmRemovals"[^>]*checked/);
 
@@ -444,31 +496,44 @@ describe("the review revision carried by the form", () => {
         },
         ctx.db,
       );
-      const destination = await redirectTo(() =>
-        reviewAction(
-          args(
-            post(`/upload/${draftId}/review`, {
-              asOf: AS_OF,
-              accountId: draft.accountId,
-              confirmRemovals: "true",
-              reviewRevision: reviewed.diff.reviewRevision,
-            }),
-            { draftId },
-          ),
+      const staleRefusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId: account.id,
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
+          }),
+          { draftId },
         ),
       );
-      const refreshed = await reviewPage(draftId, new URL(destination, "http://test").search);
-      const staleMarkup = renderRoute(Review, destination, refreshed);
+      if (staleRefusal instanceof Response)
+        throw new Error("Expected the current review, not a redirect.");
+      expect(staleRefusal.values.confirmFiledBehind).toBeUndefined();
+      expect(staleRefusal.values.confirmRemovals).toBeUndefined();
+      const staleMarkup = renderRoute(
+        Review,
+        `/upload/${draftId}/review?asOf=${AS_OF}`,
+        reviewed,
+        { actionData: staleRefusal },
+      );
+      expect(staleMarkup).toContain('name="confirmFiledBehind"');
+      expect(staleMarkup).not.toMatch(/name="confirmFiledBehind"[^>]*checked/);
       expect(staleMarkup).toContain('name="confirmRemovals"');
       expect(staleMarkup).not.toMatch(/name="confirmRemovals"[^>]*checked/);
 
+      const refreshed = await reviewPage(draftId, `?asOf=${AS_OF}`);
       const staleValidation = await reviewAction(
         args(
-          post(destination, {
+          post(`/upload/${draftId}/review`, {
             asOf: AS_OF,
             accountId: "999999",
+            baselineSetId: refreshed.diff.baselineSetId ?? "",
+            confirmFiledBehind: "true",
             confirmRemovals: "true",
-            reviewRevision: refreshed.diff.reviewRevision,
+            reviewRevision: refreshed.diff.reviewRevision ?? "",
           }),
           { draftId },
         ),
@@ -477,12 +542,16 @@ describe("the review revision carried by the form", () => {
         throw new Error("Expected validation data on the stale review, not a redirect.");
       }
       expect(staleValidation.confirmationReset).toBeTypeOf("string");
-      const refusedStaleMarkup = renderRoute(Review, destination, refreshed, {
-        actionData: staleValidation,
-      });
+      const refusedStaleMarkup = renderRoute(
+        Review,
+        `/upload/${draftId}/review?asOf=${AS_OF}`,
+        refreshed,
+        { actionData: staleValidation },
+      );
+      expect(refusedStaleMarkup).not.toMatch(/name="confirmFiledBehind"[^>]*checked/);
       expect(refusedStaleMarkup).not.toMatch(/name="confirmRemovals"[^>]*checked/);
-      expect(await lastRecorded(draft.accountId, ctx.db)).not.toBeNull();
-      expect((await lastRecorded(draft.accountId, ctx.db))?.asOf).toBe("2026-03-31");
+      expect(await lastRecorded(account.id, ctx.db)).not.toBeNull();
+      expect((await lastRecorded(account.id, ctx.db))?.asOf).toBe("2026-07-31");
     }),
   );
 
@@ -490,16 +559,15 @@ describe("the review revision carried by the form", () => {
     "rejects missing revisions and turns an invalid date query into an accessible field error",
     withDatabase(async (ctx) => {
       const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
-      expect(
-        await redirectTo(() =>
-          reviewAction(
-            args(post(`/upload/${draftId}/review`, { asOf: AS_OF, accountId }), { draftId }),
-          ),
-        ),
-      ).toBe(`/upload/${draftId}/review?stale=true&asOf=${AS_OF}`);
+      const missing = await reviewAction(
+        args(post(`/upload/${draftId}/review`, { asOf: AS_OF, accountId }), { draftId }),
+      );
+      if (missing instanceof Response) throw new Error("Expected a stale-review refusal.");
+      expect(missing.formError).toContain("This statement or its account changed");
+      expect(missing.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
 
       const invalid = await reviewPage(draftId, "?asOf=2026-02-30");
-      expect(invalid.asOfError).toMatch(/not a date on the calendar/);
+      expect(invalid.diff.asOfError).toMatch(/not a date on the calendar/);
       const markup = renderRoute(Review, `/upload/${draftId}/review?asOf=2026-02-30`, invalid);
       expect(markup).toContain('aria-invalid="true"');
       expect(markup).toContain('role="alert"');
