@@ -74,13 +74,135 @@ export const MASKING_FETCHER_KEY = "masking";
 /** Carries the state being flipped *to*. */
 export const MASKING_FIELD = "masked";
 
+/** Added during a scripted submit; absent from the same forms when JavaScript is unavailable. */
+export const MASKING_ENHANCED_FIELD = "enhanced";
+
 export const MASKING_ACTION = "/masking";
 
-const MASKING_CHANGE_EVENT = "portfolio:masking-change";
+const MASKING_CHANNEL = "portfolio:masking-change";
+const MASKING_INTENT_STORAGE = "portfolio:masking-intent";
+
+type MaskingSubscriber = () => void;
+const UNREAD_MASKING_SNAPSHOT = Symbol("unread masking snapshot");
+
+// One channel per browser tab, however many Amount components subscribe. The message is only an
+// invalidation: the receiver reads the shared cookie instead of trusting state from another tab.
+const maskingSubscribers = new Set<MaskingSubscriber>();
+let maskingChannel: BroadcastChannel | null | undefined;
+let maskingIntentReliable = true;
+let browserMaskingSnapshotValue: string | undefined | typeof UNREAD_MASKING_SNAPSHOT =
+  UNREAD_MASKING_SNAPSHOT;
+
+function notifyMaskingSubscribers(): void {
+  for (const subscriber of maskingSubscribers) subscriber();
+}
+
+function readBrowserMaskingCookie(): string | undefined {
+  return readCookieHeader(document.cookie, MASKING_COOKIE);
+}
+
+function acceptExternalMaskingChange(): void {
+  // Hide propagates immediately. Show cannot populate a tab whose loader deliberately omitted
+  // exact amounts, so that tab stays at its dot gate until its own intentional Show revalidation.
+  const current = readBrowserMaskingCookie();
+  if (current !== MASKED) return;
+  browserMaskingSnapshotValue = current;
+  notifyMaskingSubscribers();
+}
+
+function notifyVisibleMaskingSubscribers(): void {
+  if (document.visibilityState === "visible") acceptExternalMaskingChange();
+}
+
+function newMaskingIntent(): string {
+  try {
+    const words = crypto.getRandomValues(new Uint32Array(4));
+    return Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function readBrowserMaskingIntent(): string | undefined {
+  if (!maskingIntentReliable) return undefined;
+  try {
+    return localStorage.getItem(MASKING_INTENT_STORAGE) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Captures the ordering point before an enhanced Settings write; unavailable storage fails safe. */
+export function captureBrowserMaskingIntent(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+
+  const existing = readBrowserMaskingIntent();
+  if (existing !== undefined) return existing;
+
+  try {
+    const initial = newMaskingIntent();
+    localStorage.setItem(MASKING_INTENT_STORAGE, initial);
+    maskingIntentReliable = true;
+    return initial;
+  } catch {
+    maskingIntentReliable = false;
+    return undefined;
+  }
+}
+
+/** True only when no masking choice has followed the captured ordering point, including an ABA. */
+export function browserMaskingIntentIsCurrent(intent: string | undefined): boolean {
+  return intent !== undefined && readBrowserMaskingIntent() === intent;
+}
+
+function advanceBrowserMaskingIntent(): void {
+  try {
+    localStorage.setItem(MASKING_INTENT_STORAGE, newMaskingIntent());
+    maskingIntentReliable = true;
+  } catch {
+    maskingIntentReliable = false;
+    // Remove an old token where storage permits it. Otherwise the local reliability flag still
+    // prevents a Settings response from mistaking that stale token for a current one.
+    try {
+      localStorage.removeItem(MASKING_INTENT_STORAGE);
+    } catch {
+      // Storage is wholly unavailable; Settings preserves the existing cookie.
+    }
+  }
+}
+
+function startBrowserMaskingWatchers(): void {
+  window.addEventListener("focus", acceptExternalMaskingChange);
+  document.addEventListener("visibilitychange", notifyVisibleMaskingSubscribers);
+
+  if (typeof BroadcastChannel === "undefined") {
+    maskingChannel = null;
+    return;
+  }
+
+  try {
+    maskingChannel = new BroadcastChannel(MASKING_CHANNEL);
+    maskingChannel.addEventListener("message", acceptExternalMaskingChange);
+  } catch {
+    // Focus and visibility still adopt an external Hide if channel construction is unavailable.
+    maskingChannel = null;
+  }
+}
+
+function stopBrowserMaskingWatchers(): void {
+  window.removeEventListener("focus", acceptExternalMaskingChange);
+  document.removeEventListener("visibilitychange", notifyVisibleMaskingSubscribers);
+  maskingChannel?.removeEventListener("message", acceptExternalMaskingChange);
+  maskingChannel?.close();
+  maskingChannel = undefined;
+}
 
 function browserMaskingSnapshot(): string | undefined {
   if (typeof document === "undefined") return undefined;
-  return readCookieHeader(document.cookie, MASKING_COOKIE);
+  if (browserMaskingSnapshotValue === UNREAD_MASKING_SNAPSHOT) {
+    browserMaskingSnapshotValue = readBrowserMaskingCookie();
+  }
+  return browserMaskingSnapshotValue;
 }
 
 function serverMaskingSnapshot(): undefined {
@@ -90,14 +212,28 @@ function serverMaskingSnapshot(): undefined {
 function subscribeToBrowserMasking(onChange: () => void): () => void {
   if (typeof window === "undefined") return () => undefined;
 
-  window.addEventListener(MASKING_CHANGE_EVENT, onChange);
-  return () => window.removeEventListener(MASKING_CHANGE_EVENT, onChange);
+  maskingSubscribers.add(onChange);
+  if (maskingSubscribers.size === 1) startBrowserMaskingWatchers();
+
+  return () => {
+    maskingSubscribers.delete(onChange);
+    if (maskingSubscribers.size === 0) stopBrowserMaskingWatchers();
+  };
 }
 
-/** Cookie writes have no browser event; tell every mounted reader to take a fresh snapshot. */
+/** Cookie writes have no browser event; tell this tab and the browser's other tabs to reread it. */
+export function publishBrowserMaskingChange(): void {
+  if (typeof window === "undefined") return;
+  browserMaskingSnapshotValue = readBrowserMaskingCookie();
+  notifyMaskingSubscribers();
+  maskingChannel?.postMessage("changed");
+}
+
+/** Publishes a new user masking intent and advances the cross-tab ordering token. */
 export function notifyBrowserMaskingChange(): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event(MASKING_CHANGE_EVENT));
+  advanceBrowserMaskingIntent();
+  publishBrowserMaskingChange();
 }
 
 type MaskingLoaderState = {

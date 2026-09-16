@@ -8,7 +8,7 @@ import { args, post } from "../support/routes.ts";
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 const { action, loader } = await import("../../app/routes/settings/display.tsx");
-const { MASKED, MASKING_COOKIE } = await import("~/lib/masking");
+const { MASKED, MASKING_COOKIE, MASKING_ENHANCED_FIELD } = await import("~/lib/masking");
 const { readMaskingPolicy } = await import("~/lib/settings.server");
 
 afterAll(closeTestDatabase);
@@ -45,7 +45,13 @@ describe("saving a masking policy", () => {
     "clears this browser's state cookie, so the change takes effect where it was made",
     withDatabase(async () => {
       const outcome = await action(
-        args(post("/settings/display", { maskingPolicy: "unmasked" }, `${MASKING_COOKIE}=${MASKED}`)),
+        args(
+          post(
+            "/settings/display",
+            { maskingPolicy: "unmasked" },
+            `${MASKING_COOKIE}=${MASKED}`,
+          ),
+        ),
       );
 
       const cookie = cookieOf(outcome);
@@ -53,6 +59,23 @@ describe("saving a masking policy", () => {
       expect(cookie).toContain(`${MASKING_COOKIE}=`);
       // Expired, not merely rewritten — the stored policy alone decides what this browser opens in.
       expect(cookie).toMatch(/max-age=0/i);
+    }),
+  );
+
+  it(
+    "does not let an older enhanced response erase a newer masking choice",
+    withDatabase(async () => {
+      const outcome = await action(
+        args(
+          post("/settings/display", {
+            maskingPolicy: "unmasked",
+            [MASKING_ENHANCED_FIELD]: "1",
+          }),
+        ),
+      );
+
+      expect(outcome).toMatchObject({ saved: true, intent: undefined });
+      expect(cookieOf(outcome)).toBeNull();
     }),
   );
 

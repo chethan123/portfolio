@@ -11,6 +11,7 @@ import { MaskedIcon, UnmaskedIcon } from "~/components/icons";
 import {
   MASKED,
   MASKING_ACTION,
+  MASKING_ENHANCED_FIELD,
   MASKING_FETCHER_KEY,
   MASKING_FIELD,
   UNMASKED,
@@ -37,7 +38,10 @@ export function MaskingToggle({ className }: { className?: string }) {
       method="post"
       action={MASKING_ACTION}
       className={className}
-      onSubmit={() => {
+      onSubmit={(event) => {
+        const enhanced = event.currentTarget.elements.namedItem(MASKING_ENHANCED_FIELD);
+        if (enhanced instanceof HTMLInputElement) enhanced.value = "1";
+
         // Optimistic write, so the flip survives a reload before the POST lands. Guarded on `document` for the server render.
         if (typeof document !== "undefined") {
           document.cookie = maskingCookie(next === MASKED, rootData?.maskingPolicy ?? "masked");
@@ -47,6 +51,7 @@ export function MaskingToggle({ className }: { className?: string }) {
     >
       {/* Only the no-JS path reads this — search included, so it doesn't reset a sorted table's sort. */}
       <input type="hidden" name="redirectTo" value={`${location.pathname}${location.search}`} />
+      <input type="hidden" name={MASKING_ENHANCED_FIELD} defaultValue="" />
 
       {/* State travels as the button's own value, not a checkbox — unchecked contributes nothing either way. */}
       <button type="submit" name={MASKING_FIELD} value={next} className="masking-toggle">

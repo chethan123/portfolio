@@ -413,11 +413,14 @@ ratio strings and gain/loss direction remain because none reveals the exact inpu
 records this exception for Holdings.
 
 The root and Holdings loaders share one masking decision in the request context because route
-loaders run in parallel. Two toggle redirect revalidations can also overlap; an older exact Show
-response can finish after a newer redacted Hide response. The masking cookie therefore remains the
-live browser snapshot after the fetcher stops being pending, keeping that late response from
-reopening inputs. A failed policy read has no such browser precedence: an explicit resolution marker
-keeps the hydrated app masked regardless of an older cookie.
+loaders run in parallel. A Hide cookie is published across tabs through a payload-free invalidation;
+each receiver rereads the cookie and removes exact inputs immediately. Show stays local until that
+tab intentionally revalidates, because a masked Holdings projection has no exact values to reveal.
+Enhanced toggle responses never repeat their optimistic cookie write, so an older Show action
+cannot overwrite a newer Hide from another tab. Display Settings likewise clears its override only
+after success and only when a browser-wide, amount-free intent token proves no later toggle won. A
+failed policy read has no browser precedence: an explicit resolution marker keeps the hydrated app
+masked regardless of an older cookie.
 
 > **Accepted limitation.** The Holdings editor cannot choose a past date. A same-date CSV reupload
 > or bank/loan balance entry can supersede an earlier snapshot without deleting it. Removing a bad

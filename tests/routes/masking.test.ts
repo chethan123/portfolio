@@ -11,7 +11,9 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 const { loader: rootLoader } = await import("../../app/root.tsx");
 const { action: toggle } = await import("../../app/routes/masking.ts");
-const { MASKED, MASKING_COOKIE, UNMASKED } = await import("~/lib/masking");
+const { MASKED, MASKING_COOKIE, MASKING_ENHANCED_FIELD, UNMASKED } = await import(
+  "~/lib/masking"
+);
 const { saveMaskingPolicy } = await import("~/lib/settings.server");
 
 afterAll(closeTestDatabase);
@@ -130,4 +132,25 @@ describe("the toggle's no-JavaScript path", () => {
       expect(response.headers.get("Set-Cookie")).toBeNull();
     }),
   );
+});
+
+describe("the toggle's enhanced path", () => {
+  it("does not let an older action response overwrite a newer cookie choice", async () => {
+    // The script wrote this request's state before sending it. A Set-Cookie response could arrive
+    // after Hide in another tab and restore the stale Show state for the whole browser.
+    const response = await responseOf(() =>
+      toggle(
+        args(
+          post("/masking", {
+            masked: UNMASKED,
+            redirectTo: "/holdings",
+            [MASKING_ENHANCED_FIELD]: "1",
+          }),
+        ),
+      ),
+    );
+
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+    expect(response.headers.get("Location")).toBe("/holdings");
+  });
 });

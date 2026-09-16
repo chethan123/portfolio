@@ -522,14 +522,21 @@ after its action (React Router 7.18.2), so showing amounts obtains a fresh exact
 correction inputs mount.
 
 The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
-publishes its synchronous write. Redirect revalidations from two toggles can overlap, letting an
-older exact Show response finish after a newer redacted Hide response; cookie precedence keeps that
-late loader data from remounting correction inputs. A successful policy resolution is an explicit
-root-loader field. When the policy read fails, that field keeps the browser masked even if a
-pre-existing cookie says to show. The hook's server snapshot remains the root loader value, so
-hydration has no module-global request state. During either transition the editor requires both
-unmasked state and an exact projection, keeping stale exact data or a placeholder out of form
-defaults.
+publishes its synchronous write locally and sends one payload-free invalidation through the
+module's single `BroadcastChannel`; focus and visibility are the fallback. Receiving tabs reread
+the cookie and adopt Hide immediately. They do not adopt Show until their own intentional Show can
+revalidate a masked Holdings projection. Enhanced actions carry an explicit form marker and never
+repeat the client cookie write in a delayed response; an unmarked request remains the no-JavaScript
+server writer even where Fetch Metadata headers are absent. Display Settings uses the same split,
+plus an origin-local random intent token so success clears the override only if no later toggle won.
+Unavailable token storage preserves the cookie. Neither the channel nor the token contains private
+data.
+
+A successful policy resolution is an explicit root-loader field. When the policy read fails, that
+field keeps the browser masked even if a pre-existing cookie says to show. The hook's server
+snapshot remains the root loader value, so hydration has no module-global request state. During
+either transition the editor requires both unmasked state and an exact projection, keeping stale
+exact data or a placeholder out of form defaults.
 
 ### 4.5 Write paths
 
@@ -2355,7 +2362,7 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here. This route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
 | `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript, since there is no progressive-enhancement path for a passkey check |
 | `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie, posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
-| `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
+| `masking.ts` | The masking toggle's no-JavaScript cookie writer and enhanced-form revalidation target, with an explicit form marker distinguishing the two; `lib/masking.ts` owns the cookie name, vocabulary, lifetime, cross-tab invalidation and intent ordering |
 | `refresh.ts` | The one way a person spends a provider request on demand, a resource route like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Those two alone decide the 200/503. Carries a `pricing` object beside them (spec 0021) which never changes that status: a live `worker` probe over the socket, and `scheduler`/`quotes`/`ok` read passively off the poller's own slot. Still never checks the provider, still never requires authentication (§7.4). A thin composer: `lib/health-response.ts` builds the body, `lib/price-health.ts` derives the categories |
 

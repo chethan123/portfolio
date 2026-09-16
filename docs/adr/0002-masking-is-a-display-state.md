@@ -51,8 +51,10 @@ then corrects itself, which is the one failure this feature cannot have.
 The toggle has to work at the speed of a hand, not of a network. On a bad connection a server
 round-trip makes the hide button take seconds at the exact moment it is needed, and an optimistic
 flip whose write then fails would put the amounts back into view. So the client writes the cookie
-itself, and the form `POST` behind the same control remains as the no-JavaScript path and writes the
-identical value. One cookie has two writers.
+itself. The form `POST` remains the no-JavaScript path and writes the identical value only when the
+client did not mark the submission as enhanced. Repeating the client write in an enhanced response
+would let an older Show response overwrite a newer Hide from another tab. A missing marker takes
+the no-JavaScript path; the distinction does not depend on optional Fetch Metadata headers.
 
 `HttpOnly` is therefore off, which is correct rather than merely convenient. The cookie carries a
 display preference, not a credential, and it has to be readable by the script that owns the toggle.
@@ -70,14 +72,27 @@ writers this paragraph opened with. Client script sets it directly, where the ch
 only ever written by the server. What changed here is only that the gate's is no longer the only
 cookie here that carries more than a preference.]
 
-The browser reads that cookie through an external-store subscription. A direct write publishes a
-same-tab change event because cookie writes have no browser event of their own. Redirect
-revalidations from two toggles can overlap, and an older exact Show response can arrive after a newer
-redacted Hide response. The cookie stays authoritative after the fetcher stops being pending, so the
-late response cannot reopen correction inputs. This precedence applies only after the server has
-resolved the masking policy. A failed policy read remains masked after hydration even if an older
-browser cookie says to show. The first render and hydration still use the root loader snapshot; no
-browser state is shared between server requests.
+The browser reads that cookie through an external-store subscription. A direct write publishes to
+all readers in its tab and sends a payload-free invalidation over one module-wide
+`BroadcastChannel`; another tab rereads the cookie rather than trusting state in the message. Focus
+and visibility changes repeat that read for browsers without a delivered channel event. Hide is
+adopted immediately. Show is not: a tab whose masked loader omitted exact Holdings values stays at
+its dot gate until Show in that tab intentionally revalidates. An older exact loader response cannot
+reopen correction inputs because the newer Hide cookie remains authoritative.
+
+Display Settings is a second cookie writer. Its enhanced action returns success without
+`Set-Cookie`; only then may the component reset the browser override. A random ordering token in
+origin-local storage records intervening Hide and Show intents, including a Show-then-Hide ABA. If
+the token changed, or storage is unavailable, the successful older Settings action preserves the
+current cookie. While root reloads the saved policy, a temporary cookie carries that policy's safe
+answer; after revalidation the component clears it if the ordering token is still current. The token
+and channel message contain no amount, policy, or other private data. The no-JavaScript Settings
+POST still clears the cookie in its document response.
+
+Cookie precedence applies only after the server has resolved the masking policy. A failed policy
+read remains masked after hydration even if an older browser cookie says to show. The first render
+and hydration still use the root loader snapshot; no browser state is shared between server
+requests.
 
 ## Considered options
 
