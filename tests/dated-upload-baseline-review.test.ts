@@ -175,7 +175,7 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
       await setBalance(account.id, { amount: "14,500.00", asOf: "2026-09-15" }, db);
 
       // An uploaded loan statement names the balance under its own row, not the seeded USD
-      // instrument setBalance uses (DESIGN.md §14.8: an upload resolves instruments on its own).
+      // instrument setBalance uses (an upload resolves its own instruments — instrument-resolution.server.ts).
       const principal = await seedInstrument({ symbol: null, name: "Principal Balance" });
       await seedInstrumentAlias({ instrument: principal, rawString: "Principal Balance" });
 

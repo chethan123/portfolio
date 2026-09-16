@@ -599,11 +599,19 @@ so the line is the table's index rather than a second sequence to reconcile agai
 account reads **"14 ADDED"**, not a diff against nothing: there is nothing to have updated or
 removed, and three zero counts would dress an ordinary first upload as a strange one.
 
-The `.form-intro` beneath restates the frame in a sentence — *"Compared against what Fidelity
-Brokerage holds now. 1 row is unchanged and is not listed."* — because unchanged rows are
-deliberately absent from the table: listing rows that do nothing buries the five that do, and the
-count is all an unchanged row has to say. In the worked file that one row is the cash position,
-`4,210.55` in the file and `4,210.55` in the account.
+The `.form-intro` beneath restates the frame in a sentence naming the baseline the diff was actually
+measured against — *"Compared against what Fidelity Brokerage held on 2026-06-30. 1 row is
+unchanged and is not listed."* — because unchanged rows are deliberately absent from the table:
+listing rows that do nothing buries the five that do, and the count is all an unchanged row has to
+say. In the worked file that one row is the cash position, `4,210.55` in the file and `4,210.55` in
+the account.
+
+**The baseline is the account's own history at the statement's date** (CONTEXT.md, "Baseline"), not
+simply "what the account holds now": a statement dated behind the account's current one is compared
+against what the account held on its own date, and §6.4 covers what that means for the confirmation
+below. *"…holds now"* is what the sentence reads in the one moment the date is not yet known at
+all — the undated loader's first render of a file that does not date itself (§6.3), before anything
+is typed.
 
 ### 6.1 The diff table
 
@@ -670,12 +678,34 @@ from the presence of a control whether the file was dated.
   control and its validator quoting two different rules is two rules. The sentence beside it:
   *"This file does not date itself."*
 
-### 6.4 The majority-removal confirmation
+### 6.4 Confirmations: filed behind, then majority removal
 
-**When the file removes more than half of what the account holds, the commit requires a tick
-against a sentence stating the ratio in those words:**
+Two independent confirmations can stack above the commit row. When both apply they draw in this
+order — filed behind above majority removal — because the date is what reframes the removal count
+below it: the household should read *why* the counts are what they are before deciding whether the
+removals are real.
+
+**Filed behind.** When the statement's date sits behind the account's own current one — another
+statement or a correction already dated later — the commit requires a tick against a sentence
+naming both dates and what recording it actually does:
+
+> **"This statement is dated 2026-07-31, behind the 2026-09-09 figures Fidelity Brokerage
+> currently reports. Recording it changes this account's history between 2026-07-31 and the next
+> statement recorded after it, and with it the net worth chart over those dates, but it does not
+> change what the account holds now."**
+
+Same danger-zone weight as the majority-removal block, drawn above it when both apply. Unticked,
+the commit is refused with a `.form-error` above the commit row — *"Nothing was recorded — confirm
+to file it behind."*
+
+**The majority-removal confirmation.** When the file removes more than half of what its baseline
+holds, the commit requires a tick against a sentence stating the ratio in those words:
 
 > **"This file removes 12 of the 15 positions this account holds."**
+
+— or, when the statement above is itself filed behind, **"…positions recorded on 2026-06-30."** in
+place of "…this account holds": the count is against the baseline the statement is actually
+measured against, never against today's holdings it was not compared to.
 
 Drawn with the weight of the danger-zone grammar — a block above the commit row with a top
 hairline and 24px padding, the sentence in body-sm weight 600 `--on-surface` with the figures
@@ -687,12 +717,18 @@ account — is the house weight for "this is the destructive one".
 Unticked, the commit is **refused and nothing is written**: the screen re-renders with a
 `.form-error` above the commit row — *"Nothing was recorded. Confirm the removals to record this
 statement."* — and everything else intact. **A file that removes everything says so in those
-words**: *"This file removes every position this account holds — all 15."* The general sentence's
-arithmetic is technically true there too, and is exactly the phrasing that would soften the one
-case that most deserves plain speech.
+words**: *"This file removes every position this account holds — all 15."* (or, filed behind,
+*"…every position recorded on 2026-06-30 — all 15."*) The general sentence's arithmetic is
+technically true there too, and is exactly the phrasing that would soften the one case that most
+deserves plain speech.
 
 A first statement, and any file removing half or less, draws no confirmation at all — a tick that
 is always demanded is a tick nobody reads.
+
+**Neither confirmation survives the baseline moving under it.** A tick given, then superseded by a
+concurrent writer or an edited date, renders unticked again against whatever is now on screen —
+never carried forward to figures it was not given for. The commit refuses that resubmit too, so the
+household never loses the round trip: recording lands on the second POST, not a third.
 
 ### 6.5 Commit, and the receipt
 
@@ -702,7 +738,7 @@ anchor **"Back to columns"**, because the misread-column story ends here: see ev
 thousand times too large, walk back, remap, return. Nothing was written, because nothing is written
 before the commit.
 
-**Three more refusals fire at the moment of the write, and all three render as a `.form-error`
+**Five refusals fire at the moment of the write, and all five render as a `.form-error`
 above the commit row** — the house grammar for a refusal about the whole form rather than one
 control:
 
@@ -716,6 +752,12 @@ control:
   happen.
 - **A closed account** — closed while the draft sat open — refuses in `setBalance`'s words: a
   closed account's history does not change.
+- **A stale review.** The account's recorded history moved after this review was drawn — another
+  upload or correction landed, or the typed date changed to name a different baseline — so the
+  figures on screen no longer describe what the commit would act on. The refusal names what the
+  statement is now measured against; nothing is recorded, and nothing is carried forward.
+- **An unconfirmed filed-behind statement.** §6.4's own confirmation, refused the same way when its
+  tick is missing, or was given against a baseline since superseded.
 
 **Success lands on the account** — `/accounts/:id?uploaded=<setId>` — with a `role="status"`
 receipt. It needs a stated home, because a brokerage, 401k or IRA page has no set-balance panel to
@@ -725,20 +767,35 @@ panel**, in the page's own type —
 > "Recorded. **Positions_2026-06-30.csv** landed as 1 added · 3 updated · 1 removed, as of
 > **2026-06-30**. Fidelity Brokerage now holds **5 positions**."
 
-**Every figure in that sentence is read back from the database, never from the URL.** `?uploaded=`
-names *which* set was written and says nothing about what is in it, so a hand-typed parameter can
-only ever produce a sentence describing what the account actually holds — the same guarantee the
-`?recorded=` receipt on this page already has. No toast, no green flash: the confirmation is a
-sentence in the place the thing happened, and it stays until the next navigation.
+**A statement filed behind the account's own current one gets the same receipt, worded for what
+actually happened.** The counts above it are unchanged — they still describe what this statement
+recorded — but the closing clause names what the account still reports rather than claiming this
+statement is it:
+
+> "Recorded. **Positions_2026-07-31.csv** landed as 1 added · 3 updated · 1 removed, as of
+> **2026-07-31**. Filed behind what Fidelity Brokerage already reports — it still shows its
+> **2026-09-09** figures."
+
+**Every figure in either sentence is read back from the database, never from the URL.** `?uploaded=`
+names *which* set was written and says nothing about what is in it — including whether it is the
+set the account is currently reading — so a hand-typed parameter can only ever produce a sentence
+describing what that set recorded and whether it is current, never a claim the database does not
+back. The same guarantee the `?recorded=` receipt on this page already has. No toast, no green
+flash: the confirmation is a sentence in the place the thing happened, and it stays until the next
+navigation.
 
 **A committed draft posted again** — the back button pressed after success, a resubmitted tab —
 renders the already-recorded page of §7.4 with a link to the account. The link is possible only
 because the review form carries the account id as a hidden field: the draft the id would be read
 from is gone, and the hidden field feeds that one link, never a write. Not a second set, not a 500.
 
-**Draw this screen four times**: the ordinary diff above; the first statement ("14 ADDED", one
-group, no confirmation, the VTSAX "3 rows combined" note visible); the majority-removal state with
-the tick unticked and the refusal showing; and the removes-everything wording.
+**Draw this screen five times**: the ordinary diff above; the first statement ("14 ADDED", one
+group, no confirmation, the VTSAX "3 rows combined" note visible); the filed-behind state, its
+confirmation showing alone; the majority-removal state with the tick unticked and the refusal
+showing; and the removes-everything wording. The two danger-zone blocks stack — filed behind above
+majority removal (§6.4) — whenever a statement is both behind the account's current one and removes
+most of what its own baseline holds; no separate drawing is needed for that sixth combination once
+each half is drawn on its own.
 
 ---
 

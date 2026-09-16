@@ -423,7 +423,7 @@ table with a single grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:424` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:460` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
   compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -806,7 +806,7 @@ the account lock (§7.2) began its transaction before the set it then copies for
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping
 at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:916`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1124`) needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -985,7 +985,7 @@ it is why the mapping records its own delimiter rather than letting a second sni
 verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:448`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:486`) folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -1210,7 +1210,7 @@ Five of those deserve emphasis:
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:881-888`, guarded by
+file carries one, the commit writes it onto the account (`uploads.server.ts:1079-1086`, guarded by
 `where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
 predicate stays as the write's own statement of the rule). The guard arms itself on the first upload,
 and every later statement is checked against it.

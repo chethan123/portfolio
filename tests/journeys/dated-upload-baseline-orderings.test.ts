@@ -207,7 +207,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       // the refusal is the stale baseline alone, not a fresh filed-behind demand.
       expect(second.diff.filedBehind).toBeNull();
       expect(second.diff.baselineSetId).not.toBe(early.id);
-      expect(second.fieldErrors.form).toMatch(/recorded history changed after this review was drawn/);
+      expect(second.fieldErrors.form).toMatch(/measured against what .+ held on 2026-09-09/);
 
       const sets = await db
         .selectFrom("position_set")
@@ -263,9 +263,18 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         ),
       );
       expect(second.diff.baselineSetId).not.toBe(early.id);
-      // The tick this submit carried was real, so a baseline that still moved under it is
-      // genuinely stale — unlike an untouched first submission, this one names the sentence.
-      expect(second.fieldErrors.form).toMatch(/recorded history changed after this review was drawn/);
+      // The concurrent write left this statement filed behind the same 2026-09-09 figures it was
+      // already filed behind before — reason 2 still applies against the new baseline, and
+      // subsumes reason 1's sentence exactly as it would on an untouched first submission: the
+      // demand is to reconfirm filed-behind, not to be told history changed, even though it did.
+      // This also pins confirmedFiledBehind's own `!baselineMoved` guard (uploads.server.ts): the
+      // tick this submit carried is void because the baseline moved, so `unconfirmedFiledBehind`
+      // stays true here. The guard decides which sentence appears rather than whether the write is
+      // admitted — baselineMoved alone already refuses — so dropping it would not stop this from
+      // being refused, only swap this assertion's sentence for reason 1's.
+      expect(second.diff.filedBehind).not.toBeNull();
+      expect(second.fieldErrors.form).toMatch(/confirm to file it behind/);
+      expect(second.fieldErrors.form).not.toMatch(/measured against/);
 
       const holdings = await db
         .selectFrom("holding")
@@ -348,6 +357,24 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       expect(response.diff?.currentCount).toBe(5);
       expect(response.diff?.removed).toHaveLength(4);
       expect(response.formError).toMatch(/removes 4 of the 5 positions recorded on 2026-06-30/);
+
+      // The screen's own checkbox label computes this same "recorded on" scoping independently
+      // (review.tsx's `removalScope`) — rendered, not merely echoed from the domain's formError
+      // string, so a regression there would not be caught by the assertion above alone.
+      const loaderData = await reviewLoader(args(get(`/upload/${draftId}/review`), { draftId }));
+      if (loaderData instanceof Response) throw new Error("Expected the review screen, not a redirect.");
+      const markup = renderRoute(Review, `/upload/${draftId}/review`, loaderData, {
+        actionData: response,
+      });
+      // Scoped to the checkbox's own `<label>`, not the `.form-error` paragraph beside it — the
+      // latter merely echoes the domain's message and would pass even if `removalScope` regressed
+      // to the unconditional "this account holds".
+      const checkboxStart = markup.indexOf('name="confirmRemovals"');
+      const label = markup.slice(checkboxStart, markup.indexOf("</label>", checkboxStart));
+      expect(label).toContain("removes");
+      expect(label).toContain("recorded on");
+      expect(label).toContain("2026-06-30");
+      expect(label).not.toContain("this account holds");
     }),
   );
 
@@ -418,6 +445,109 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       // Both boxes still render — proving the checkbox is unticked, not gone.
       expect(markup).toContain('name="confirmFiledBehind"');
       expect(markup).not.toContain("checked");
+
+      // The screen half of the copy #181 also rewrote (uploads.server.ts's matching sentences are
+      // pinned above; only the render was dark): the frame names the baseline's own date, not
+      // "holds now".
+      expect(markup).toContain("Compared against what");
+      expect(markup).toContain("held on");
+      expect(markup).toContain(secondResponse.diff?.asOf.date);
+      expect(markup).not.toMatch(/Compared against what [^.]+ holds now/);
+    }),
+  );
+
+  it(
+    "renders 'nothing was recorded on or before' rather than 'the first statement' for a date before all history",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "ORD", name: "Ordering Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "ORD" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "100" }],
+      });
+
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,10,\n");
+
+      const response = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, { accountId: account.id, asOf: "2026-01-01" }),
+          { draftId },
+        ),
+      );
+      if (response instanceof Response) throw new Error("Expected data back, got a redirect.");
+      expect(response.diff?.firstStatement).toBe(true);
+      expect(response.diff?.filedBehind).not.toBeNull();
+
+      const loaderData = await reviewLoader(args(get(`/upload/${draftId}/review`), { draftId }));
+      if (loaderData instanceof Response) throw new Error("Expected the review screen, not a redirect.");
+
+      const markup = renderRoute(Review, `/upload/${draftId}/review`, loaderData, {
+        actionData: response,
+      });
+      // Wrong prose for a date before all history: it is not the account's first statement, only
+      // the first on or before this one. The conditional sentence must have won, not the
+      // unconditional one it replaces on a genuine baseline-less account.
+      expect(markup).toContain("Nothing was recorded for");
+      expect(markup).toContain("on or before");
+      expect(markup).not.toContain("This is the first statement recorded for");
+    }),
+  );
+});
+
+describe("a refusal always carries a sentence", () => {
+  it(
+    "names the baseline change for a forward-dated resubmit after a concurrent writer landed, with no ticks given",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "ORD", name: "Ordering Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "ORD" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "100" }],
+      });
+
+      // The undated loader's own view — Review renders this baseline before any date is typed.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,100,\n");
+      const undated = await diffForDraft(draftId, db);
+      expect(undated.majorityRemoved).toBe(false);
+
+      // Another tab lands a set while the household is still looking at the undated review.
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-10",
+        holdings: [{ instrument: fund, quantity: "100" }],
+      });
+
+      // A forward date, later than the concurrent set — neither filed behind nor a majority
+      // removal — with the stale undated baseline carried and no ticks given at all. Reasons 2 and
+      // 3's conditions are both false; only the baseline-changed one is true, and it must still
+      // refuse and say so. This is #181's own blocker case: `diff.filedBehind` null,
+      // `diff.majorityRemoved` false, and no confirmation posted to make the old
+      // `baselineMoved && carriedConfirmation` gate fire — the exact combination that used to throw
+      // `RefusedUpload("", diff)`, rendering no alert at all.
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-09-14", baselineSetId: undated.baselineSetId ?? "" },
+          db,
+        ),
+      );
+      expect(refusal.diff.filedBehind).toBeNull();
+      expect(refusal.diff.majorityRemoved).toBe(false);
+      expect(refusal.fieldErrors.form).not.toBe("");
+      expect(refusal.fieldErrors.form).toMatch(/2026-09-10/);
+
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(2); // exactly what was seeded — the resubmit never landed
     }),
   );
 });

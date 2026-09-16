@@ -264,10 +264,12 @@ describe("the account lock", () => {
       const second = await stagedUpload(database, account, [[x.name, "10"]]);
 
       // `second` is drawn before the race against the plant's own set — it cannot know the id of
-      // the set `first` is about to land while it waits, so its posted baseline is stale by the
-      // time it runs. This is its first-ever submission, with no tick to go stale, so it is told
-      // the majority removal the set it actually landed on asks for (#181), not blamed for a
-      // round trip it never had a chance to take.
+      // the set `first` is about to land while it waits, so its posted baseline (undefined, i.e.
+      // "") is stale by the time it runs against the set `first` actually lands. A writer
+      // genuinely did land in the gap, so reason 1 fires and names it — there is no filed-behind
+      // story here to subsume it (both commit today's date), unlike an undated file's ordinary
+      // first POST, where the "baseline" only ever moves because the loader could not see a date
+      // yet to compare against (#181).
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
@@ -276,8 +278,10 @@ describe("the account lock", () => {
         ),
       );
 
-      // The waiter re-classified against the set it actually landed on (issue #283), not the one
-      // it was staged against: 3 positions, 2 of them gone in its own one-row file.
+      // Both reasons fire together: the stale-baseline sentence, and the waiter's own
+      // re-classification against the set it actually landed on (issue #283), not the one it was
+      // staged against — 3 positions, 2 of them gone in its own one-row file.
+      expect(refusal.fieldErrors.form).toMatch(/measured against/);
       expect(refusal.fieldErrors.form).toMatch(/removes 2 of the 3 positions/);
       if (!(refusal instanceof RefusedUpload)) throw refusal;
       expect(refusal.diff.currentCount).toBe(3);

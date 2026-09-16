@@ -416,14 +416,18 @@ export type UploadDiff = {
 
 // A refusal decided after assembleDiff has already run, carrying the diff it was decided against
 // so the review can re-render exactly what it refused rather than the loader's stale one (#181).
-// `diff` is a field assigned in the body, not a parameter property — erasableSyntaxOnly
-// (tsconfig.json) forbids those. Precedent for a payload-carrying domain error: DraftNotReadyError.
+// `diff` and `baselineMoved` are fields assigned in the body, not parameter properties —
+// erasableSyntaxOnly (tsconfig.json) forbids those. Precedent for a payload-carrying domain error:
+// DraftNotReadyError. `baselineMoved` is the same comparison the commit itself makes (below) —
+// carried here so the route reads the fact rather than restating the domain's own rule (CLAUDE.md).
 export class RefusedUpload extends ValidationError {
   readonly diff: UploadDiff;
+  readonly baselineMoved: boolean;
 
-  constructor(message: string, diff: UploadDiff) {
+  constructor(message: string, diff: UploadDiff, baselineMoved: boolean) {
     super({ [FORM_ERROR]: message });
     this.diff = diff;
+    this.baselineMoved = baselineMoved;
   }
 }
 
@@ -483,7 +487,9 @@ async function assembleDiff(
   draft: UploadDraft,
   // null: the loader, which reads no request body and so can never name a date. An object: the
   // commit, whose `asOf` may still be undefined (the field wasn't posted) — that must refuse the
-  // same as an invalid one, so it is not conflated with "no date yet" (commit-upload.test.ts:1066).
+  // same as an invalid one, so it is not conflated with "no date yet" (commit-upload.test.ts,
+  // "requires a valid recorded date when the file does not date itself" — a line citation would be
+  // one this same commit could move).
   asked: null | { asOf: string | undefined },
   db: Kysely<Database>,
 ): Promise<AssembledDiff> {
@@ -493,7 +499,8 @@ async function assembleDiff(
 
   // Resolved once, ahead of everything else that depends on it (the baseline, filedBehind, the
   // write itself). Not a RefusedUpload: no diff exists yet for a bad date to attach to, and this
-  // is the field error `commit-upload.test.ts:1057-1074` and review.tsx's `errors.asOf` read.
+  // is the field error commit-upload.test.ts's "requires a valid recorded date when the file does
+  // not date itself" pins, and review.tsx's `errors.asOf` read.
   const asOfResolved: IsoDate | null =
     parsed.asOfDate !== null
       ? parsed.asOfDate
@@ -696,7 +703,6 @@ async function assembleDiff(
     });
   }
 
-  // "" is null's wire form (#181) — every reader of this value must agree, starting here.
   const baselineSetId = baselineRecord?.id ?? null;
   const baselineAsOf = baselineRecord?.asOf ?? null;
   // Nothing recorded on or before the date — including the fallback undated read, so a truly
@@ -755,8 +761,8 @@ export type CommitInput = {
   asOf?: string;
   confirmRemovals?: string;
   accountId?: string;
-  // The diff's own baselineSetId, echoed back (#181). "" is null's wire form — posting nothing
-  // reads the same as posting "", which is what makes a first statement commit without a loop.
+  // The diff's own UploadDiff.baselineSetId, echoed back (#181) — a first statement's `null`
+  // reaches here as an absent field, which is why the comparison treats the two the same.
   baselineSetId?: string;
   confirmFiledBehind?: string;
 };
@@ -825,11 +831,25 @@ async function commitUploadUnderLock(
     db,
   );
   // Non-null by construction: `asked` was given above, so assembleDiff either resolved a date or
-  // had already thrown over a bad one.
+  // had already thrown over a bad one. `AssembledDiff.asOf` stays `IsoDate | null` rather than two
+  // overloads narrowing it per call shape, because the caller here is the only one that needs the
+  // narrowing and there is exactly one of it — an overload pair would trade this one guard for two
+  // signatures to keep in sync. (This is one of three places the resolved date is carried alongside
+  // `UploadDiff.asOf.date` and `UploadDiff.filedBehind.asOf` — left as three, not collapsed: each
+  // serves a different reader — this function's own narrowing, the client-rendered frame, and the
+  // filed-behind notice — and unifying them would couple those readers to one shape for no reader's
+  // benefit.)
   if (asOf === null) {
     throw new Error("assembleDiff resolved no date on the commit path, which always asks for one.");
   }
   const rawStrings = [...resolved.keys()];
+
+  // Whether the figures this form was posted against are still the ones the diff above just
+  // classified — computed once, ahead of every RefusedUpload below, so each carries the same
+  // answer the "every reason to refuse" block (further down) decides the stale-review sentence
+  // from, and the route reads it off the refusal instead of restating the comparison (CLAUDE.md:
+  // a route never states a domain rule).
+  const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
 
   // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
   const numbers = rows.flatMap((row) =>
@@ -843,6 +863,7 @@ async function commitUploadUnderLock(
         `"${differingNumber}" on another, and a statement describes one account. ` +
         "Check which account this export belongs to — nothing was recorded.",
       diff,
+      baselineMoved,
     );
   }
 
@@ -858,6 +879,7 @@ async function commitUploadUnderLock(
           `"${account.externalAccountNumber}". A statement lands in the account it describes — check ` +
           "which account this export belongs to.",
         diff,
+        baselineMoved,
       );
     }
   }
@@ -870,6 +892,7 @@ async function commitUploadUnderLock(
           "application can hold, so nothing was recorded. Check both columns against the " +
           "sample rows — a cost basis is what one share cost, not what the whole position did.",
         diff,
+        baselineMoved,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.price)) {
@@ -878,6 +901,7 @@ async function commitUploadUnderLock(
           "application can hold, so nothing was recorded. Check the quantity column against " +
           "the sample rows.",
         diff,
+        baselineMoved,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
@@ -886,6 +910,7 @@ async function commitUploadUnderLock(
           "dividend than this application can hold, so nothing was recorded. Check the " +
           "quantity column against the sample rows.",
         diff,
+        baselineMoved,
       );
     }
   }
@@ -893,7 +918,7 @@ async function commitUploadUnderLock(
   // Every reason to refuse the statement itself, collected once rather than three round trips
   // (#181), and thrown together: the household reloading a stale review should not have to walk
   // it back one tick at a time.
-  const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+  //
   // A confirmation is given against the figures on screen; when the baseline moved, those are not
   // these, so the ticks are void and have to be given again against what is now shown.
   const confirmedFiledBehind = !baselineMoved && raw.confirmFiledBehind === "true";
@@ -904,15 +929,26 @@ async function commitUploadUnderLock(
   if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
     const reasons: string[] = [];
 
-    // Reason 1's sentence is for a review that went stale under the household, not for the first
-    // POST of an undated file — there the baseline "moves" only because the loader could not know
-    // the date. What separates them is whether the household had already confirmed anything.
-    const carriedConfirmation = raw.confirmFiledBehind === "true" || raw.confirmRemovals === "true";
-    if (baselineMoved && carriedConfirmation) {
+    // Reason 2 subsumes reason 1: a household typing a date for the first time also moves the
+    // baseline (the loader could only show the undated one), and telling them the review "went
+    // stale" would blame them for the round trip #181's design deliberately chose over a GET step.
+    // So reason 1 fires only when reason 2 does not — a concurrent writer or a date edited to
+    // another backdated value, with nothing left to demand a filed-behind tick for.
+    //
+    // This is a structural guarantee, not a heuristic: the outer `if` above fires only when one of
+    // baselineMoved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps
+    // to a push below (baselineMoved to this one exactly when unconfirmedFiledBehind does not, the
+    // other two unconditionally), so `reasons` can never come out empty. The guard past the ifs
+    // below is what keeps that true under a future edit rather than merely by inspection today.
+    if (baselineMoved && !unconfirmedFiledBehind) {
+      const measuredAgainst =
+        diff.baselineAsOf !== null
+          ? `what ${draft.accountName} held on ${diff.baselineAsOf}`
+          : `an account with nothing recorded before this statement's date`;
       reasons.push(
-        `${draft.accountName}'s recorded history changed after this review was drawn — another ` +
-          "upload or correction landed while it was open. Nothing was recorded here. Reload the " +
-          "review to see this statement measured against what it now holds.",
+        "This statement was measured against figures that are no longer current: it is now " +
+          `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +
+          "shown and confirm again.",
       );
     }
 
@@ -938,7 +974,13 @@ async function commitUploadUnderLock(
       reasons.push(`${ratio} Nothing was recorded — confirm the removals to record this statement.`);
     }
 
-    throw new RefusedUpload(reasons.join(" "), diff);
+    // A refusal with nothing to say is the silent no-op #181 exists to kill, reintroduced inside
+    // the machinery meant to fix it — this is what the comment above claims, made unrepresentable.
+    if (reasons.length === 0) {
+      throw new Error("A refusal must carry a sentence.");
+    }
+
+    throw new RefusedUpload(reasons.join(" "), diff, baselineMoved);
   }
 
   // Promotion first, since the draft delete below cascades the answers away. Only the strings
@@ -996,6 +1038,7 @@ async function commitUploadUnderLock(
         "upload or repointed under Settings while this review was open, so nothing was " +
         "recorded. Reload the review and check what it is about to record.",
       diff,
+      baselineMoved,
     );
   }
   // Every string had a meaning at diff time, and the promotion restored the draft's own; one
@@ -1007,6 +1050,7 @@ async function commitUploadUnderLock(
       `"${forgotten}" was forgotten under Settings while this review was open, so nothing ` +
         "was recorded. Reload the review — it will ask what the name means.",
       diff,
+      baselineMoved,
     );
   }
 

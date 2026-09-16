@@ -76,7 +76,10 @@ export async function action({ params, request }: Route.ActionArgs) {
       // Carries the diff the refusal was decided against (#181) — a re-run loader would show the
       // undated one again, and the household would tick a box against figures already rejected.
       const diff = error instanceof RefusedUpload ? error.diff : null;
-      return { errors: fieldErrors, formError: formError ?? null, values, diff };
+      // The domain's own comparison (uploads.server.ts), not restated here (CLAUDE.md) — false
+      // when there was no refusal to carry it, since nothing then moved under this render.
+      const baselineMoved = error instanceof RefusedUpload ? error.baselineMoved : false;
+      return { errors: fieldErrors, formError: formError ?? null, values, diff, baselineMoved };
     }
     if (error instanceof DraftNotReadyError) {
       return redirect(`/upload/${params.draftId}/${error.step}`);
@@ -133,8 +136,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
   // A tick given against a baseline that has since moved describes figures no longer on screen
   // (#181) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
-  const baselineMoved =
-    values !== undefined && (values.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+  // The comparison itself is the domain's (uploads.server.ts), read off the refusal rather than
+  // restated here.
+  const baselineMoved = actionData?.baselineMoved ?? false;
 
   // "this account holds" is only true of today's holdings — wrong once filed behind means these
   // counts are the baseline's own (uploads.server.ts's matching guard).
