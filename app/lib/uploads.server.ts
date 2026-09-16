@@ -13,6 +13,7 @@ import { getAccount, withAccountLock, type Account } from "./accounts.server.ts"
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { describeInstrument } from "./format.ts";
 import { holdingNote } from "./holdings-view.ts";
@@ -1134,8 +1135,7 @@ export async function uploadReceipt(
   latest: LastRecorded | null,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadReceipt | null> {
-  if (!/^\d+$/.test(accountId) || !/^\d+$/.test(setId)) return null;
-  if (latest === null) return null;
+  if (!couldBeId(accountId) || !couldBeId(setId) || latest === null) return null;
 
   const [set, predecessor] = await Promise.all([
     db

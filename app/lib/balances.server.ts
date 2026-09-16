@@ -8,6 +8,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 
 import { acceptsSetBalance, isOwed } from "./account-options.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
   NotFoundError,
@@ -31,6 +32,7 @@ export const balanceInput = z.object({
 export type BalanceInput = z.infer<typeof balanceInput>;
 
 export type RecordedBalance = {
+  setId: string;
   accountId: string;
   accountName: string;
   asOf: IsoDate;
@@ -46,6 +48,13 @@ export type LastRecorded = {
   source: "upload" | "manual";
 };
 
+export type BalanceReceipt = {
+  setId: string;
+  asOf: IsoDate;
+  filedBehind: boolean;
+  currentAsOf: IsoDate;
+};
+
 // Resolved via latest_position_set (§8.2) — never a second order-by here.
 // Returns null when the account has no statement of any kind yet.
 // `asOf` is latest_position_set's own second parameter, unused by every caller until #181's
@@ -56,7 +65,7 @@ export async function lastRecorded(
   db: Kysely<Database> = getDb(),
   asOf: IsoDate | null = null,
 ): Promise<LastRecorded | null> {
-  if (!/^\d+$/.test(accountId)) return null;
+  if (!couldBeId(accountId)) return null;
 
   const result = await sql<{ id: string; as_of_date: string; source: string }>`
     select id, as_of_date, source
@@ -69,6 +78,34 @@ export async function lastRecorded(
 
   // Safe: position_set_source_valid bounds what the database can store.
   return { id: row.id, asOf: row.as_of_date, source: row.source as LastRecorded["source"] };
+}
+
+// `?recorded=` names the row, never the receipt's contents. The source check keeps an upload id
+// from masquerading as a balance write when the parameter is hand-edited.
+export async function balanceReceipt(
+  accountId: string,
+  setId: string,
+  latest: LastRecorded | null,
+  db: Kysely<Database> = getDb(),
+): Promise<BalanceReceipt | null> {
+  if (!couldBeId(accountId) || !couldBeId(setId) || latest === null) return null;
+
+  const set = await db
+    .selectFrom("position_set")
+    .select(["id", "as_of_date"])
+    .where("id", "=", setId)
+    .where("account_id", "=", accountId)
+    .where("source", "=", "manual")
+    .executeTakeFirst();
+
+  if (set === undefined) return null;
+
+  return {
+    setId: set.id,
+    asOf: set.as_of_date,
+    filedBehind: latest.id !== set.id,
+    currentAsOf: latest.asOf,
+  };
 }
 
 // Appends, never edits — resubmitting for one date resolves like a re-upload
@@ -153,7 +190,8 @@ async function setBalanceUnderLock(
     returning holding.position_set_id
   `.execute(db);
 
-  if (written.rows[0] === undefined) {
+  const row = written.rows[0];
+  if (row === undefined) {
     throw ValidationError.form(
       `${account.name} changed while this form was open, so nothing was recorded. ` +
         "Reload the page and record the balance against what it holds now.",
@@ -161,6 +199,7 @@ async function setBalanceUnderLock(
   }
 
   return {
+    setId: row.position_set_id,
     accountId: account.id,
     accountName: account.name,
     asOf: input.asOf,

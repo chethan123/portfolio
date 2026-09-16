@@ -4,6 +4,7 @@
 import { sql } from "kysely";
 
 import { numberTail } from "./account-label.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
@@ -223,13 +224,6 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
     amount: row.amount,
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
-}
-
-// Magnitude, not digit count (leading zeros). BigInt (§5.6): past 2^53 a float rounds.
-const MAX_BIGINT = 9223372036854775807n;
-
-function couldBeId(id: string): boolean {
-  return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
 }
 
 // Unusable ids drop out; nothing usable yields false, never an empty `in ()` and never no filter.

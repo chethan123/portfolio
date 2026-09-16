@@ -32,7 +32,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0002](0002-pricing.md) | Pricing: the provider seam, market calendar, refresh, in-process poller |
 | [0003](0003-holdings.md) | The Holdings table: filtering, grouping, subtotals, money maths |
 | [0004](0004-ingest.md) | The four-screen statement upload over a durable draft |
-| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — the date floor and the return path have landed; pool resilience has also landed; the nameless-quantity refusal and the filed-behind receipt remain owed |
+| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — all five sequenced fixes have landed |
 | [0006](0006-dividends.md) | The Income screen and `annual_dividend` through the valuation contract |
 | [0007](0007-masking.md) | Masking: policy row, per-browser state, the one amount renderer |
 | [0008](0008-chart-ranges.md) | The chart range presets, cookie and custom span |
