@@ -5,7 +5,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { Outlet, createRoutesStub } from "react-router";
 
-import { Layout } from "../../app/root.tsx";
+import { Layout, links } from "../../app/root.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
 
@@ -70,10 +70,12 @@ export function renderThroughLayout(path: string, rootData: RootData): string {
     if (!message.startsWith(STUB_STYLESHEET_WARNING)) warnings.push(message);
   };
 
+  // `links` too: the stub feeds a route's `links` to `<Links />`, so the head is the real shell's.
   const Stub = createRoutesStub([
     {
       id: "root",
       path: "*",
+      links,
       Component: () => (
         <Layout>
           <p>page body</p>

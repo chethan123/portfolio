@@ -4,7 +4,12 @@
 // onNext), never on inspecting a response a refusal never produced.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
+import {
+  TEST_DATABASE_URL,
+  UNREACHABLE_DATABASE_URL,
+  closeTestDatabase,
+  withDatabase,
+} from "../support/database.ts";
 import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
 import { MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { saveMaskingPolicy } from "~/lib/settings.server";
@@ -30,9 +35,6 @@ const { LOCK_EXEMPT_PATHS, loader, middleware } = await import("../../app/root.t
 const { createDatabase, withDb } = await import("~/lib/db.server");
 const { LOCK_COOKIE, readGrant } = await import("~/lib/lock.server");
 const { stopPricePoller } = await import("~/lib/price-poller.server");
-
-/** Refused immediately, which is how "the database is down" arrives here. */
-const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
 // The middleware array's last member also starts the refresh loop (§6.2) — a real 15-minute
 // interval, unref'd but otherwise outliving this file. Stopped after every test.

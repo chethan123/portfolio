@@ -19,7 +19,7 @@ These are real app captures using the invented household in [seed-demo.ts](scrip
 The demo includes an unpriced holding, missing cost bases, and a loan. Images follow your GitHub
 colour scheme; the app follows your system setting.
 
-### Overview — what the household is worth
+### Overview: what the household is worth
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
@@ -35,7 +35,7 @@ The household total, its history, account balances, and allocation. Loans subtra
 Unpriced holdings are excluded and counted in the coverage note. The 1D range plots observed
 prices from the latest recorded session. [Overview guide](docs/guide/overview.md).
 
-### Holdings — every position, sliced any way you ask
+### Holdings: every position, sliced any way you ask
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-dark.png">
@@ -46,7 +46,7 @@ Filter, group, and sort holdings through the URL. Value, cost basis, and unreali
 have their own coverage count. Missing figures are not treated as zero.
 [Holdings guide](docs/guide/holdings.md).
 
-### Correcting a position — the write that lives on the table
+### Correcting a position: the write that lives on the table
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-edit-dark.png">
@@ -57,7 +57,7 @@ Correct quantity or per-share cost basis in place. Saving appends a complete acc
 dated today, or the current statement date if later. Older snapshots remain stored.
 [Corrections](docs/guide/holdings.md#correcting-a-position-in-place).
 
-### The owner filter — every money screen read as one owner
+### The owner filter: every money screen read as one owner
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-owner-dark.png">
@@ -68,7 +68,7 @@ Select owners across Overview, Holdings, Analysis, and Income. The selection sta
 and follows navigation between those screens. It is a reading filter, not access control.
 Household-only manual history is omitted while filtered. [Owner guide](docs/guide/owner-filter.md).
 
-### Analysis — where the money actually sits
+### Analysis: where the money actually sits
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-dark.png">
@@ -80,28 +80,28 @@ use positive group totals, so debt does not turn the denominator negative. Estim
 the household rate to positive taxable gains within each asset-type row.
 [Analysis guide](docs/guide/analysis.md).
 
-### Income — what the portfolio pays over the coming year
+### Income: what the portfolio pays over the coming year
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/income-dark.png">
-  <img alt="Income: the total annual dividend with the weighted yield beside it, then the same figure as two donut-and-table breakdowns — by tax treatment, with the sheltered subtotal written out beneath the table, and by account" src="docs/screenshots/income-light.png">
+  <img alt="Income: the total annual dividend with the weighted yield beside it, then the same figure as two donut-and-table breakdowns: one by tax treatment, with the sheltered subtotal written out beneath the table, and one by account" src="docs/screenshots/income-light.png">
 </picture>
 
 Projected annual dividends by tax treatment and account. Missing dividend rates count as zero,
 so the projection omits unknown income and expenses. Weighted yield uses gross positive holding values.
 [Income guide](docs/guide/income.md).
 
-### Account detail — one account, end to end
+### Account detail: one account, end to end
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-detail-dark.png">
   <img alt="A brokerage account: its own header, its own valuation chart with the same readout above the line, and a holdings table" src="docs/screenshots/account-detail-light.png">
 </picture>
 
-An account’s identity, current value, dated chart, and holdings.
+An account's identity, current value, dated chart, and holdings.
 [Account guide](docs/guide/account-detail.md).
 
-### Set balance — the one thing you type
+### Set balance: the one thing you type
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-balance-dark.png">
@@ -112,7 +112,7 @@ Record a bank balance or amount owed. Loans store negative USD quantities; the f
 positive amount. Each submission appends a dated snapshot. A later submission for the same date
 supersedes the earlier one in valuations. [Balance guide](docs/guide/account-detail.md#set-balance).
 
-### Upload — a statement, mapped once and diffed before it lands
+### Upload: a statement, mapped once and diffed before it lands
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-dark.png">
@@ -130,13 +130,15 @@ supersedes the earlier one in valuations. [Balance guide](docs/guide/account-det
 </picture>
 
 Choose an account and CSV, map columns, resolve new instruments, then review the changes.
-A statement replaces the account’s complete set of holdings for its date: missing positions
+A statement replaces the account's complete set of holdings for its date. Missing positions
 are treated as sold. Every removal is listed before commit.
 
-Positions are written only at commit. Drafts, column mappings, instruments, and aliases may be
-saved earlier. [Upload walkthrough](docs/guide/first-statement.md).
+Positions and the name-to-instrument aliases are written only at commit. Drafts, column mappings,
+instruments and classifications may be saved earlier. An upload abandoned before the last step
+teaches the next one nothing, and Settings → Instruments repoints or forgets a wrong alias behind a preview.
+[Upload walkthrough](docs/guide/first-statement.md).
 
-### Settings — people and accounts
+### Settings: people and accounts
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
@@ -146,7 +148,7 @@ saved earlier. [Upload walkthrough](docs/guide/first-statement.md).
 Manage people and accounts, the estimated tax rate, price-refresh cadence, display policy,
 and passkeys. [Settings guide](docs/guide/settings.md).
 
-### Settings — passkeys and the lock
+### Settings: passkeys and the lock
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-passkeys-dark.png">
@@ -156,7 +158,7 @@ and passkeys. [Settings guide](docs/guide/settings.md).
 The first enrolled passkey activates the household lock. Each browser then needs a live unlock
 grant to reach account data. [Passkeys guide](docs/guide/passkeys.md).
 
-### Locked — what a browser with no live grant is shown
+### Locked: what a browser with no live grant is shown
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/unlock-dark.png">
@@ -167,7 +169,7 @@ Google sign-in admits a family member; the passkey lock controls whether a brows
 the app. Everyone admitted has the same account access. Cross-device unlocking depends on the
 browser and credential provider. [Lock guide](docs/guide/passkeys.md).
 
-### Masking — reading the portfolio in public
+### Masking: reading the portfolio in public
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-masked-dark.png">
@@ -267,7 +269,8 @@ worker caches no pages or financial data.
 
 ### Not built yet
 
-Settings has no Classifications, Instruments, or History editor. There is no manual-price UI,
+Settings has no Classifications or History editor, and its Instruments tab holds aliases only.
+There is no manual-price UI,
 export, transaction ledger, realized-gain calculation, or investment-return calculation.
 The page-level stale-price summary is also pending. See [accepted limitations](DESIGN.md#14-accepted-limitations).
 
@@ -302,8 +305,8 @@ Deployment variables are in [.env.example](.env.example). Tax rate, masking poli
 cadence are household settings stored in PostgreSQL.
 
 `/healthz` bypasses sign-in and the lock. Its HTTP status reports database and migration health;
-pricing failures are reported separately in the response body. See the
-[runbook](docs/runbook.md) for diagnosis.
+the response body reports pricing failures separately. See the [runbook](docs/runbook.md) for
+diagnosis.
 
 ## Working on it
 
@@ -320,10 +323,10 @@ npm run migrate
 npm run dev
 ```
 
-Create `portfolio_dev` once. This Docker database uses tmpfs: stopping or recreating its container
+Create `portfolio_dev` once. This Docker database uses tmpfs. Stopping or recreating its container
 loses both development and test databases. Use a separate persistent database for data you need.
-`npm run dev` does not apply migrations. A price worker is optional for local UI work with stored prices.
-See [Developing](docs/developing.md) for setup and screenshot recipes.
+`npm run dev` does not apply migrations. A price worker is optional for local UI work with stored
+prices. See [Developing](docs/developing.md) for setup and screenshot recipes.
 
 ```sh
 npm run typecheck
@@ -369,8 +372,8 @@ each pending file in a transaction. Existing migrations are not edited after rel
 
 Add the next SQL file, migrate a disposable database, regenerate
 [database.generated.ts](app/lib/database.generated.ts) with `npm run db:types`, and run the checks.
-When changing `holding_valued`, replace `holding_valued_at` in the same migration: it returns the
-view’s row type. See [ADR-0001](docs/adr/0001-holding-valued-row-type-contract.md).
+When changing `holding_valued`, replace `holding_valued_at` in the same migration, because it
+returns the view's row type. See [ADR-0001](docs/adr/0001-holding-valued-row-type-contract.md).
 
 ## A note on money
 

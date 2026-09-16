@@ -1,8 +1,12 @@
 /**
  * Real Postgres, migrated, seeded through the fixture builder — no mock, no SQLite, since the risk
  * is Postgres-specific SQL and `numeric` handling. Isolation is by transaction rollback, always
- * rolled back. Requires `docker compose -f compose.test.yaml up -d --wait`.
+ * rolled back, except the two-connection races and one price-backfill case, which commit and sweep
+ * their own rows.
+ * Requires `docker compose -f compose.test.yaml up -d --wait`.
  */
+import { sql } from "kysely";
+
 import { createDatabase, withDb, type Database } from "~/lib/db.server";
 import { createPool } from "../../server/db.ts";
 import { applyPendingMigrations } from "../../server/migrations.ts";
@@ -15,6 +19,10 @@ import type { Pool } from "pg";
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
+
+/** Refused immediately, which is how a database outage arrives in fail-closed route tests. */
+export const UNREACHABLE_DATABASE_URL =
+  "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
 let pool: Pool | undefined;
 let db: Kysely<Database> | undefined;
@@ -89,4 +97,51 @@ export function withDatabase(
       if (!(error instanceof Rollback)) throw error;
     }
   };
+}
+
+/** The connection behind a handle, so another can watch it. Read it before issuing the statement expected to block: a query queued behind that one on the same connection blocks with it. */
+export async function backendPid(handle: Kysely<Database>): Promise<number> {
+  const result = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(handle);
+  return result.rows[0]!.pid;
+}
+
+/** Polls pg_stat_activity (never a fixed delay) until pid is blocked on a lock, bounded so a deadlock fails loudly. `unless` is the statement expected to block: settling first is the race never contending, reported by name rather than as the timeout. */
+export async function waitUntilBlocked(
+  watcher: Kysely<Database>,
+  pid: number,
+  { timeoutMs = 5_000, unless }: { timeoutMs?: number; unless?: Promise<unknown> } = {},
+): Promise<void> {
+  let outcome: string | undefined;
+  unless?.then(
+    () => {
+      outcome = "fulfilled";
+    },
+    (reason: unknown) => {
+      outcome = `rejected (${reason instanceof Error ? reason.message : String(reason)})`;
+    },
+  );
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await sql<{ blocked: boolean }>`
+      select exists (
+        select 1 from pg_stat_activity where pid = ${pid} and wait_event_type = 'Lock'
+      ) as blocked
+    `.execute(watcher);
+    if (result.rows[0]?.blocked === true) return;
+    if (outcome !== undefined) {
+      throw new Error(
+        `Backend ${pid} ${outcome} before it blocked on a lock — the race this test drives ` +
+          "no longer contends on the row it expects to.",
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for backend ${pid} to block on a lock — ` +
+          "either the race this test drives no longer contends on the row it expects to, " +
+          "or something is genuinely stuck.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

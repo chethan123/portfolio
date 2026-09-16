@@ -1,4 +1,4 @@
-# Portfolio Tracker — Design
+# Portfolio Tracker design
 
 A self-hosted family portfolio and net worth tracker. Browser-first with an installable PWA for
 mobile. Positions are imported from brokerage CSV statements, priced against live market data, and
@@ -39,7 +39,7 @@ Everything on the balance sheet is a position, including cash and debt:
 
 **The sign lives in quantity, never in price.** A price is a positive market fact. Negative
 quantity is the standard encoding for a liability position (it is how short positions work), and it
-keeps the price column meaningful for every consumer — the refresh job, price history, sorting,
+keeps the price column meaningful for every consumer: the refresh job, price history, sorting,
 per-share display.
 
 Consequences: net worth is a single `SUM` with no branches, and a liability account is simply an
@@ -61,7 +61,7 @@ net worth over time, projected dividend income.
 money-weighted return.
 
 **No cash-flow tracking.** Deposits and withdrawals are not recorded. The history chart therefore
-cannot separate market movement from contributions — a $10k deposit and a 40% rally look identical.
+cannot separate market movement from contributions. A $10k deposit and a 40% rally look identical.
 The chart is labelled **"Total value"**, never "return" or "performance", so it never implies
 something it cannot support.
 
@@ -179,38 +179,40 @@ two accounts.
 
 ### 4.3 Instrument identity
 
-Instruments have a **surrogate ID**. The ticker is a mutable, nullable attribute — not the key.
+Instruments have a **surrogate ID**. The ticker is a mutable, nullable attribute, not the key.
 
 Three reasons:
 
 1. **Tickers change.** Facebook became Meta and `FB` became `META`. With symbol as the primary key,
-   that day the app decides you sold your entire position and bought an unrelated new one — position
+   that day the app decides you sold your entire position and bought an unrelated new one. Position
    history splits, price history splits, permanently. With a surrogate ID it is a one-column update.
 2. **Some instruments have no ticker.** Employer 401k plans commonly hold collective investment
    trusts ("Vanguard Target Retirement 2045 Trust II") which have no public symbol and no quote on
    any retail API. These carry `symbol = NULL` and `price_source = manual`.
-3. **The alias table is the CSV symbol resolver.** Brokerages disagree on naming — `VTI`,
+3. **The alias table is the CSV symbol resolver.** Brokerages disagree on naming: `VTI`,
    `VANGUARD TOTAL STOCK MARKET ETF`, or a bare CUSIP. Rather than normalisation heuristics, the
-   importer looks up the raw string; a miss prompts you once and is remembered permanently.
+   importer looks up the raw string; a miss prompts you once, and the answer becomes vocabulary
+   when the statement is recorded. An upload abandoned before then teaches the next one nothing,
+   and a wrong answer is repointed or forgotten under Settings → Instruments (§8.4).
 
 Aliases are **global, not per-brokerage**. Fidelity's `CASH` and Schwab's `Cash & Cash Investments`
 are two alias rows pointing at the same `USD` instrument. Genuine collisions across brokerages
 essentially do not occur for securities; a scope column can be added if one ever does.
 
 **Internal IDs never appear in any file a human or a brokerage touches.** Symbols and descriptions
-are the interchange format. If the app ever emits a CSV template — for a PDF-only 401k — that
+are the interchange format. If the app ever emits a CSV template, for a PDF-only 401k, that
 template uses symbols too.
 
 ### 4.4 Classification
 
-A table, not a code enum, because the category list will grow. Attaches to the **instrument** —
+A table, not a code enum, because the category list will grow. Attaches to the **instrument**.
 VTI is "Total stock market" everywhere it is held. Labels are created during ingest, on the
 unresolved-instruments step; renaming or retiring one is the Classifications tab §8.4 still owes.
 
 Each classification rolls up to an `asset_class` (`equity | bond | cash | other`) so the app can
 answer both "how much in S&P500 funds" and "what is my overall stock/bond split". The user's labels
-mix axes — instrument kind, index tracked, geography, asset class — which is fine for labelling but
-does not aggregate on its own; the rollup column supplies that.
+mix axes: instrument kind, index tracked, geography, asset class. Mixing axes is fine for labelling
+but does not aggregate on its own; the rollup column supplies that.
 
 A target-date fund maps to `other`, which honestly reports "cannot be split" rather than silently
 landing in equity or bonds.
@@ -220,16 +222,17 @@ user labels. Harmless; the user's label is what displays.
 
 **One screen is the exception, and it is bounded.** The unrealized gains panel (§8.1) splits its
 rows on `quote_type` rather than on a classification, because "individual stocks versus funds" is a fact
-about the instrument and the user's labels mix axes — a label list that aggregates by index tracked
+about the instrument and the user's labels mix axes. A label list that aggregates by index tracked
 cannot answer it. So the provider's vocabulary does reach the screen, in exactly one place, matched
 against an explicit list of three values. The column is written from the provider's answer at the
-moment an instrument is created — the resolution step already probes the symbol, and that probe
-now carries the type back rather than discarding it — and refreshed on every poll, which is what
-makes it true of instruments created before it was written at all. The consequence is worth stating
-plainly: an instrument nobody quotes — a workplace-plan trust priced by hand, with no `quote_type`
-at all — lands in that panel's catch-all row rather than under stocks or funds. The mitigation is that the catch-all is a
-row on the table with its own figures and not a discard, so the holding is visible, it is counted,
-and the panel's total still reconciles with the portfolio behind it.
+moment an instrument is created, since the resolution step already probes the symbol and that probe
+now carries the type back rather than discarding it. The column is refreshed on every poll, which is
+what makes it true of instruments created before it was written at all. The consequence is worth
+stating plainly. An instrument nobody quotes, a workplace-plan trust priced by hand with no
+`quote_type` at all, lands in that panel's catch-all row rather than under stocks or funds. The
+mitigation is that the catch-all is a row on the table with its own figures and not a discard, so
+the holding is visible, it is counted, and the panel's total still reconciles with the portfolio
+behind it.
 
 ### 4.5 Tax treatment
 
@@ -250,7 +253,7 @@ displaying it.** Only a `taxable` holding contributes to its tax column: a gain 
 taxed, and a gain in a Traditional 401k is taxed as ordinary income on withdrawal, which is a
 different rate on a different amount at a different time and not something a capital gains rate can
 stand in for. Both still show their gain in the column beside it, because the gain is real wherever
-it sits — what the treatment decides is only whether a tax figure is owed against it, and the panel
+it sits. What the treatment decides is only whether a tax figure is owed against it, and the panel
 says so on the page rather than leaving a reader to infer it from a blank cell.
 
 This is also the data that makes after-tax net worth modelling possible later.
@@ -270,17 +273,17 @@ pick account from dropdown
   → commit → new position_set
 ```
 
-Accounts are **first-class** and created once. The alternative — deriving account identity from
-`(institution, owner, type)` tags supplied at upload — collides silently the moment you own a
+Accounts are **first-class** and created once. The alternative, deriving account identity from
+`(institution, owner, type)` tags supplied at upload, collides silently the moment you own a
 Traditional *and* a Roth IRA at the same firm, merging two portfolios with no error. It is also more
 typing on every upload, forever.
 
 **An in-progress upload is a row, not client state.** The flow above runs over an `upload_draft`
-table — the file's bytes, the chosen account and the half-finished mapping — so every step is a URL
-that survives a reload, the back button and a closed laptop. §4.1's list deliberately does not
+table holding the file's bytes, the chosen account and the half-finished mapping, so every step is
+a URL that survives a reload, the back button and a closed laptop. §4.1's list deliberately does not
 carry it: that list is the domain model, and the operational tables are described where they are
-argued — `app_setting` in §10.1, the price tiers and their poll record in §6.2. A draft stages what
-is *becoming* a statement and holds nothing any other screen reads, and the row is deleted the
+argued, `app_setting` in §10.1 and the price tiers and their poll record in §6.2. A draft stages
+what is *becoming* a statement and holds nothing any other screen reads, and the row is deleted the
 moment its statement lands (or swept after a day).
 
 ### 5.2 Uploads append, never mutate
@@ -295,27 +298,27 @@ for that account. Nothing is destroyed.
 - **Quantity history for free.** "When did I first hold MSFT" is answerable with no extra machinery.
 - **History is a query, not a job.** Because positions are constant between uploads by construction,
   net worth on any past date is `positions as-of that date × price on that date`.
-- **Re-parseable — the property, not yet the button.** The original CSV is retained in
+- **Re-parseable, the property and not yet the button.** The original CSV is retained in
   `position_set.raw_file`, so a mis-mapped column can be fixed from the retained bytes rather than
   by re-downloading a statement the brokerage may no longer offer. Without the retention, a bad
   *upload* is recoverable but a bad *mapping* is not, which is an odd place to draw the line.
 
   No interface reads those bytes back yet. When one is built it follows the same immutability rule
   as everything else: a **new position set** from the retained bytes, the incorrect one deleted,
-  never a rewrite in place. `raw_file` is nullable — manual balance edits have no file — and files
+  never a rewrite in place. `raw_file` is nullable, because manual balance edits have no file. Files
   are kept indefinitely, since a decade of brokerage CSVs is single-digit megabytes.
 
 **A missing row means sold.** A brokerage position export is complete for the account by definition;
 if AAPL is not on the new statement, the position is gone. The diff preview is the safety valve
-against the failure mode this creates — a filtered export showing 2 of 30 positions would otherwise
+against the failure mode this creates. A filtered export showing 2 of 30 positions would otherwise
 silently delete real holdings.
 
 **As-of date** comes from the statement if the CSV carries one, otherwise chosen at upload with
-today as default. Never the upload timestamp: a statement uploaded three days late describes the
-statement date.
+today as default. Never the upload timestamp, because a statement uploaded three days late describes
+the statement date.
 
 **Single-position accounts skip CSV entirely.** Checking and loan balances use a "set balance" form
-writing one `USD` row — the same append-a-position-set mechanism, no separate code path.
+writing one `USD` row, the same append-a-position-set mechanism, with no separate code path.
 
 ### 5.3 Column mapping
 
@@ -326,7 +329,7 @@ thereafter. A new institution costs zero code.
 The parser must tolerate the reality of brokerage exports: preamble rows, footer disclaimers, `$`
 prefixes, parenthesised negatives, `n/a` strings, thousands separators.
 
-A PDF-only 401k needs no new subsystem — hand-author a CSV in the app's template, which is just
+A PDF-only 401k needs no new subsystem. Hand-author a CSV in the app's template, which is just
 another saved mapping.
 
 ---
@@ -342,7 +345,7 @@ It is `setBalance` for accounts that hold more than one thing, and it obeys the 
 than being an exception to them.
 
 **It appends; it never edits.** `holding_valued_at` reads position sets for every date the net worth
-chart plots, so an `UPDATE holding SET quantity` would not correct a number — it would silently
+chart plots, so an `UPDATE holding SET quantity` would not correct a number. It would silently
 restate every figure back to the date of the statement the row landed in. March's net worth would
 move because an August typo was fixed, with nothing on any screen saying so. A correction is
 therefore a *new* position set dated today, and the one it corrects stays where it is, still
@@ -352,27 +355,28 @@ re-uploaded statement is (`created_at`, then `id`).
 **It carries the whole account forward.** §5.2's "a missing row means sold" makes a position set a
 photograph of everything an account holds, so a set containing only the corrected row would record
 every other security in the account as sold. The new set is the old set with one row changed and the
-rest copied across verbatim. That copy asserts nothing new: §14.7 already records that this
+rest copied across verbatim. That copy asserts nothing new, because §14.7 already records that this
 application reads holdings as frozen between statements, and carrying them forward *is* that
 reading.
 
 **It changes numbers, never membership.** Adding an instrument means resolving a name nobody has
 seen before against the alias table (§4.3), which is the upload flow's job. A correction can say
 "not 100 units but 120", and can say "zero", and cannot say "and also some Apple". A quantity of
-zero is stored as zero rather than dropping the row: a dropped row is unreachable from a table that
-no longer prints it, so the position would be uneditable by the very screen that removed it.
+zero is stored as zero rather than dropping the row, because a dropped row is unreachable from a
+table that no longer prints it, so the position would be uneditable by the very screen that removed
+it.
 
 **The sign may not be flipped.** §2 puts the sign in the quantity, so a correction that turns
 something held into something owed moves household net worth by twice the figure while reading as an
 ordinary edit. `setBalance` avoids this by refusing to accept a sign at all; this box has to show
-one, because it opens containing the figure the table prints — so it refuses the *change* instead.
+one, because it opens containing the figure the table prints, so it refuses the *change* instead.
 Recording zero first and the other direction second is the deliberate two-step, and it is the only
 way an overdrawn bank account can be entered today (§14.8 is unchanged: the set-balance form still
 cannot).
 
 **A figure the view could not value is refused.** `holding_valued` casts
 `quantity × price` and `quantity × cost_basis_per_share` to `numeric(20, 4)`, and both operands can
-sit well inside their own columns while their product does not — a twelve-digit quantity is legal,
+sit well inside their own columns while their product does not. A twelve-digit quantity is legal,
 and so is a share priced in the hundreds of thousands. A product that will not round to under 10^16
 does not fail the write; it *succeeds*, and then makes the view raise on every subsequent request,
 taking Holdings and Analysis down together. Since Holdings is the only screen the editor is reachable
@@ -382,22 +386,22 @@ operands in hand.
 
 **There is no date field.** A correction is about now. A past date is a statement, and a statement is
 the upload flow's job. The set is dated `greatest(today, the corrected set's date)`, because
-`recordedDate` allows a statement to be dated tomorrow for a household east of UTC and a correction
-filed behind the sheet it corrects is a write that appears to succeed and changes no figure
-anywhere.
+`recordedDate` allows a statement to be dated tomorrow for a household east of UTC, and because a
+correction filed behind the sheet it corrects is a write that appears to succeed and changes no
+figure anywhere.
 
-**No schema change, and no new identity.** A holding has no id worth putting in a URL — the `holding`
-row carrying a position changes on every upload — so a row is addressed by `(account, instrument)`,
-which `holding_one_row_per_instrument` makes unique inside the one position set `holding_valued`
-returns per account. The server re-resolves that pair through `latest_position_set` at the moment of
-the write, so it always names what the account holds *now* rather than what it held when the page
-rendered. If the current statement no longer carries the instrument, the write is refused and
-nothing at all is written.
+**No schema change, and no new identity.** A holding has no id worth putting in a URL, because the
+`holding` row carrying a position changes on every upload. So a row is addressed by
+`(account, instrument)`, which `holding_one_row_per_instrument` makes unique inside the one position
+set `holding_valued` returns per account. The server re-resolves that pair through
+`latest_position_set` at the moment of the write, so it always names what the account holds *now*
+rather than what it held when the page rendered. If the current statement no longer carries the
+instrument, the write is refused and nothing at all is written.
 
 **It is a URL, not client state.** The editor opens at `?edit=<account>.<instrument>` and confirms at
 `?saved=<account>.<instrument>`; neither is part of the canonical Holdings query, so every filter,
 grouping and sort control closes the editor for free. §8.1's screen has no React state and this does
-not introduce any — it works with JavaScript off, survives a reload, and is the same grammar the
+not introduce any. It works with JavaScript off, survives a reload, and is the same grammar the
 rest of the screen is built from.
 
 **A masked editor contains no financial defaults.** Holdings completes its sort, grouping, totals
@@ -405,15 +409,15 @@ and ratios before projecting loader data, then omits every amount while the requ
 open row therefore shows a prompt rather than quantity and per-share basis inputs. The global **Show
 amounts** control deliberately revalidates the route before those inputs appear; **Hide amounts**
 removes them immediately, and Cancel or Save ends the correction. Unknown markers, coverage counts,
-ratio strings and gain/loss direction remain because none reveals the exact input defaults. This is
-a Holdings-scoped strengthening of ADR-0002's display-state guarantee, not an application-wide
-payload boundary.
+ratio strings and gain/loss direction remain because none reveals the exact input defaults. ADR-0002
+records this exception for Holdings.
 
 The root and Holdings loaders share one masking decision in the request context because route
-loaders run in parallel. In the browser, the masking cookie remains the live snapshot after its
-fetcher stops being pending, so an older exact Show response cannot reopen inputs after a newer Hide,
-and a failed Hide stays hidden. This browser precedence requires a successful server policy read;
-an explicit failed-resolution marker keeps the hydrated app masked regardless of an older cookie.
+loaders run in parallel. Two toggle redirect revalidations can also overlap; an older exact Show
+response can finish after a newer redacted Hide response. The masking cookie therefore remains the
+live browser snapshot after the fetcher stops being pending, keeping that late response from
+reopening inputs. A failed policy read has no such browser precedence: an explicit resolution marker
+keeps the hydrated app masked regardless of an older cookie.
 
 > **Accepted limitation.** The Holdings editor cannot choose a past date. A same-date CSV reupload
 > or bank/loan balance entry can supersede an earlier snapshot without deleting it. Removing a bad
@@ -434,17 +438,18 @@ interface PriceProvider {
 }
 ```
 
-Two implementations answer to this interface today, and only one of them imports the library at
-all: inside the separate `worker` container (§10.1), reached through `server/yahoo-client.ts`. The
-app's own implementation dials the worker's unix socket instead and never touches `yahoo-finance2`
-directly — the split spec 0018 made, argued in §10.1 and [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
+Two implementations answer to this interface today, and only one of them imports the library at all:
+inside the separate `worker` container (§10.1), reached through `server/yahoo-client.ts`. The app's
+own implementation dials the worker's unix socket instead and never touches `yahoo-finance2`
+directly. Spec 0018 made that split. The argument for it is in §10.1 and
+[ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md).
 
-Chosen after comparing alternatives against the requirement that actually discriminates them —
+Chosen after comparing alternatives against the requirement that actually discriminates them,
 **mutual fund NAV coverage**, since 401k and IRA accounts are overwhelmingly mutual funds:
 
 | Provider | Mutual fund NAV | Batching | Cost at ~100 instruments |
 |---|---|---|---|
-| **yahoo-finance2** | Yes — `MUTUALFUND` quote type with dividend fields | Real: one HTTP call for all symbols | $0 |
+| **yahoo-finance2** | Yes, `MUTUALFUND` quote type with dividend fields | Real: one HTTP call for all symbols | $0 |
 | Twelve Data | **Pro tier only** | Bills per symbol, not per request | Free tier exhausted before noon |
 | FMP | Yes | Partial; some batch endpoints gated | ~$20+/month |
 | Alpha Vantage | Partial | No | 25 requests/day free; unusable |
@@ -457,23 +462,23 @@ chart rather than data; a manual price path already exists for CITs, so the app 
 when a symbol cannot be quoted; and the interface makes swapping to FMP a day's work.
 
 **Currency guard.** Every quote reports a currency. Anything other than USD is **refused at
-instrument resolution** with a clear message. No currency column is stored — the guard exists so a
+instrument resolution** with a clear message. No currency column is stored. The guard exists so a
 foreign-listed instrument cannot silently sum GBP into a USD total.
 
 ### 6.2 Freshness and storage
 
-Background polling on the **household's refresh cadence from 15 minutes before through 15 minutes
-after regular market hours** — a whole number of minutes set at Settings → Prices, seeded to 15
-(§8.4) — plus **Refresh now**, a control beside the as-of line on every figure screen, which spends
-one provider request on demand (spec `pricing/06`). The padding can recover the prior close before
-open and a delayed close afterward without introducing a separate boundary-aligned scheduler.
-The press calls the refresh directly rather than waking the poller, so it works outside market
-hours — which is how a position added on a Saturday gets its first price. What the pricing UI still
-owes is `pricing/05`: the page-level stale summary and the Settings → Instruments tab.
-Pages read the database and never fan out to the API on render.
+Background polling runs on the **household's refresh cadence from 15 minutes before through 15
+minutes after regular market hours**, a whole number of minutes set at Settings → Prices, seeded to
+15 (§8.4). Alongside it sits **Refresh now**, a control beside the as-of line on every figure
+screen, which spends one provider request on demand (spec `pricing/06`). The padding can recover the
+prior close before open and a delayed close afterward without introducing a separate
+boundary-aligned scheduler. The press calls the refresh directly rather than waking the poller, so
+it works outside market hours, which is how a position added on a Saturday gets its first price.
+What the pricing UI still owes is `pricing/05`: the page-level stale summary and the Settings →
+Instruments tab. Pages read the database and never fan out to the API on render.
 
-Streaming was rejected on the grounds that mutual funds have no intraday price at all — they strike
-one NAV after the close — so a live tick pipeline would leave a large share of the balance sheet
+Streaming was rejected on the grounds that mutual funds have no intraday price at all, striking
+one NAV after the close, so a live tick pipeline would leave a large share of the balance sheet
 frozen anyway.
 
 Three tiers, deliberately separate:
@@ -493,19 +498,19 @@ and it is the one tier kept for a reason other than a screen: every distinct pri
 is retained forever, with the provider's raw entry archived beside it, because the owner values
 keeping rich data whose future use is unknown over the disk it costs. `price` is the only column in
 it anything may compute from. A sibling `price_poll` records each refresh attempt, so a silence in
-the log can be told apart from a server that was not running. The storage that buys — roughly half a
-gigabyte a year at a hundred instruments and the seeded fifteen-minute cadence — is stated at
+the log can be told apart from a server that was not running. The storage that buys, roughly half a
+gigabyte a year at a hundred instruments and the seeded fifteen-minute cadence, is stated at
 Settings → Prices, where the dial is.
 
 **Every one of those three writes now begins life on the other side of a socket.** The refresh that
 fills them reaches `yahoo-finance2` through a unix socket in a volume the app and a separate `worker`
 container share (§10.1, [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)):
 the app sends a request, the worker sends back exactly what the library returned, and neither side
-keeps anything of it once the answer has crossed — no queue, no job row, nothing the socket itself
-remembers between one call and the next. The worker holds no rule about what to fetch or what a
-price means: the currency guard above, and every check that decides whether a fetched number is
-trustworthy enough to write, run here, in the app, after the answer is already back across the wire
-— never in the process that went and fetched it.
+keeps anything of it once the answer has crossed. There is no queue, no job row, nothing the socket
+itself remembers between one call and the next. The worker holds no rule about what to fetch or what
+a price means: the currency guard above, and every check that decides whether a fetched number is
+trustworthy enough to write, run here, in the app, after the answer is already back across the wire,
+never in the process that went and fetched it.
 
 `holding_valued_at` reads daily rows, not observations. Live refresh can update a provider-dated
 daily row within its seven-day date bounds, including a revised past close. Backfill inserts only
@@ -517,7 +522,7 @@ backfill.
 first time the poller quoted an instrument, which made every statement dated before that day value
 without its securities. Now, whenever an instrument's position history reaches back behind its
 spine, a refresh fetches that instrument's daily history and inserts every trading day the spine does
-not already hold — gap-triggered rather than asked for, a bounded few instruments per refresh,
+not already hold: gap-triggered rather than asked for, a bounded few instruments per refresh,
 `on conflict do nothing` so a close the poller recorded live is never overwritten, un-adjusted for
 splits because a statement records shares as held on the day, and ledgered in `price_backfill` so an
 unfillable gap is retried daily rather than every tick and has a reason a person can read at
@@ -537,9 +542,9 @@ value carrying forward until changed. The form belongs to the unbuilt Settings �
 
 ## 7. History
 
-**History starts at day zero — for positions.** The first upload creates the first position set, and
+**History starts at day zero, for positions.** The first upload creates the first position set, and
 nothing loads position history the household did not upload. The *price* spine is no longer bound by
-that rule: it is filled backwards from the feed as far as the positions reach
+that rule, and is filled backwards from the feed as far as the positions reach
 ([ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), §6.2), because a
 statement dated before the spine began would otherwise be valued without its securities.
 
@@ -549,13 +554,13 @@ that would type the points in is not built yet (§8.4).
 
 Three rules govern how the two series coexist, so the chart never overstates what it knows:
 
-1. Manual points render as a **visually distinct dashed/lighter series** — never blended into the
+1. Manual points render as a **visually distinct dashed/lighter series**, never blended into the
    computed line, which would imply a real daily curve where there is a hand-typed annual dot.
 2. **Computed always wins** on overlapping dates. Manual points only fill gaps.
 3. **Only the total chart reaches back.** Views grouped by owner, account, or tax status start at
    day zero, since the manual series has no structure to slice. The UI says so rather than showing a
-   suspiciously short line. Since the owner filter (§8.1) a *filter* puts a screen into this case as
-   well as a grouping: an Overview read as one or more owners does not draw the prefix and cannot
+   suspiciously short line. Since the owner filter (§8.1), a *filter* puts a screen into this case as
+   well as a grouping. An Overview read as one or more owners does not draw the prefix and cannot
    reach behind those owners' first recorded holdings, so **All** shortens and the long presets fall
    out of reach exactly as they do on an account page. The screen says so where there is a hand-typed
    history to withhold, and says nothing where there is not.
@@ -566,8 +571,8 @@ Three rules govern how the two series coexist, so the chart never overstates wha
 
 ### 8.1 Dashboards
 
-The four daily-use pages — read-only of what the household recorded, but for the one inline write
-Holdings carries (§5.4). Two chrome-level writes ride on all of them, and neither touches a
+The four daily-use pages are read-only of what the household recorded, but for the one inline write
+Holdings carries (§5.4). Two chrome-level writes happen on all of them, and neither touches a
 position: a **Refresh now** press, which spends a provider request and lands new prices (§6.2), and
 the masking toggle, which writes a cookie (§12). The management screens that create the data they
 read are in §8.4.
@@ -576,19 +581,20 @@ read are in §8.4.
 |---|---|
 | **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) with its range control · the accounts rollup · allocation by account, drawn as bars (the asset-class cut lives on Analysis) |
 | **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by account / brokerage / account type / tax treatment / classification / asset class; group by any of those or by owner, with subtotals |
-| **Analysis** | Net worth cut four ways — by owner, by account kind, by asset class, by classification — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
+| **Analysis** | Net worth cut four ways: by owner, by account kind, by asset class, by classification. Each is a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
 
-A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by owner,
+A groupable, filterable Holdings table absorbs what would otherwise be four more pages: by owner,
 by account, tax view, unrealized. Those are the same table with the grouping changed, not separate
 features.
 
-**All four read as one or more owners.** The **owner filter** ([ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md))
-is one household-wide selection, carried between these four screens by the navigation and held
-entirely in the address — no cookie, nothing stored, and never derived from who signed in. Every
-*valued* figure on a narrowed screen is that selection's; what stays household-wide is deliberate and
-narrow — the "filtered from N" count, the "recorded in all" figure beside it, and Holdings' own
-filter options, each of which exists to say what the narrowing left out and would say nothing if it
+**All four read as one or more owners.** The **owner filter**
+([ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md)) is one household-wide
+selection, carried between these four screens by the navigation and held entirely in the address.
+There is no cookie and nothing stored, and it is never derived from who signed in. Every *valued*
+figure on a narrowed screen is that selection's; what stays household-wide is deliberate and narrow:
+the "filtered from N" count, the "recorded in all" figure beside it, and Holdings' own filter
+options, each of which exists to say what the narrowing left out and would say nothing if it
 narrowed too. And every narrowed screen names the owners in words, because a filter that survives
 navigation is a filter that can be forgotten.
 
@@ -596,36 +602,36 @@ The exempt surfaces and the argument for each are
 [ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md)'s, not restated here: an
 account's own page, the upload flow and Settings, which neither read the parameter nor carry it.
 
-**The chart has a range control, and two ADRs govern the line.** Both money charts — Overview's and
-the account page's — offer presets from 1D to All plus a custom span, default to 1Y, and remember
+**The chart has a range control, and two ADRs govern the line.** Both money charts, Overview's and
+the account page's, offer presets from 1D to All plus a custom span, default to 1Y, and remember
 the last pick in a cookie; a preset the surface's history cannot reach is drawn disabled rather
-than dropped. A long span is not every date: the grid is sampled under a fixed point budget,
+than dropped. A long span is not every date. The grid is sampled under a fixed point budget,
 geometrically and anchored on the window's end, so the recent end stays dense while a decade still
-fits ([ADR-0003](docs/adr/0003-anchored-geometric-chart-sampling.md)). 1D is the exception — it
+fits ([ADR-0003](docs/adr/0003-anchored-geometric-chart-sampling.md)). 1D is the exception. It
 plots the latest observed session off the observation log, one point per distinct instant,
-unsampled (§6.2, ADR-0006). The hover/focus readout is pre-rendered: every point's date and figure
+unsampled (§6.2, ADR-0006). The hover/focus readout is pre-rendered. Every point's date and figure
 are in the HTML and CSS reveals one at a time, without chart-specific client state ([ADR-0004](docs/adr/0004-pre-rendered-chart-interaction.md)).
 
-Structurally, the rule is a signature: the owner filter is a required first argument with no default
+Structurally, the rule is a signature. The owner filter is a required first argument with no default
 on every household-scoped reader in `valuation.server.ts`, so a new screen cannot read holdings
-without deciding whose. Reading everyone's is `ALL_OWNERS` — a word in the diff rather than an
+without deciding whose. Reading everyone's is `ALL_OWNERS`, a word in the diff rather than an
 omission. Which readers those are, which are exempt, and where inside each query the narrowing then
 has to go are `ARCHITECTURE.md` §4.2 and Appendix A's; this is only the argument for the shape.
 
 **Deliberately not in v1:** per-account drill-down (the filtered Holdings table already is one) and a
 dedicated tax page (a group-by plus a chart on Overview). The drill-down exclusion was later
-reversed — §13.1 makes the argument, and `/accounts/:id` is built; the tax one is half reversed,
+reversed. §13.1 makes the argument, and `/accounts/:id` is built; the tax one is half reversed,
 below.
 
-**The tax exclusion is half reversed: there is still no tax page, but there is a tax-aware panel.**
+**The tax exclusion is half reversed. There is still no tax page, but there is a tax-aware panel.**
 The argument above was that a tax view is a grouping and a chart over columns the other screens
 already carry. That holds for *sliced by tax treatment*, which Holdings does with a group-by, and it
-does not hold for *what settling a gain would cost* — no grouping of the data on screen produces a
+does not hold for *what settling a gain would cost*. No grouping of the data on screen produces a
 tax figure, because the rate is not in the data and had nowhere to be typed. So Analysis gained a
 fourth panel over the array it already loads, and Settings gained the one number it needs (§8.4).
 It stayed a panel rather than becoming a page for the reason the original sentence gives: one table
 does not earn a tab, and nothing here is a filing. What it produces is an estimate and is labelled
-one — the tax is computed per row and totalled from the rows, so a loss in one asset type is not
+one. The tax is computed per row and totalled from the rows, so a loss in one asset type is not
 netted against a gain in another the way a real return would net it, which makes the figure an
 upper bound. The panel says that on the page.
 
@@ -633,15 +639,15 @@ upper bound. The panel says that on the page.
 horizontal scroll nobody uses. Mobile gets a card list with a few fields visible and tap-to-expand.
 
 **The filter list grew after this section was first written, and owner then left it.** The first
-draft granted Holdings four filter dimensions — person, account, tax treatment, classification;
+draft granted Holdings four filter dimensions: person, account, tax treatment, classification.
 §8.3, written later, types the same idea as eight, adding institution, kind, asset class and
-instrument — and `holding_valued` (§8.2) already exposes all eight, so the extra ones cost no join
+instrument, and `holding_valued` (§8.2) already exposes all eight, so the extra ones cost no join
 and no new query. As built, Holdings filters on every dimension the view exposes except two.
 `instrument`, because a filter over the very thing each row
-is is a search box wearing a dropdown — a different control with a different case to make. And
+is is a search box wearing a dropdown, a different control with a different case to make. And
 `person`, which since spec 0013 is the household-wide owner filter (ADR-0008) rather than one
 screen's dropdown, though it remains a *grouping* here. §13.7's refusal of search over a dozen
-accounts stands, and is honoured as a rule rather than a one-off — a dimension becomes a control
+accounts stands, and is honoured as a rule rather than a one-off. A dimension becomes a control
 only once the data holds two distinct values for it, so a filter that could only mean "everything"
 is never drawn.
 
@@ -685,10 +691,10 @@ added here is a column added to both, in one migration. See
 [ADR-0001](docs/adr/0001-holding-valued-row-type-contract.md).
 
 **Cost basis is nullable**, so any group's unrealized figure may be partial. The rule is **sum what
-is known and label the coverage** — a partial figure says how many holdings it is based on. Never
+is known and label the coverage**. A partial figure says how many holdings it is based on. Never
 coerce null to zero, which would report a fake gain equal to the entire untracked position.
 
-> **Weakest point in the design.** Hand-rolled queries can disagree on edge cases — null cost
+> **Weakest point in the design.** Hand-rolled queries can disagree on edge cases: null cost
 > basis, stale prices, an account whose first position set starts mid-chart. You will not get an
 > error; you will get two pages showing different totals. `holding_valued` is the mitigation and the
 > first place to look.
@@ -696,24 +702,24 @@ coerce null to zero, which would report a fake gain equal to the entire untracke
 ### 8.3 Future: saved view builder
 
 Recorded because it was explicitly deferred rather than rejected. The five dashboards originally
-described are not five features — they are one query shape with different arguments:
+described are not five features. They are one query shape with different arguments.
 
 **One dimension of this now exists**, which makes the deferral smaller rather than untouched. The
-owner filter (§8.1) is the `filters` half of the shape below for one dimension — the one this
-section's table and config still call `person`, which everywhere else is now the **owner** — persisted
-across screens by the URL rather than by a stored view. Whether tax treatment or asset class should follow
-is left open here on purpose: six more of these may well be the wrong answer, and the builder the
-right one. Classification has since followed anyway, as a fourth fixed Analysis panel (§8.1), with
-this paragraph read first: the grouping and the panel component both already existed, so the panel
-cost a loader line rather than a feature — but it does spend one of the slots this warning counts,
+owner filter (§8.1) is the `filters` half of the shape below for one dimension, the one this
+section's table and config still call `person`, which everywhere else is now the **owner**. The URL
+persists it across screens, not a stored view. Whether tax treatment or asset class should
+follow is left open here on purpose: six more of these may well be the wrong answer, and the builder
+the right one. Classification has since followed anyway, as a fourth fixed Analysis panel (§8.1),
+with this paragraph read first. The grouping and the panel component both already existed, so the panel
+cost a loader line rather than a feature. But it does spend one of the slots this warning counts,
 and the next cut that cannot be had that cheaply is the builder's cue, not a fifth panel's.
 
 | Requirement | Group by | Measure | Time |
 |---|---|---|---|
 | holdings by user | person | value | now |
-| unrealized gains | — | unrealized | now |
+| unrealized gains | not grouped | unrealized | now |
 | taxable vs sheltered | tax treatment | value | now |
-| net worth over time | — | value | daily |
+| net worth over time | not grouped | value | daily |
 | …by person over time | person | value | daily |
 
 Config shape:
@@ -738,7 +744,7 @@ measure picker is most of the remaining work. Revisiting the no-materialisation 
 worth doing at the same time, since arbitrary user-composed groupings stress it far more than three
 fixed queries do.
 
-A read-only SQL console is a reasonable later escape hatch for anything the builder cannot express —
+A read-only SQL console is a reasonable later escape hatch for anything the builder cannot express,
 but not before it, since the builder handles every case above as a form.
 
 ### 8.4 Management surface
@@ -760,15 +766,16 @@ mutation. Everything else that writes lives behind Settings.
 | Accounts | Create, edit, close. Owner, kind, institution, tax treatment. Closing preserves history (`closed_at`) |
 | People | Create, edit |
 | Classifications | Create, rename, assign `asset_class` |
-| Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
+| Instruments | View, repoint and forget aliases, each change previewed against what is recorded. Edit symbol, price source, classification. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
-| Prices | The refresh cadence — how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours — and the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
+| Prices | The refresh cadence, meaning how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours. Also the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
 | Display | The masking policy; theme follows the system until §12's toggle is built |
 | Passkeys | Enrol and remove credentials used by the household browser lock |
 
-Classifications, Instruments and History are not built yet: the strip today is People, Accounts,
-Tax, Prices, Display and Passkeys. The Settings index names the other three as future work.
+Classifications and History are not built yet, and Instruments holds only its alias half so far: the
+strip today is People, Accounts, Instruments, Tax, Prices, Display and Passkeys. The Settings index
+names the rest as future work.
 
 Tax rate, masking policy, and refresh cadence are household preferences stored in `app_setting`.
 Environment variables configure the deployment; changing a household preference needs no redeploy.
@@ -777,23 +784,23 @@ Environment variables configure the deployment; changing a household preference 
 environment.** The cadence began life as `PRICE_POLL_INTERVAL_MINUTES`, filed on the deployment side
 on the argument that request spend against an unofficial feed is the operator's business. In a
 self-hosted household the operator and the person watching the prices are the same person minus a
-shell, so the argument collapsed into Tax's: the person who wants the dial moved is the person
-reading the screen it drives. The variable was removed outright rather than kept as a fallback —
-two places to set a figure is two places to read a different answer from — and the poller reads the
-row before each tick, so a save takes effect by the next refresh with no restart in any process
+shell, so the argument collapsed into Tax's. The person who wants the dial moved is the person
+reading the screen it drives. The variable was removed outright rather than kept as a fallback,
+because two places to set a figure is two places to read a different answer from. The poller reads
+the row before each tick, so a save takes effect by the next refresh with no restart in any process
 (`0008_refresh_cadence.sql`).
 
 **Display is the second preference tab, and it holds a policy rather than a value.** The masking
-policy is the household's standing answer to what a browser nobody has toggled yet opens in — masked,
+policy is the household's standing answer to what a browser nobody has toggled yet opens in: masked,
 unmasked, or as that browser last left it. It sits beside the capital gains rate for the same reason
-that one is a row: it describes the household rather than the deployment. What it does *not* hold is
+that one is a row. It describes the household rather than the deployment. What it does *not* hold is
 the masking control itself. Whether a given browser is masked right now is a fact about that browser
 and lives in a cookie that browser owns, because a phone in a queue and a desktop in a locked room
 want opposite answers; and the control that flips it sits in the chrome on every screen, not here.
-That placement is load-bearing rather than convenient: the policy is seeded to *masked*, so a first
+That placement is load-bearing rather than convenient. The policy is seeded to *masked*, so a first
 run is a page of dots, and dots whose only cure is three clicks into a configuration area is an app
 that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the split and the
-deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
+deliberately weak guarantee under it. Masking defends against being read over the shoulder, and the
 gate in front of the instance (§10) keeps a *person* out while the lock
 (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) keeps a *browser* out.
 Holdings' correction is the narrow payload exception: a masked Holdings loader omits amounts until
@@ -802,20 +809,20 @@ then pretend they are absent.
 
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments
-have gone stale?" — a
-question you must revisit on a schedule, since CIT prices don't update themselves. It's also where a
-ticker change (§4.3) gets applied and where a bad alias gets repointed. Buried as row affordances,
-those are undiscoverable exactly when needed.
+have gone stale?", a question you must revisit on a schedule, since CIT prices don't update
+themselves. It's also where a ticker change (§4.3) gets applied, and it is already where a bad
+alias gets repointed or forgotten, behind a preview of what stays recorded. Buried as row
+affordances, those are undiscoverable exactly when needed.
 
 **Manual balance editing is the exception and does not live in Settings.** It's the one write
 allowed on mobile (§11), so it lives on the account's own page, one tap from the account cell on
-Holdings — not three levels deep behind a desktop-shaped configuration area.
+Holdings, not three levels deep behind a desktop-shaped configuration area.
 
 **Correcting one position is the same exception, generalised** (§5.4). A row on Holdings opens in
 place, restates its quantity and cost basis, and closes. It stays on Holdings for the reason the
 balance form does: it is the write a household actually makes between statements, and a write made
 weekly does not belong behind a tab visited a few times ever. It does not replace the upload flow and
-cannot — it changes figures on positions that already exist, never which positions an account holds.
+cannot. It changes figures on positions that already exist, never which positions an account holds.
 
 **The upload flow (§5.1) is four screens**, not one: file drop → column mapping → unresolved
 instruments → diff preview. Only the first is trivial.
@@ -829,14 +836,14 @@ since nothing else can be created until at least one of each exists.
 
 | Layer | Choice | Reasoning |
 |---|---|---|
-| Runtime | **Node 24 LTS** | Bun is production-viable and faster, but Node is the fewer-surprises target for software other people deploy, and `Bun.SQL` would lock the data layer to the runtime. Throughput is not a constraint here — one family, ~100 symbols every 15 minutes. Native TypeScript type stripping is stable as of v24.12.0, which lets **standalone scripts** (migration runner, seeds, one-off CLI tasks) run as `.ts` directly. It does *not* remove the app's build step: React Router builds both client and server bundles through Vite. Types are stripped, never checked — `tsc --noEmit` stays in CI. |
+| Runtime | **Node 24 LTS** | Bun is production-viable and faster, but Node is the fewer-surprises target for software other people deploy, and `Bun.SQL` would lock the data layer to the runtime. Throughput is not a constraint here: one family, ~100 symbols every 15 minutes. Native TypeScript type stripping is stable as of v24.12.0, which lets **standalone scripts** (migration runner, seeds, one-off CLI tasks) run as `.ts` directly. It does *not* remove the app's build step: React Router builds both client and server bundles through Vite. Types are stripped, never checked, so `tsc --noEmit` stays in CI. |
 | Framework | **React Router 7** | Full-stack, SSR + client routing, Vite-based, good self-host story. One codebase, shared types. Chosen over SvelteKit purely on existing familiarity, which outweighs any technical edge for a solo-maintained project. Next.js rejected as the fiddliest to self-host. |
 | PWA | **Hand-rolled manifest + network-only worker** | Shipped by spec 0012, with no plugin and no precache on purpose: the worker stores nothing and stays short enough to verify by eye (ADR-0007). `vite-plugin-pwa`'s generated, caching worker is the considered-and-refused alternative |
 | Database | **Postgres** | |
-| Access | **Kysely** | Typed SQL builder, not an ORM. `kysely-codegen` derives types from the live database **including views**, so `holding_valued` is typed like a table. Drizzle was the runner-up — better migration ergonomics, but it wants the schema to live in TypeScript, and this design puts a SQL view at the centre, which is exactly where TS-schema-first tools force you to maintain a definition twice. |
+| Access | **Kysely** | Typed SQL builder, not an ORM. `kysely-codegen` derives types from the live database **including views**, so `holding_valued` is typed like a table. Drizzle was the runner-up, with better migration ergonomics, but it wants the schema to live in TypeScript, and this design puts a SQL view at the centre, which is exactly where TS-schema-first tools force you to maintain a definition twice. |
 | Migrations | **Plain `.sql` files** | The database is the source of truth. Run on container start, before serving. |
 
-Note: `Express` is a library on top of Node, not an alternative to it — and the framework owns
+Note: `Express` is a library on top of Node, not an alternative to it, and the framework owns
 routing here, so it is not needed.
 
 ---
@@ -845,17 +852,17 @@ routing here, so it is not needed.
 
 | Area | Decision |
 |---|---|
-| **Packaging** | Docker Compose: Caddy + the sign-in gate + app + Postgres. All configuration via environment variables, with one exception — who may enter is a file (§10.1). |
+| **Packaging** | Docker Compose: Caddy + the sign-in gate + app + Postgres. All configuration via environment variables, with one exception: who may enter is a file (§10.1). |
 | **Distribution** | The app image is built once by CI and **pulled**, not built on the host. A `v*` tag publishes a multi-architecture image to GitHub Container Registry; the Compose file pins the floating major and pulls on every `up` (§10.1). |
 | **Ingress** | The bundled Caddy container is the only service that publishes a port. The app, the database and the gate are reachable only on the compose network, so neither the app's forwarded-header trust nor the gate's verdict is ever extended to whoever can reach the host. |
 | **TLS** | **The operator's, in front of this stack.** Everything inside the stack speaks plain HTTP and the app never manages certificates; the public hostname and its certificate belong to the house-wide proxy this stack sits behind, and `PUBLIC_ORIGIN` (§10.1) is the `https://` origin it serves. |
-| **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removed the blocker the PWA slice (§11) faced — the instance installs at `PUBLIC_ORIGIN` and nowhere else. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
-| **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
+| **PWA requirement** | Service workers require a **secure context**: HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removed the blocker the PWA slice (§11) faced. The instance installs at `PUBLIC_ORIGIN` and nowhere else. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
+| **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment, whether a gate fronts it, and draws a persistent warning banner when nothing does. |
 | **Lock** | **A second boundary, inside the app.** Once the household enrols a passkey, the app's own root middleware refuses every screen to a browser holding no live grant until a WebAuthn assertion checks out (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`). Distinct from Auth above it: the gate decides which *person* may reach this instance; the lock decides which *browser* may read it once admitted. |
-| **Job scheduler** | In-process, inside the app container — the timer and cadence, not the fetch. One process to deploy, one place to read logs; a restart mid-session misses a poll until the next tick, acceptable at 15-minute granularity. The *fetch* itself now runs in a separate `worker` container reached over a unix socket (§10.1): the trade flipped because security was never an input when this row was first decided, and once it was the deciding one, the process resolving Yahoo's hostname could no longer be the same process holding every account, holding and position (spec 0018 §2.4). |
+| **Job scheduler** | In-process, inside the app container: the timer and cadence, not the fetch. One process to deploy, one place to read logs; a restart mid-session misses a poll until the next tick, acceptable at 15-minute granularity. The *fetch* itself now runs in a separate `worker` container reached over a unix socket (§10.1): the trade flipped because security was never an input when this row was first decided, and once it was the deciding one, the process resolving Yahoo's hostname could no longer be the same process holding every account, holding and position (spec 0018 §2.4). |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
-| **Timezone** | UTC everywhere in the database. `America/New_York` for market-hours logic, and for any timestamp naming a market instant — the "as of" caption renders in market time with its abbreviation, because these pages are server-rendered and have no browser clock to ask (spec `pricing/06`, which supersedes §6's story 8). Browser-local for everything else. |
-| **Backups** | Documented `pg_dump` procedure. Not built in — self-hosters have their own, and a half-built backup feature is worse than none. |
+| **Timezone** | UTC everywhere in the database. `America/New_York` for market-hours logic, and for any timestamp naming a market instant. The "as of" caption renders in market time with its abbreviation, because these pages are server-rendered and have no browser clock to ask (spec `pricing/06`, which supersedes §6's story 8). Browser-local for everything else. |
+| **Backups** | Documented `pg_dump` procedure. Not built in, because self-hosters have their own, and a half-built backup feature is worse than none. |
 | **Tests** | Integration tests against a real Postgres, concentrated on CSV mapping, alias resolution, and the position-set diff. Those are where wrong answers are silent. |
 
 ### Authentication is not multi-user
@@ -863,8 +870,8 @@ routing here, so it is not needed.
 **Authentication happens in front of the app, and the app does none of it.** The gate signs each
 family member in with Google and admits only the addresses on the allowlist; a request that reaches
 the app has already been admitted, so the app carries no sign-in page and no password of its own.
-Nor does it carry a session in the sense that phrase usually means: the lock's grant (ADR-0012) is a
-fact about one browser at one moment and about nothing else — it names no person, its cookie carries
+Nor does it carry a session in the sense that phrase usually means. The lock's grant (ADR-0012) is a
+fact about one browser at one moment and about nothing else: it names no person, its cookie carries
 no claim of its own, and it answers only whether the cookie presented names a live row. That is a
 bearer's answer rather than proof this browser ran a check, which is the limit ADR-0012 states
 outright. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this stack
@@ -872,12 +879,12 @@ rather than in the operator's proxy, and `docs/operating.md` is where an operato
 
 **That is per-person at the door and nowhere behind it.** The gate knows which family member is
 acting and forwards the verified address on every request; the app reads it nowhere. It is
-attribution, never permission (`CONTEXT.md`) — there is no user table, no per-person permissions
+attribution, never permission (`CONTEXT.md`). There is no user table, no per-person permissions
 and no per-user view. Every family member sees and can do everything, which is the household this
 was built for.
 
 **So binding identity to `person` is still a separate design.** `person` is an ownership label
-(§4.2), not an account anyone signs in as, and the two are deliberately unjoined: a screen that
+(§4.2), not an account anyone signs in as, and the two are deliberately unjoined. A screen that
 filtered by who is looking would need the single-owner-per-account model revisited first, and that
 revisit is the design work, not the plumbing. A later feature may record *who* did something. None
 may decide *whether* they may.
@@ -887,14 +894,14 @@ may decide *whether* they may.
 The deliverable is a **single application image plus a Compose file**. `docker compose up` on a
 fresh machine with an empty data directory produces a working instance once the gate has its Google
 credentials, and refuses to start until it does. That prerequisite replaced an older promise of no
-manual steps at all, deliberately: the old promise was kept by booting an instance anyone on the
+manual steps at all, deliberately. The old promise was kept by booting an instance anyone on the
 network could read, and a gate that can be skipped by forgetting to configure it is not a gate.
 Compose names the first missing value and stops, so a half-configured instance never runs.
 
 The image is **published, not built on the host**. Pushing a `v*` tag builds it once for
 `linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry; the Compose file pulls
-it. This is what removes the Node build — and the memory to run it — from the list of things a NAS
-or a small VPS has to be able to do. Two consequences that are load-bearing:
+it. Publishing the image removes the Node build, and the memory to run it, from the list of things a
+NAS or a small VPS has to be able to do. Two consequences that are load-bearing:
 
 - **The deployment file cannot build.** `compose.yaml` has no `build:` stanza, so an unreachable
   registry or a tag that does not exist fails immediately instead of quietly starting a
@@ -969,12 +976,12 @@ caddy   caddy:2-alpine
 **Every service is stripped to what it was proved to need**, and it is one decision rather than
 seven: every Linux capability dropped, `no-new-privileges`, and a read-only root filesystem with a
 tmpfs over whatever each still writes, on `db`, `dump`, `app`, `worker`, `egress-proxy`, `gate` and
-`caddy` alike. Six of the seven also run an unprivileged uid — `worker` and `egress-proxy` the
+`caddy` alike. Six of the seven also run an unprivileged uid: `worker` and `egress-proxy` the
 image's own `node` user, same as `app`; `dump` the operator's own account, because the directory it
 writes to is theirs. Only `gate` stays root, because pinning a uid there would silently decide the
 mode of the operator's allowlist file; it is bounded instead to the one capability root is being kept
 for, `DAC_READ_SEARCH`. The only other survivor is `NET_BIND_SERVICE` on `caddy`, which the image's
-binary needs in order to `exec` at all. None of this changes how the stack behaves once it is up.
+binary needs to `exec` at all. None of this changes how the stack behaves once it is up.
 
 Three of the seven services share one image now, where every service used to run its own: `app`,
 `worker` and `egress-proxy` all pull the same published image, told apart only by `CMD`. It is the
@@ -982,15 +989,15 @@ same trade the Job scheduler row above states, taken for the same reason (spec 0
 `worker` gets no database credential and shares no network with `db`, `app` or `gate`; `egress-proxy`
 is the fence between it and the internet, and neither container can reach the other's neighbours.
 [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md) records
-the decision, and the alternative it was taken over — **the mailbox**, a Postgres table through
+the decision, and the alternative it was taken over: **the mailbox**, a Postgres table through
 which the worker would have claimed and answered a request under a minimal role of its own. `caddy`
-is a different kind of service again — the ingress front door, not
-application logic — and is the only container reachable from outside the compose network. `gate` is
+is a different kind of service again, the ingress front door rather than
+application logic, and is the only container reachable from outside the compose network. `gate` is
 there because that front door is where sign-in has to be decided: every path to the app runs through
 it, including a device on the LAN dialling this box's published port directly, which is the threat
 the gate exists for.
 
-**Dockerfile — multi-stage:**
+**Dockerfile, multi-stage:**
 
 | Stage | Contents |
 |---|---|
@@ -998,89 +1005,89 @@ the gate exists for.
 | `build` | `react-router build` → client and server bundles. Runs on `$BUILDPLATFORM` |
 | `runtime` | `node:24-alpine`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user**. No compiler, no dev dependencies, no source tree |
 
-**Only `runtime` is architecture-specific — and only `runtime` is Alpine.** `deps` and `build` are
+**Only `runtime` is architecture-specific, and only `runtime` is Alpine.** `deps` and `build` are
 pinned to `$BUILDPLATFORM` and run natively on the builder against glibc; the per-platform stage
 does nothing but copy and `chmod`. That makes the `arm64` image nearly free instead of a slow,
 occasionally faulting emulated Node build, and it makes the published image Alpine's small userland
-rather than Debian slim's — perl, bash, apt and dpkg stay behind. Both legs are sound only while no
-production dependency carries a native binary or a platform-specific install script — true today,
-and silent to break — so the Dockerfile names the invariant in place and the audit job in CI fails
-any change that violates it.
+rather than Debian slim's: perl, bash, apt and dpkg stay behind. Both legs are sound only while no
+production dependency carries a native binary or a platform-specific install script, which is true
+today and silent to break, so the Dockerfile names the invariant in place and the audit job in CI
+fails any change that violates it.
 
 **Startup sequence.** The entrypoint runs migrations to completion, then starts the server. Not
-concurrently, and not in a separate one-shot service — a single instance means no coordination
+concurrently, and not in a separate one-shot service. A single instance means no coordination
 problem, and serving requests against a half-migrated schema is the failure this ordering prevents.
 Migrations must be idempotent so a restart is always safe.
 
-**Environment surface** — the deployment's whole configuration API, documented in `.env.example`:
+**Environment surface**, the deployment's whole configuration API, documented in `.env.example`:
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `POSTGRES_PASSWORD` | yes | — | The bundled Postgres's password — the requirement `DATABASE_URL` below used to carry, moved here instead. `db` reads it by this name; `app` and `dump` never see it, but read the same value as `PGPASSWORD` — the name the Postgres driver itself consults — so a password no longer has to live inside a connection string at all |
+| `POSTGRES_PASSWORD` | yes | no default | The bundled Postgres's password, the requirement `DATABASE_URL` below used to carry, moved here instead. `db` reads it by this name; `app` and `dump` never see it, but read the same value as `PGPASSWORD`, the name the Postgres driver itself consults, so a password no longer has to live inside a connection string at all |
 | `DATABASE_URL` | no | `postgres://portfolio@db:5432/portfolio` | Postgres connection string, carrying no password of its own now that one is above. Compose supplies this default, pointed at the bundled `db`; set it yourself only to run against a Postgres this project does not own |
-| `PUBLIC_ORIGIN` | yes | — | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. Also read by the `gate` service — see below |
-| `AUTH_GATE` | no | `none` | Whether something in front of the app authenticates: `external` or `none`. It guards nothing — it only decides whether the warning banner (§10) is drawn, so that the app neither cries wolf behind the gate nor stays quiet without one. Compose sets `external`, because in that file it is a fact |
+| `PUBLIC_ORIGIN` | yes | no default | The `https://` origin the house proxy serves this instance at, bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. Also read by the `gate` service. See below |
+| `AUTH_GATE` | no | `none` | Whether something in front of the app authenticates: `external` or `none`. It guards nothing. It only decides whether the warning banner (§10) is drawn, so that the app neither cries wolf behind the gate nor stays quiet without one. Compose sets `external`, because in that file it is a fact |
 | `PORT` | no | `3000` | HTTP listen port |
 | `MAX_UPLOAD_MB` | no | `10` | Largest statement upload accepted, in whole MB |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation, and the trading day a quote's close is filed under |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
-| `PRICE_WORKER_SOCKET` | no | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only** — Compose sets it for neither service, so both meet at this same fixed path inside the shared `price-worker-sock` volume (§10.1); set it yourself only for a checkout running the worker outside Compose |
+| `PRICE_WORKER_SOCKET` | no | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only.** Compose sets it for neither service, so both meet at this same fixed path inside the shared `price-worker-sock` volume (§10.1); set it yourself only for a checkout running the worker outside Compose |
 
 **The rest of the gate's settings are not in that table, because the app reads none of the rest.**
-`PUBLIC_ORIGIN` moved into the table above for exactly that reason: unlike its neighbours, the app
+`PUBLIC_ORIGIN` moved into the table above for exactly that reason. Unlike its neighbours, the app
 now derives the lock's WebAuthn relying-party id from it
-(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) — another variable shared with the
-sidecar, though not its first: `TZ`, above, already reaches both `app` and `gate` (`compose.yaml`),
-validated and used by each. `POSTGRES_PASSWORD` earns its row for the opposite reason: `server/
-config.ts` validates no variable by that name — nothing the app runs ever asks for it — but `db`
-fails to start without it, and its value still reaches `app` and `dump`, arriving there as
-`PGPASSWORD` rather than under the name the operator set. Its Google client and its cookie secret
-genuinely are the gate's alone —
-Compose-level variables consumed only by the `gate` service, with no default, and a missing one
-stops `up` the same way a missing `PUBLIC_ORIGIN` or `POSTGRES_PASSWORD` does. Who may enter is not a
-variable at all: a file of addresses beside the Compose file, one per line, because it is a list that
-grows rather than a value that changes. `.env.example`'s gate section is the operator-facing recipe
-for those two and the allowlist, sitting between `PUBLIC_ORIGIN`'s own required section above it and
-`POSTGRES_PASSWORD`'s required section below — `DATABASE_URL`'s recipe moved further down still, into
-its own optional section, now that setting it at all means overriding Compose's default rather than
-supplying a missing value.
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`). That makes it another variable shared
+with the sidecar, though not its first: `TZ`, above, already reaches both `app` and `gate`
+(`compose.yaml`), validated and used by each. `POSTGRES_PASSWORD` earns its row for the opposite
+reason. `server/config.ts` validates no variable by that name, and nothing the app runs ever asks
+for it, but `db` fails to start without it, and its value still reaches `app` and `dump`, arriving
+there as `PGPASSWORD` rather than under the name the operator set. Its Google client and its cookie
+secret genuinely are the gate's alone. They are Compose-level variables consumed only by the `gate`
+service, with no default, and a missing one stops `up` the same way a missing `PUBLIC_ORIGIN` or
+`POSTGRES_PASSWORD` does. Who may enter is not a variable at all: a file of addresses beside the
+Compose file, one per line, because it is a list that grows rather than a value that changes.
+`.env.example`'s gate section is the operator-facing recipe for those two and the allowlist,
+sitting between `PUBLIC_ORIGIN`'s own required section above it and `POSTGRES_PASSWORD`'s required
+section below. `DATABASE_URL`'s recipe moved further down still, into its own optional section, now
+that setting it at all means overriding Compose's default rather than supplying a missing value.
 
 **The household's settings are deliberately not in that table.** Environment variables remain the
-whole of what an *operator* configures — everything validated at startup, everything that needs a
+whole of what an *operator* configures: everything validated at startup, everything that needs a
 restart to change. The capital gains rate, the masking policy and the refresh cadence are none of
 those, so they live in `app_setting`, a single-row table seeded by its own migrations and edited
 under Settings (§8.4). There is no `CAPITAL_GAINS_RATE` variable and there is no longer a
-`PRICE_POLL_INTERVAL_MINUTES` one: two places to set a figure is two places to read a different
-answer from. (An upgrade that still sets the old variable is ignored without error; the cadence is
-re-entered once at Settings → Prices.)
+`PRICE_POLL_INTERVAL_MINUTES` one, because two places to set a figure is two places to read a
+different answer from. (An upgrade that still sets the old variable is ignored without error; the
+cadence is re-entered once at Settings → Prices.)
 
 **Volumes.** Two named volumes now, not one. `db-store` is the store for Postgres data:
 `./volumes/db/data`, beside the Compose file, reached through the volume name the local driver binds
-to that path — a directory the operator can see and move, with the ownership a volume brings (§10.1).
+to that path, a directory the operator can see and move, with the ownership a volume brings (§10.1).
 `price-worker-sock` is new, and different in kind: a tmpfs, not a directory on the host
 (`size=1m,uid=1000,gid=1000,mode=0770`), holding nothing but the socket file `worker` creates at
-start and unlinks at `SIGTERM` — nothing in it is meant to survive a restart, still less a backup.
-The application container is otherwise **stateless** — its own mount of that second volume is
+start and unlinks at `SIGTERM`. Nothing in it is meant to survive a restart, still less a backup.
+The application container is otherwise **stateless**. Its own mount of that second volume is
 read-only, so it still writes nothing to its own filesystem and can be destroyed and recreated
 freely, and backups have exactly one target (§10, `pg_dump`). Uploaded CSVs are retained in
 Postgres rather than on disk (§5.2) specifically to preserve this property.
 
 **Reverse proxy.** Ingress runs through the bundled `caddy` service, configured by a `Caddyfile` at
 the repository root. It is the only container that publishes a port, which is what keeps the app and
-the gate off the host's network — everything inside speaks plain HTTP and believes what Caddy puts on
+the gate off the host's network. Everything inside speaks plain HTTP and believes what Caddy puts on
 a request, and that is only sound while the set of things that can connect to them is Caddy alone.
-It is also what makes the gate airtight, by the same fact: there is no way to the app that does not
-pass the front door.
+That same fact also makes the gate airtight. There is no way to the app that does not pass the
+front door.
 
 **Two proxies, and the split is deliberate.** This stack's Caddy enforces sign-in and nothing else
-touches it. The operator's house-wide proxy in front owns TLS and the public hostname — this is a
-household that already runs one for every other self-hosted app, and duplicating certificate
-lifecycle inside the stack would buy nothing. It is deliberately *not* trusted with enforcement: a
-device on the LAN can dial this box's published port and land on this stack's Caddy directly, and
-that device is exactly the threat. The consequence for the app is one hop more of forwarded headers
-to survive, which `ARCHITECTURE.md` §2 and §7.6 are the place for. The consequence for the operator
-is that `PUBLIC_ORIGIN` must be the `https://` origin their proxy serves — which is also what
-supplies the secure context the installed app (§11, ADR-0007) requires.
+touches it. The operator's house-wide proxy in front owns TLS and the public hostname. The reader
+here is a household that already runs one for every other self-hosted app, and duplicating
+certificate lifecycle inside the stack would buy nothing. That house-wide proxy is deliberately
+*not* trusted with enforcement, because a device on the LAN can dial this box's published port and
+land on this stack's Caddy directly, and that device is exactly the threat. The consequence for the
+app is one hop more of forwarded headers to survive, which `ARCHITECTURE.md` §2 and §7.6 are the
+place for. The consequence for the operator is that `PUBLIC_ORIGIN` must be the `https://` origin
+their proxy serves, which is also what supplies the secure context the installed app (§11, ADR-0007)
+requires.
 
 ---
 
@@ -1088,21 +1095,22 @@ supplies the secure context the installed app (§11, ADR-0007) requires.
 
 **The phone is for reading, plus one-field writes.**
 
-Every mutation except balance editing and position correction is a desktop-shaped workflow — upload
-→ mapping → resolution → diff → commit is four screens with real state, and designing it for a 390px
-viewport would compromise the desktop version that will actually be used.
+Every mutation except balance editing and position correction is a desktop-shaped workflow. The
+upload path, from file through mapping, resolution and diff to commit, is four screens with real
+state, and designing it for a 390px viewport would compromise the desktop version that will
+actually be used.
 
 - **Read:** every read page.
 - **Write:** manual balance updates (checking, loan) and single-position corrections on Holdings
-  (§5.4) — one or two number inputs, and no screen-to-screen state in either. A correction qualifies
-  on exactly the test the balance form passes: it is a number typed into a box, and everything that
-  makes ingest desktop-shaped — the column mapping, the unresolved instruments, the diff — is absent
-  because a correction cannot change which instruments an account holds.
+  (§5.4), one or two number inputs, and no screen-to-screen state in either. A correction qualifies
+  on exactly the test the balance form passes: it is a number typed into a box. Everything that
+  makes ingest desktop-shaped, meaning the column mapping, the unresolved instruments and the diff,
+  is absent because a correction cannot change which instruments an account holds.
 - **Everything else:** still renders on mobile and still works if you are determined; it simply gets
-  no mobile-specific layout investment. Not hidden — hiding it means being stuck on a tablet.
+  no mobile-specific layout investment. Not hidden, because hiding it means being stuck on a tablet.
 
 **Caching: considered, and refused.** This section used to owe stale-while-revalidate on the read
-pages — cached render first, last-known numbers when the server is unreachable. The shipped worker
+pages: a cached render first, last-known numbers when the server is unreachable. The shipped worker
 is the opposite: network-only, storing nothing, because a cache of the family's balances sits on
 every phone *outside* the gate's boundary. The household chose the clean device over the glanceable
 snapshot, and [ADR-0007](docs/adr/0007-the-service-worker-stores-nothing.md) is that answer written
@@ -1119,13 +1127,13 @@ timestamps position sets, is a correctness problem for a feature used twice a ye
 
 ## 12. Theming
 
-**Three states, not two: `light`, `dark`, and `system` — with `system` as the default.** A two-state
+**Three states, not two: `light`, `dark`, and `system`, with `system` as the default.** A two-state
 toggle forces a choice the OS has usually already made, and gets it wrong twice a day for anyone
 using scheduled dark mode.
 
 **The preference is stored in a cookie, not `localStorage`.** This is the decision that matters, and
 it is forced by SSR. With `localStorage`, the server has no idea which theme to render, so the page
-paints light and then corrects itself — the flash-of-wrong-theme — and the usual fix is a blocking
+paints light and then corrects itself, the flash-of-wrong-theme, and the usual fix is a blocking
 inline script in `<head>`. A cookie is sent with the request, so the server renders `data-theme`
 correctly the first time. No flash, no blocking script, nothing to work around.
 
@@ -1136,7 +1144,7 @@ In `system` mode the cookie holds `system`, the server emits no explicit theme a
 pair.** Whether a browser's amounts are hidden is resolved on the server from a cookie for exactly
 the reason the theme is: with the state in `localStorage` the page would paint the amounts and then
 hide them, which is the one failure that feature cannot have. Two differences are worth naming.
-Masking's cookie is not `HttpOnly`, because the toggle's own script writes it — the flip has to work
+Masking's cookie is not `HttpOnly`, because the toggle's own script writes it. The flip has to work
 at the speed of a hand rather than of a network, and it carries a display preference rather than a
 credential. And its default lives in a database row rather than in the cookie's absence, because a
 household's answer to "what should a new browser open in?" is a household fact, while a theme's is
@@ -1144,13 +1152,13 @@ the OS's. When the theme toggle is built it joins the masking policy on Settings
 which is why that tab is named for the screens rather than for either preference.
 
 The chart's range choice is the third of these display states, and it travels the same way for the
-same reason: the last-picked preset rides a cookie (spec 0008) so the server draws the remembered
-range on first paint. None of the three grants anything. A fourth cookie now does: the lock's own grant
-(ADR-0012), which is why it alone among this stack's cookies is `HttpOnly`, `Secure`, and `__Host-`
-prefixed — it carries an opaque id naming one browser's unlock rather than a preference, and none of
-the three display states above needed any of that. Not a passkey: `CONTEXT.md` gives that word to
-the credential the household enrolled, and this cookie carries no claim of its own
-(`migrations/0012_lock.sql`).
+same reason: a cookie holds the last-picked preset (spec 0008) so the server draws the
+remembered range on first paint. None of the three grants anything. A fourth cookie now does: the
+lock's own grant (ADR-0012), which is why it alone among this stack's cookies is `HttpOnly`,
+`Secure`, and `__Host-` prefixed. It carries an opaque id naming one browser's unlock rather than a
+preference, and none of the three display states above needed any of that. Not a passkey:
+`CONTEXT.md` gives that word to the credential the household enrolled, and this cookie carries no
+claim of its own (`migrations/0012_lock.sql`).
 
 **Tokens, defined once:**
 
@@ -1167,10 +1175,11 @@ setting. Without it the toggle only works in one direction.
 
 ### Consequences specific to this app
 
-**Charts must read their colours from the same custom properties.** Every chart in §8.1 — the trend
-line, the allocation donut, the assets-vs-liabilities bars — has to resolve fill and stroke from CSS
-variables rather than hardcoded hex, and re-resolve on theme change. This is the piece that gets
-forgotten, and the symptom is a light-themed donut sitting in a dark page.
+**Charts must read their colours from the same custom properties.** Every chart in §8.1, meaning
+the trend line, the allocation donut and the assets-vs-liabilities bars, has to resolve fill and
+stroke from CSS variables rather than hardcoded hex, and re-resolve on theme change. That
+requirement is the piece that gets forgotten, and the symptom is a light-themed donut sitting in a
+dark page.
 
 **Gain/loss colours need separate values per theme.** A green that reads well on white is muddy and
 low-contrast on near-black; the same is true of red. These are two palettes, not one palette with an
@@ -1179,7 +1188,7 @@ inverted background.
 **Never encode gain or loss in colour alone.** Red/green is the most common axis of colour-vision
 deficiency, and this app uses that pair for its single most important signal. Always pair it with
 the sign, and preferably a direction arrow, so the number is readable without perceiving hue at all.
-This is why a masked gain keeps its sign and its arrow and loses only its size (spec 0007): dropping
+This is why a masked gain keeps its sign and its arrow and loses only its size (spec 0007). Dropping
 them along with the digits would leave the hue as the only channel saying which way the figure
 points, which is precisely what this rule forbids.
 
@@ -1194,12 +1203,12 @@ The toggle will live in the header, persistent across every page; it has not lan
 ## 13. Design tokens
 
 Extracted from the Stitch project **Portfolio Net Worth Tracker**
-(`projects/6282864270794825736`) — the twelve screens it now holds: **Portfolio Dashboard**,
+(`projects/6282864270794825736`), the twelve screens it now holds: **Portfolio Dashboard**,
 **Account Details** and **Views Analysis**, each in desktop and mobile, each in light and dark.
 
 The brief the screens draw is an instrument panel rather than a terminal. Surfaces are a
 blue-leaning near-black (or a blue-leaning near-white), every one of them unsaturated; depth is a
-tonal step plus a hairline; and the only saturated colour on a page is carried by the data — the
+tonal step plus a hairline; and the only saturated colour on a page is carried by the data: the
 trend line, a gain, a loss, a donut slice. The interface is quiet so that the numbers are not.
 
 ### 13.1 What changed since the previous extraction
@@ -1208,10 +1217,11 @@ Recorded because this section previously described a different design, and every
 decision about the difference rather than a transcription of it.
 
 **Stitch now supplies both themes.** The earlier screens were dark-only, so §12's light palette was
-*derived* here — hue family preserved, luminance re-derived per theme. That derivation is now
-discarded: every screen exists in light and dark, and both palettes are transcribed from the mock.
+*derived* here, with the hue family preserved and luminance re-derived per theme. That derivation is
+now discarded. Every screen exists in light and dark, and both palettes are transcribed from the
+mock.
 
-**The palette moved family, wholesale.** The old system was a green terminal — `#00ff41` on a
+**The palette moved family, wholesale.** The old system was a green terminal: `#00ff41` on a
 green-tinted obsidian `#0c160a`. The new one is navy and slate with a blue accent: `#0b1326`
 canvas, `#0055ff` fill, `#b6c4ff` accent text in dark and `#0041c8` in light. No token survives by
 value; the token *names* all survive, which is the whole reason the stylesheet is written against
@@ -1219,14 +1229,14 @@ custom properties.
 
 **Sharp corners are gone.** §13.1 previously recorded that Stitch's `0.25 / 0.5 / 0.75rem` ramp was
 "noise from the theme generator" and that the written brief's 0px won. That was true of that brief
-and is false of this one: the new screens use the ramp everywhere — 12px on panels, 8px on rows and
-buttons, 999px on avatars and chips — and there is no 0px corner anywhere in the set. The ramp is
+and is false of this one. The new screens use the ramp everywhere: 12px on panels, 8px on rows and
+buttons, 999px on avatars and chips. There is no 0px corner anywhere in the set. The ramp is
 now load-bearing.
 
 **JetBrains Mono is retired.** The old system's load-bearing rule was a hard split between
 interface type (Inter) and data type (JetBrains Mono). The new screens set every figure in Inter;
 there is no monospace in any of the twelve. The *reason* for mono was column alignment, and that
-requirement does not go away — it moves to `font-variant-numeric: tabular-nums`, which Inter
+requirement does not go away. It moves to `font-variant-numeric: tabular-nums`, which Inter
 supports, and which fixes digit advance without a second family. The saving is real: the mono
 subset was 31KB of a 79KB font payload, and it is no longer downloaded.
 
@@ -1235,17 +1245,17 @@ primary action at its foot.
 
 **The mock's brand and its call to action are a brokerage's.** The screens are branded *WealthArch*
 and the rail's footer button reads *Invest Now*. This app has nothing to sell and nobody to sell
-it. What is taken is the *shape* — a mark, a name, a subtitle, and one filled button holding the
-page's primary action — and what fills the button is this app's only write action, **Upload
+it. What is taken is the *shape*: a mark, a name, a subtitle, and one filled button holding the
+page's primary action. What fills the button is this app's only write action, **Upload
 statement**.
 
 **The mock's nav is three items (Home / Views / Settings); §8.4's is six.** Unchanged from the
-previous extraction: §8.4 wins, because its ordering is a decision about how often each page is
+previous extraction. §8.4 wins, because its ordering is a decision about how often each page is
 opened and the routes already exist.
 
 **§8.1 ruled out a per-account drill-down; the mock supplies one.** The argument there was that a
-filtered Holdings table already is one. The mock's Account Details screen is more than that filter
-— it carries the account's own header, its own valuation series and its own holdings table — and
+filtered Holdings table already is one. The mock's Account Details screen is more than that filter,
+carrying the account's own header, its own valuation series and its own holdings table, and
 the query layer reaches it by adding one predicate to queries that already exist (§8.2). The
 exclusion is reversed. What is *not* reversed is the dedicated tax page, which nothing in the new
 screens asks for.
@@ -1263,7 +1273,7 @@ are argued in §13.3.
 | `--background` | `#f7f9fb` | `#0b1326` | The canvas |
 | `--surface-container-lowest` | `#ffffff` | `#060e20` | Deepest well; the light panel |
 | `--surface-container-low` | `#f2f4f6` | `#131b2e` | Row hover in light; the donut track |
-| `--surface-container` | `#eceef0` | `#1E293B` | Panel body — the default card |
+| `--surface-container` | `#eceef0` | `#1E293B` | Panel body, the default card |
 | `--surface-container-high` | `#e6e8ea` | `#222a3d` | Table headers, row hover in dark |
 | `--surface-container-highest` | `#e0e3e5` | `#2d3449` | Pressed |
 | `--surface-bright` | `#f7f9fb` | `#31394d` | The tinted half of a split panel |
@@ -1281,7 +1291,7 @@ are argued in §13.3.
 | `--warning-surface` | `#fef3c7` ‡ | `#33280a` ‡ | The ground under a warning |
 
 † Departure. Stitch's dark loss is `#EF4444`, which carries **3.89:1** on the panel surface
-`#1E293B` — under 4.5:1, and every loss figure in the app is small text sitting on exactly that
+`#1E293B`, under 4.5:1, and every loss figure in the app is small text sitting on exactly that
 panel. `#f87171` is the same hue at 5.29:1. `#EF4444` is kept where it is a *fill* rather than text
 (§13.3), because a graphical object needs 3:1, not 4.5:1.
 
@@ -1303,20 +1313,20 @@ Measured, on the surface each is actually used against:
 | `--outline-variant` on `--surface-container` | 1.5 | 1.6 |
 
 Two borders, deliberately, and the reasoning is unchanged from the previous system:
-`--outline-variant` is the structural hairline that frames a panel and divides rows — it is *felt*,
+`--outline-variant` is the structural hairline that frames a panel and divides rows. It is *felt*,
 not read, which is what its 1.5:1 says. `--outline` clears 3:1 and is what an input, a control
 boundary or a focus ring uses, where a border nobody can perceive is a defect rather than a style.
 
 **Gain and loss are still the only saturated colour in the interface**, and per §12 the pair is
 never load-bearing alone: every figure carries its sign and a direction arrow, so it reads without
-perceiving hue at all. Note that the two themes' greens are not one colour at two luminances —
+perceiving hue at all. The two themes' greens are not one colour at two luminances.
 `#10B981` on white is 2.4:1 and `#005c3e` on the dark canvas is 2.3:1. Each is unusable in the
 other theme. They are two palettes, exactly as §12 says.
 
 ### 13.3 The categorical sequence
 
 The Views screen colours donut slices and their legend dots from one ordered sequence, reused from
-position 1 in every panel — so the same rank means the same colour in all four breakdowns, and no
+position 1 in every panel, so the same rank means the same colour in all four breakdowns, and no
 breakdown gets a chart palette of its own.
 
 | # | Light | Dark |
@@ -1336,56 +1346,67 @@ under protanopia and deuteranopia against the panel the ring actually renders on
 check is re-runnable when the palette next moves: simulate with Machado–Oliveira–Fernandes 2009
 at severity 1.0, measure ΔE as Euclidean distance in OKLab ×100. The sequence's
 predecessor is the argument for the ceremony: its dark tail `#4edea3` sat one JND from rank 2's
-`#10b981`, so a breakdown with many groups read as one large green — and that `#10b981` *was*
+`#10b981`, so a breakdown with many groups read as one large green. And that `#10b981` *was*
 `--gain`, a series wearing the state pair's colour. Rank 3 keeps the green family and so stays a
-*cousin* of `--gain` — a resemblance now, not an identity, and one §12 already defuses: gain and
+*cousin* of `--gain`, a resemblance now and not an identity, and one §12 already defuses: gain and
 loss are never load-bearing alone, every signed figure carrying its sign and its arrow.
 
 A breakdown with more than five groups folds its tail into one "Other" wedge rather than
-extending the sequence — many flat colours in a donut is a legend nobody reads — and the tail
+extending the sequence, since many flat colours in a donut is a legend nobody reads. The tail
 wears the table's sixth entry: a **neutral**, deliberately grey and deliberately none of the
 five, because a merged remainder dressed in a real series colour is two different rows claiming
 to be one group. The grey also holds its own against its wedge neighbours under the same
 simulation (ΔE 8.7 light / 10.8 dark beside rank 5). Each folded row keeps its own value and
 percentage in the table; only the picture merges them, and the panel says so when it happens.
 
-These are fills, not text: 3:1 against the panel is the bar they have to clear, and the lightest
-slots do not — yellow (2.2:1) and magenta (2.7:1) on white, blue (2.6:1) on the dark panel. The
-slices are large enough to be identifiable anyway; the 12px legend dots are not, so **every
-legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
+These colours are fills, not text, so 3:1 against the panel is the bar they have to clear.
+The lightest slots do not clear it: yellow (2.2:1) and magenta (2.7:1) on white, blue (2.6:1) on the
+dark panel. The slices are large enough to be identifiable anyway; the 12px legend dots are not, so
+**every legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
 which carries every figure the wedges do not.
 
-Colour is also never the only way to tell a wedge from its row: **every arc carries a browser
-`<title>`** — the group's name with its exact share, the "Other" wedge its member list — so
+Colour is also never the only way to tell a wedge from its row. **Every arc carries a browser
+`<title>`**, the group's name with its exact share, and the "Other" wedge its member list, so
 hovering names the segment outright, and the hovered arc swells a step so the pointer can see
 which one is answering. The SVG stays `aria-hidden`; assistive tech has the table, and the hover
 channel is for the sighted pointer a colour-blind reader steers.
 
 ### 13.4 Typography
 
-One family now — **Inter**, self-hosted (`public/fonts/`, latin subset, variable weight, 47KB).
-Not the Google CDN the mocks use: this is an installable PWA (§11, ADR-0007) for a household's
-finances, and a per-visit request to a third party is both a privacy leak and a failure the moment
-the phone is off the VPN.
+One family now: **Inter**, self-hosted (`app/fonts/`, latin subset, variable weight, 47KB).
+Not the Google CDN the mocks use, because this is an installable PWA (§11, ADR-0007) for a
+household's finances, and a per-visit request to a third party is both a privacy leak and a failure
+the moment the phone is off the VPN.
+
+It lives under `app/`, not `public/`, so Vite hashes it into `/assets/`, the one mount
+`react-router-serve` marks `immutable`, and a phone keeps it for a year the way it keeps the bundles.
+That is the browser's HTTP cache holding a file with no figure in it, not the device storage ADR-0007
+refuses. `root.tsx` preloads the same import, so the fetch starts with the stylesheet's rather than
+after it, and `app.css` declares fallback faces, the Roboto and Arial a phone already has, each
+resized to Inter's measured metrics, so the swap moves nothing when Inter lands. Arial has a bold
+face too; Roboto does not, because Android 12 and later ship no static Roboto Bold and a face the
+device lacks drops that weight to the system family, so the browser emboldens the regular face
+instead. They carry Inter's unicode range, so a glyph Inter lacks still comes from the system
+family.
 
 | Token | Size / line | Weight | Tracking |
 |---|---|---|---|
 | `--type-display-lg` | 48px / 56px | 700 | −0.02em |
 | `--type-headline-lg` | 32px / 40px | 600 | −0.01em |
-| `--type-headline-sm` | 24px / 32px | 600 | — |
-| `--type-title-md` | 20px / 28px | 600 | — |
-| `--type-body-lg` | 16px / 24px | 400 | — |
-| `--type-body-sm` | 14px / 20px | 400 | — |
+| `--type-headline-sm` | 24px / 32px | 600 | not set |
+| `--type-title-md` | 20px / 28px | 600 | not set |
+| `--type-body-lg` | 16px / 24px | 400 | not set |
+| `--type-body-sm` | 14px / 20px | 400 | not set |
 | `--type-label-md` | 12px / 16px | 600 | 0.05em, uppercase |
 
-These names are roles, not shipped custom properties: `app.css` defines only `--font-ui` for type
+These names are roles, not shipped custom properties. `app.css` defines only `--font-ui` for type
 and applies the ramp as literal values per component.
 
-`--type-headline-sm` is the mock's `headline-lg-mobile`, renamed: it is a size in the ramp, not a
-device, and a card title on a wide screen wants it too.
+`--type-headline-sm` is the mock's `headline-lg-mobile`, renamed, because it is a size in the ramp,
+not a device, and a card title on a wide screen wants it too.
 
 **Every figure sets `font-variant-numeric: tabular-nums`.** This is the rule that replaced the mono
-family and it is not optional — a column of proportional digits does not align, and a figure that
+family and it is not optional. A column of proportional digits does not align, and a figure that
 changes width as it updates makes the whole row twitch.
 
 ### 13.5 Spacing, shape, elevation
@@ -1404,38 +1425,38 @@ changes width as it updates makes the whole row twitch.
 | `--rail` | 280px | Fixed sidebar, ≥1024px |
 | `--content-max` | 1280px | The canvas caps here and centres. Was 1152 until Holdings gained a ninth column |
 | `--control-h` | 40px | Buttons, inputs, range chips |
-| `--field-caption` | 24px | A caption line plus its gap — what an un-captioned member of a control row drops by to reach the control line |
+| `--field-caption` | 24px | A caption line plus its gap, what an un-captioned member of a control row drops by to reach the control line |
 | `--radius` | 4px | Chips |
 | `--radius-lg` | 8px | Buttons, rows, inputs |
 | `--radius-xl` | 12px | Panels |
 | `--radius-full` | 999px | Avatars, dots, the brand mark |
 
-**Shadow is `none` in dark and one hairline in light** — `0 1px 2px rgb(0 0 0 / 0.05)`, which is
+**Shadow is `none` in dark and one hairline in light**, `0 1px 2px rgb(0 0 0 / 0.05)`, which is
 the mock's only shadow and reads as a paper edge rather than a lift. Depth everywhere else is a
-tonal step plus a 1px border: canvas → panel → panel header.
+tonal step plus a 1px border: canvas, then panel, then panel header.
 
 Hover lifts a row's ground by one tonal step rather than raising it. `--control-h` is uniform so
 that controls in different columns line up across a dashboard, which is the actual reason it is a
 token rather than a per-component value.
 
 **Breakpoints:** 768px, where a panel's two halves stack and a table can begin to scroll; and
-1024px, where the rail appears. Below 1024px the rail becomes a fixed bottom bar — the shape every one of the
+1024px, where the rail appears. Below 1024px the rail becomes a fixed bottom bar, the shape every one of the
 mock's mobile screens uses, with no drawer or hamburger anywhere in the set.
 
 ### 13.6 The chart
 
 Both the Overview trend and the Account Details performance chart draw the same way.
 
-- **Line:** 3px, `--chart-line` — `#0041c8` in light and `#0055ff` in dark: the pale dark-theme
-  primary would vanish as a line, so each theme names the colour that draws well on its canvas
-  (`app.css` records the split).
+- **Line:** 3px, `--chart-line`, which is `#0041c8` in light and `#0055ff` in dark. The pale
+  dark-theme primary would vanish as a line, so each theme names the colour that draws well on its
+  canvas (`app.css` records the split).
 - **Area:** a vertical gradient below the line, from the line colour at 0.25 alpha to fully
   transparent at the baseline. This reverses the old brief's "no area fills" rule.
 - **Grid:** horizontal only, 1px, `--outline-variant`, `stroke-dasharray: 4 4`.
 - **Axis labels:** `--type-label-md` in `--on-surface-variant`.
 - **The dashed prefix stays.** §7's hand-typed pre-day-zero series is still drawn dashed against
   the computed line's solid, because that distinction is about provenance and no repaint changes it.
-- **Colours resolve from custom properties**, per §12 — no hex in any chart component.
+- **Colours resolve from custom properties**, per §12, with no hex in any chart component.
 
 ### 13.7 What the mock supplied that is not implemented
 
@@ -1443,15 +1464,15 @@ The screens are populated with fabricated data, and some of it describes a diffe
 
 - **"WealthArch", "Invest Now", and a "Crypto" account.** A brokerage's brand, a brokerage's CTA,
   and an asset class §1 puts out of scope.
-- **Every figure on every screen** — `$245,892.50`, `+6.2% YTD`, `$1.2M`, the eleven-point
+- **Every figure on every screen**: `$245,892.50`, `+6.2% YTD`, `$1.2M`, the eleven-point
   polyline, the four accounts. All of it is loader data now. The empty case in particular still
-  renders **no figure at all** (§8.4): a zero and an empty instance must not look alike.
+  renders **no figure at all** (§8.4), because a zero and an empty instance must not look alike.
 - **A notification bell and an avatar menu.** Single-tenant, self-hosted, and §10 has no user
   accounts to hang an avatar on. The rail carries the brand and the nav; on a phone a 64px top bar
   carries the wordmark, the masking toggle and the Upload action.
 - **A "Target Risk 8.0 / 10" gauge and a "Time-Weighted Return" annotation.** Both are numbers
-  nothing in the schema can produce (§3 — positions only, no cash flows, so a time-weighted return
-  is not computable). Rendering either would be inventing a figure on a finance page.
+  nothing in the schema can produce (§3 records positions only and no cash flows, so a time-weighted
+  return is not computable). Rendering either would be inventing a figure on a finance page.
 - **Search over accounts.** A household has a dozen accounts; a filter over twelve rows is a
   control that costs more than it saves.
 - **Material Symbols icons via CDN.** Inline SVG instead, for the same offline and privacy reasons
@@ -1460,7 +1481,7 @@ The screens are populated with fabricated data, and some of it describes a diffe
 ### 13.8 Not in this change
 
 The **cookie-backed three-state toggle** of §12. The token structure here is exactly what §12
-prescribes —
+prescribes:
 
 ```css
 :root                             { /* light */ }
@@ -1470,7 +1491,7 @@ prescribes —
 :root[data-theme="dark"]          { /* dark  */ }
 ```
 
-— so both themes are live today via the OS setting, and the toggle slice adds the cookie, the
+Both themes are therefore live today via the OS setting, and the toggle slice adds the cookie, the
 control and the client listener without touching a single token.
 ---
 
@@ -1479,11 +1500,11 @@ control and the client listener without touching a single token.
 Recorded so they are revisited deliberately rather than discovered under deadline.
 
 1. **No realized gains, dividend history, or tax lots.** Consequence of positions-only (§3). Adding
-   them means a transaction ledger — a substantially different ingest problem.
+   them means a transaction ledger, a substantially different ingest problem.
 2. **The net worth chart cannot separate market movement from contributions.** Consequence of no
    cash-flow tracking (§3). Labelling mitigates; it does not solve. It is sharpest on 1D, where a
    statement uploaded during the session moves the change figure beside the headline by the whole
-   change in holdings while the line beside it moves only by the change in price — the line holds
+   change in holdings while the line beside it moves only by the change in price. The line holds
    today's positions constant across the session, and the change reader compares today's positions
    against the previous session's. Every other range agrees with its own line because the line's
    first point *is* what the change reads; a session is simply short enough for the difference to be
@@ -1497,124 +1518,124 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
 6. **USD only, with no currency column.** A guard refuses non-USD instruments at resolution (§6.1).
    True multi-currency later means adding the column and touching every money value.
 7. **History accuracy scales with upload density.** With one statement per quarter, the chart assumes
-   holdings were frozen between them — quarter-end values are exact and the shape between them is
+   holdings were frozen between them. Quarter-end values are exact and the shape between them is
    driven by real price movement. Uploading more statements sharpens past stretches retroactively,
    with nothing to migrate.
 8. **The "set balance" form cannot record an overdrawn bank account.** Consequence of deriving the
-   sign from `account.kind` rather than accepting a typed one (§5.2): the alternative accepts `14500`
+   sign from `account.kind` rather than accepting a typed one (§5.2). The alternative accepts `14500`
    for a debt, which does not fail but moves net worth by twice the loan. An overdraft is recordable
-   as a `liability` account or through an upload — in fact, not only in principle: the mapping
+   as a `liability` account or through an upload, in fact and not only in principle: the mapping
    step's owed-as-positive box keeps the file's own sign when unticked, so a bank export carrying a
    negative balance records one. Lifting the limitation for the form itself means a per-kind
-   decision about whether a negative is meaningful, not a change to the storage rule — the schema
+   decision about whether a negative is meaningful, not a change to the storage rule. The schema
    already holds a negative quantity against any account.
 9. **A holding with no dividend rate counts as paying nothing.** The projected annual dividend
    (§8.1, Income) is `quantity × annual_dividend_per_share`, and a null rate contributes `$0` rather
-   than an unknown. Three unlike things produce that null — a provider answering "no dividend
+   than an unknown. Three unlike things produce that null: a provider answering "no dividend
    fields" for a growth ETF, which is genuinely zero; a workplace-plan trust the refresh never asks
    about, because it has no symbol; and the seeded `USD` row, which no provider will ever quote. The
    projection omits unquoted income and borrowing costs. Missing positive payments lower it;
    missing loan interest can overstate net income. This is the one place the codebase departs from §8.2's "sum what is known and label the
-   coverage": applied literally here, a portfolio where most holdings correctly pay nothing would
+   coverage". Applied literally here, a portfolio where most holdings correctly pay nothing would
    report "based on 4 of 23 holdings", and a caption that cries wolf on two-thirds of a table is one
    nobody reads. The UI labels it a **lower bound**, but that label is not a mathematical guarantee when
    borrowing costs are missing. Lifting this means deciding per row from whether the
-   instrument was ever quoted — a refreshed `quote` row means the provider answered, and `fixed` or
-   `manual` means it was never asked — which is a change to one derivation, not to the schema.
+   instrument was ever quoted, where a refreshed `quote` row means the provider answered and `fixed`
+   or `manual` means it was never asked. That would change one derivation, not the schema.
 10. **There is no sign-out control, and the gate's sign-out URL is not one.** It clears the gate's
     own cookie and nothing else, so with sign-in going straight to Google the next visit re-admits
-    silently — which looks, to the person who used it, exactly like it did not work. The levers that
+    silently. To the person who used it, that looks exactly like it did not work. The levers that
     do revoke are the operator's: taking an address off the allowlist ends that one person's
     sessions everywhere, and rotating the gate's cookie secret ends everyone's at once. A real
     control is tracked as [issue #89](https://github.com/chethan123/portfolio/issues/89) rather than
     rejected; it inherits this as its motivation, and `docs/runbook.md` carries the URL with its
     limits stated in the meantime.
 11. **Signing in depends on Google being reachable.** An outage there defers *new* sign-ins until it
-    passes; sessions already established ride through it, because the gate validates its own cookie
-    without asking Google again. There is deliberately no second login system to fall back to — one
-    would be a password, which is the thing this replaced — so the break-glass path during an outage
+    passes; sessions already established survive it, because the gate validates its own cookie
+    without asking Google again. There is deliberately no second login system to fall back to, since
+    one would be a password, which is the thing this replaced. The break-glass path during an outage
     is the operator's shell on the box, not another way in through the front door.
 12. **An owner whose accounts have all been closed cannot be filtered by.** Consequence of the owner
     filter's roster (§8.1) being owners of at least one *open* account, which is itself a
-    consequence of `holding_valued` excluding closed accounts: selecting such an owner would empty
+    consequence of `holding_valued` excluding closed accounts. Selecting such an owner would empty
     every screen with nothing on it saying why. Their history is still recorded and still counts
-    toward the household's own figures — `firstRecordedDate` reaches through `position_set` and sees
-    it — it simply is not reachable through the filter. Fixing it means the filter answering "held
-    nothing, ever" and "holds nothing now" differently on every screen, which is a second empty
+    toward the household's own figures, since `firstRecordedDate` reaches through `position_set` and
+    sees it. It simply is not reachable through the filter. Fixing it means the filter answering
+    "held nothing, ever" and "holds nothing now" differently on every screen, which is a second empty
     state for a case that arises when a household closes out one owner entirely.
 13. **1D always shows the latest session; an older one cannot be chosen.** The observations are
-    kept forever, so the data for last Tuesday's session exists — but drawing it is a separate
+    kept forever, so the data for last Tuesday's session exists. But drawing it is a separate
     decision with its own cost, and one deliberately deferred
     ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)): an instant-parameterised
     sibling of `holding_valued_at` (a third object bound by ADR-0001's row-type contract), a second
     time vocabulary in `chart-range.ts`, and a time axis that can name a day as well as an hour. The
-    data existing is not a promise that it will be drawn. Two smaller limits ride along with it. The
-    archive holds only what was observed at the household's own cadence, which is not market data —
+    data existing is not a promise that it will be drawn. Two smaller limits come with it. The
+    archive holds only what was observed at the household's own cadence, which is not market data:
     no OHLC bars, no volume, permanent unbackfillable gaps for every stretch the server was down,
-    and no corporate-action adjustment — so it must not be mistaken for a backtest-grade series. And
-    the 1D line is drawn once, when the page loads: nothing updates in place, because a live tick
+    and no corporate-action adjustment. It must not be mistaken for a backtest-grade series. And
+    the 1D line is drawn once, when the page loads. Nothing updates in place, because a live tick
     pipeline was rejected in §6 for a reason that has not changed.
 14. **A backfilled instrument gets the current ticker's history.** A symbol's history at the feed
     belongs to whatever holds the ticker *now*, so an instrument that changed symbols is filled with
     the wrong company's closes, and the only guard is a person spot-checking a figure against a
     statement (§6.2, [ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)).
-    Detecting it would need a source of symbol history this instance does not have. Riding along
-    with it: while a gap is still open, the chart draws a partially-priced past date on the ordinary
-    solid line and says nothing — the half of
-    [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer,
-    filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
+    Detecting it would need a source of symbol history this instance does not have. One more limit
+    comes with it: while a gap is still open, the chart draws a partially-priced past date on the
+    ordinary solid line and says nothing. That silence is the half of
+    [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer. It
+    is filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
 15. **A browser without a live grant cannot unlock without running the passkey ceremony, once the
-    household holds one.** Ordinary requests never touch the ceremony at all — the root middleware
+    household holds one.** Ordinary requests never touch the ceremony at all. The root middleware
     checks only whether this browser already holds a live grant, so one that does keeps reading
     every protected route regardless of what its browser can run
     ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md)). The limitation is about
     getting back in, not about staying in: many in-app WebView browsers offer no *completable*
     ceremony (`app/lib/unlock-ceremony.ts`'s own hedge), and nothing here decides this with a
-    client-side capability check — it falls out of the server refusing until an assertion arrives,
+    client-side capability check. It falls out of the server refusing until an assertion arrives,
     which only a browser with no live grant is ever asked for. The unlock screen names two
-    self-service recoveries first — another browser on this device, or a device that can reach a
-    passkey the household has enrolled — and only after those does it point at the operator:
-    recovery here is the operator deleting every enrolled passkey, which reopens the instance the
+    self-service recoveries first: another browser on this device, or a device that can reach a
+    passkey the household has enrolled. Only after those does it point at the operator, where
+    recovery is the operator deleting every enrolled passkey, which reopens the instance the
     same way removing the last one always does, never a second way in through the front door.
 16. **The check is not necessarily a biometric, carries no freshness, and is only as strong as
     whatever unlocks its provider.** WebAuthn verifies the user by whatever means the authenticator
     accepts, and a device passcode satisfies it exactly as a biometric one does. The assertion also
     carries no timestamp a server could compare against, so a provider whose vault is already
     unlocked may return a verified assertion without prompting anyone. A passkey the household
-    enrols may be *eligible* to sync too — Settings marks that capability, never proof a copy has
-    actually been made anywhere — which is the same limit restated:
+    enrols may be *eligible* to sync too, and Settings marks that capability, never proof a copy has
+    actually been made anywhere. That restates the same limit:
     **the lock is only as strong as whatever unlocks the passkey provider on that device**
     ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) states all three as
     properties of the web platform, not of this implementation).
 17. **A compromised worker can poison a price, and nothing downstream can check it against a second
-    source.** What crosses the socket (§6.2) is checked for shape only — a ceiling on the price
+    source.** What crosses the socket (§6.2) is checked for shape only: a ceiling on the price
     itself, a window on how recent a quote's date may be, a floor on how far back a backfilled close
-    may reach — never for truth, so a hostile symbol still prices the wrong instrument and a hostile
-    answer can rewrite the stocks-versus-funds split a screen reads by. Bounding the price does not
-    bound `quantity × price`; a large enough holding still overflows the column the ceiling was meant
-    to protect, caught instead by a write-time guard on the quantity side. Closing the unverifiable
-    half means a second provider to check the first against, the redundancy §6.1 declined to build
-    for one household's worth of load.
+    may reach. None of it is checked for truth, so a hostile symbol still prices the wrong instrument
+    and a hostile answer can rewrite the stocks-versus-funds split a screen reads by. Bounding the
+    price does not bound `quantity × price`; a large enough holding still overflows the column the
+    ceiling was meant to protect, caught instead by a write-time guard on the quantity side. Closing
+    the unverifiable half means a second provider to check the first against, the redundancy §6.1
+    declined to build for one household's worth of load.
 18. **The shared socket volume is only half fenced.** `app` mounts `price-worker-sock` read-only, so
-    nothing it does — compromised or not — can unlink the socket file, squat its path with a
+    nothing it does, compromised or not, can unlink the socket file, squat its path with a
     directory, or exhaust the tmpfs's inodes (§10.1). `worker` still mounts it read-write, because it
     is the side that has to create the socket in the first place, so a compromised worker can still
     deny the refresh to itself and to its own next restart by doing exactly that. The recovery is
-    operational, not architectural — recreate the volume (`docs/runbook.md`) — because closing the
+    operational, not architectural. Recreate the volume (`docs/runbook.md`), because closing the
     other half would mean the worker never writing to its own socket path, which is not a smaller
     worker, just a different bug in the same place.
 19. **The app is still the superuser.** This slice narrowed what a compromised `app` can reach on the
-    network to nothing, but it changed no database grant: the role the app connects as can still do
+    network to nothing, but it changed no database grant. The role the app connects as can still do
     anything a superuser can, on tables this design never asked it to touch. Moving it to a role
     scoped to what the app actually needs is real work, opened by this slice and not done in it.
 20. **A legitimate symbol can be too long for the worker to accept.** The pattern the worker checks
     binds at fifteen characters; the app's own rule on a stored symbol tolerates up to forty. A
-    symbol that uses the difference never refreshes — shown stale, with a log line naming it — and
-    the fix is narrowing where the longer bound is still needed, not widening the worker's pattern
+    symbol that uses the difference never refreshes and is shown stale, with a log line naming it.
+    The fix is narrowing where the longer bound is still needed, not widening the worker's pattern
     back out toward the internet.
 21. **The app's last route out is an application-layer one, not closed.** Neither network `app` sits
     on carries a default route, so it reaches nothing off them at IP level. It can still reach
-    `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which has egress of its own — so a
+    `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which has egress of its own, so a
     compromised app has a relay to Google, hop by hop, that no network rule denies it. Closing it
     means the gate stops being reachable through the front door, which is what the front door is
     for. Named rather than removed.

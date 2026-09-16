@@ -18,7 +18,7 @@ Go to **Settings → People**. On a fresh instance it says **Nobody is recorded 
 Under **Add a person**, type a **Name** and select **Add person**. Repeat for everyone whose money
 you want counted here.
 
-A name is all there is. Nobody gets a sign-in, an email address or permissions of their own — a
+A name is all there is. Nobody gets a sign-in, an email address or permissions of their own. A
 person here is a label for whose money it is, and it has nothing to do with the Google address
 anyone signed in with. Two people may share a name if they really do.
 
@@ -45,12 +45,12 @@ Go to **Settings → Accounts** and fill in **Add an account**.
 
 ![The account table with several accounts recorded](images/settings-accounts.png)
 
-**Name** — what you call it. Required.
+**Name.** What you call it. Required.
 
-**Institution** — Fidelity, Schwab, your credit union. Optional; leave it blank and the table shows
+**Institution.** Fidelity, Schwab, your credit union. Optional; leave it blank and the table shows
 a dash. It is worth filling in, because column mappings for uploads are remembered per institution.
 
-**Kind** — one of five:
+**Kind.** One of five:
 
 - Brokerage
 - Workplace plan (401k, 403b)
@@ -58,9 +58,9 @@ a dash. It is worth filling in, because column mappings for uploads are remember
 - Bank
 - Loan or other liability
 
-**Owner** — one of the people you just added.
+**Owner.** One of the people you just added.
 
-**Tax treatment** — one of three:
+**Tax treatment.** One of three:
 
 - Taxable — tax due on gains
 - Tax-deferred — tax due on withdrawal (Traditional)
@@ -71,7 +71,7 @@ Pick carefully. Changing it later changes every figure computed from that accoun
 **A plan holding both Traditional and Roth money is two accounts**, at the same institution, one of
 each treatment. There is no way to split one account between two treatments.
 
-**Account number** — optional. It is used for one thing: when you upload a statement, the app
+**Account number.** Optional. It is used for one thing: when you upload a statement, the app
 compares the number the file carries against this one and refuses to record the file if they name
 different accounts. That check happens at the last step of an upload, so it can only ever stop a
 statement landing in the wrong account, never move it. Leave it blank and the first uploaded
@@ -82,10 +82,10 @@ owner, tax treatment and status.
 
 ## Correcting or retiring an account
 
-Select an account's name in the table to open it. Change any field and select **Save changes** —
-one of them can come back refused.
+Select an account's name in the table to open it. Change any field and select **Save changes**. One
+of them can come back refused.
 
-**Kind is the one field that can be refused**, because it is not a caption on the account — it is
+**Kind is the one field that can be refused**, because it is not a caption on the account. It is
 how every screen reads what that account holds, on every date. Changing one to *Bank* or *Loan or
 other liability* is refused while its latest statement still lists positions, since those accounts
 hold a single balance and the positions would be recorded as sold; and it is refused while the
@@ -110,14 +110,14 @@ There is no reopen control in this version. If you close the wrong account, add 
 record future statements against the new account; the old account keeps its earlier history.
 
 The reasoning behind closing rather than deleting, and behind the three-way tax treatment, is in
-[Settings — people and accounts](../../README.md#settings--people-and-accounts).
+[Settings: people and accounts](../../README.md#settings-people-and-accounts).
 
 ## On a phone
 
 ![Settings → People, empty, on a phone](images/first-run-people-mobile.png)
 
-The tab strip wraps onto a second line instead of scrolling, so every tab — Overview, People,
-Accounts, Tax, Prices, Display, Passkeys — stays reachable without a sideways swipe.
+The tab strip wraps onto a second line instead of scrolling, so every tab stays reachable without a
+sideways swipe: Overview, People, Accounts, Tax, Prices, Display, Passkeys.
 
 ![Settings → Accounts with nobody recorded yet, on a phone](images/first-run-accounts-mobile.png)
 
@@ -126,4 +126,4 @@ same link back to People.
 
 ---
 
-**Next:** [Recording your first statement](first-statement.md) — the four-step upload, end to end.
+**Next:** [Recording your first statement](first-statement.md), the four-step upload, end to end.

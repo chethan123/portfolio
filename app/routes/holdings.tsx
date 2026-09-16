@@ -1,11 +1,12 @@
-import { Form, Link, redirect } from "react-router";
+import { Form, Link, redirect, type RouterContextProvider } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import {
   Amount,
   Delta,
-  deltaDirection,
-  type DeltaDirection,
+  OmittedAmount,
+  OmittedDelta,
+  type AmountShape,
 } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -15,7 +16,7 @@ import {
   holdsNothing,
 } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { isNegative, joinWords } from "~/lib/format";
+import { joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
 import {
   DEFAULT_DIRECTION,
@@ -24,8 +25,6 @@ import {
   GROUPINGS,
   type DimensionId,
   type HoldingsQuery,
-  type HoldingsGroup,
-  type HoldingsTotal,
   type SortDirection,
   type SortKey,
   applyFilters,
@@ -33,9 +32,11 @@ import {
   formatQuantity,
   groupHoldings,
   holdingNote,
-  holdingYield,
   parseQuery,
   parseRowKey,
+  projectGroup,
+  projectHolding,
+  projectTotal,
   rowKey,
   sortHoldings,
   summarise,
@@ -52,7 +53,8 @@ import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { useMasked } from "~/lib/masking";
 import { maskingForRequest } from "~/lib/masking.server";
-import { currentHoldings, type ValuedHolding } from "~/lib/valuation.server";
+import type { DeltaDirection } from "~/lib/money";
+import { currentHoldings } from "~/lib/valuation.server";
 
 import { PriceFreshness, type FreshnessView } from "../components/price-freshness.tsx";
 import { asOfView } from "../lib/prices.server.ts";
@@ -63,85 +65,6 @@ import type { Route } from "./+types/holdings";
 /** Every position across every account, grouped/filterable (DESIGN.md §8.1); view is the query string, `?edit=` opens a row. */
 export function meta() {
   return [{ title: "Holdings · Portfolio" }];
-}
-
-type HoldingProjection = Omit<
-  ValuedHolding,
-  | "quantity"
-  | "price"
-  | "value"
-  | "costBasisPerShare"
-  | "costBasis"
-  | "unrealized"
-  | "annualDividend"
-> & {
-  quantity: string | undefined;
-  price: string | null | undefined;
-  value: string | null | undefined;
-  costBasisPerShare: string | null | undefined;
-  costBasis: string | null | undefined;
-  unrealized: string | null | undefined;
-  annualDividend: string | null | undefined;
-  yieldOnValue: string | null;
-  unrealizedDirection: DeltaDirection | null;
-};
-
-type TotalProjection = Omit<
-  HoldingsTotal,
-  "value" | "costBasis" | "unrealized" | "annualDividend"
-> & {
-  value: string | null | undefined;
-  costBasis: string | null | undefined;
-  unrealized: string | null | undefined;
-  annualDividend: string | undefined;
-  unrealizedDirection: DeltaDirection | null;
-  valueIsNegative: boolean;
-};
-
-type GroupProjection = Omit<HoldingsGroup, "holdings" | "total"> & {
-  holdings: HoldingProjection[];
-  total: TotalProjection;
-};
-
-function privateValue(value: string | null, available: boolean): string | null | undefined {
-  if (value === null) return null;
-  return available ? value : undefined;
-}
-
-function projectHolding(holding: ValuedHolding, available: boolean): HoldingProjection {
-  return {
-    ...holding,
-    quantity: available ? holding.quantity : undefined,
-    price: privateValue(holding.price, available),
-    value: privateValue(holding.value, available),
-    costBasisPerShare: privateValue(holding.costBasisPerShare, available),
-    costBasis: privateValue(holding.costBasis, available),
-    unrealized: privateValue(holding.unrealized, available),
-    annualDividend: privateValue(holding.annualDividend, available),
-    yieldOnValue: holdingYield(holding),
-    unrealizedDirection:
-      holding.unrealized === null ? null : deltaDirection(holding.unrealized),
-  };
-}
-
-function projectTotal(total: HoldingsTotal, available: boolean): TotalProjection {
-  return {
-    ...total,
-    value: privateValue(total.value, available),
-    costBasis: privateValue(total.costBasis, available),
-    unrealized: privateValue(total.unrealized, available),
-    annualDividend: available ? total.annualDividend : undefined,
-    unrealizedDirection: total.unrealized === null ? null : deltaDirection(total.unrealized),
-    valueIsNegative: total.value !== null && isNegative(total.value),
-  };
-}
-
-function projectGroup(group: HoldingsGroup, available: boolean): GroupProjection {
-  return {
-    ...group,
-    holdings: group.holdings.map((holding) => projectHolding(holding, available)),
-    total: projectTotal(group.total, available),
-  };
 }
 
 export async function loader({ request, context }: Route.LoaderArgs) {
@@ -174,7 +97,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const [household, freshness, amountsAvailable] = await Promise.all([
     currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
-    maskingForRequest(request, context).then(({ masked }) => !masked),
+    maskingForRequest(request, context as RouterContextProvider).then(({ masked }) => !masked),
   ]);
 
   // Narrowed in SQL via the same predicate every screen reads through — not by filtering `household` here, a second implementation free to disagree.
@@ -253,7 +176,8 @@ export async function action({ request, context }: Route.ActionArgs) {
     throw new Response("A correction has to name the row it corrects.", { status: 400 });
   }
 
-  if ((await maskingForRequest(request, context)).masked) {
+  if ((await maskingForRequest(request, context as RouterContextProvider)).masked) {
+    // Privacy guard for a stale tab or no-JavaScript form whose cookie changed, not authorization.
     return {
       errors: { form: "Show amounts before correcting a position." },
       values: undefined,
@@ -309,6 +233,26 @@ const COLUMNS: ReadonlyArray<Column> = [
 ];
 
 const FIGURES = 4;
+
+function PrivateAmount({
+  value,
+  shape = "money",
+}: {
+  value: string | null | undefined;
+  shape?: AmountShape;
+}) {
+  return value === undefined ? <OmittedAmount shape={shape} /> : <Amount value={value} shape={shape} />;
+}
+
+function PrivateDelta({
+  amount,
+  direction,
+}: {
+  amount: string | undefined;
+  direction: DeltaDirection;
+}) {
+  return amount === undefined ? <OmittedDelta direction={direction} /> : <Delta amount={amount} />;
+}
 
 /** Owner/account grouping hides its own column — repeating the heading on every row wastes width. */
 function columnsFor(group: DimensionId | null): ReadonlyArray<Column> {
@@ -717,13 +661,13 @@ function Figures({ total }: { total: Total }) {
     <>
       <td className="is-numeric" role="cell" data-label="Value">
         <div>
-          <Amount value={total.value} />
+          <PrivateAmount value={total.value} />
           {note(total.valueCoverage)}
         </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Cost basis">
         <div>
-          <Amount value={total.costBasis} />
+          <PrivateAmount value={total.costBasis} />
           {note(total.basisCoverage)}
         </div>
       </td>
@@ -732,14 +676,14 @@ function Figures({ total }: { total: Total }) {
           {total.unrealized === null ? (
             "—"
           ) : (
-            <Delta amount={total.unrealized} direction={total.unrealizedDirection ?? undefined} />
+            <PrivateDelta amount={total.unrealized} direction={total.unrealizedDirection ?? "flat"} />
           )}
           {note(total.unrealizedCoverage)}
         </div>
       </td>
       {/* No caption: rate coalesces to zero, complete by construction. No weighted yield either — that's Income's figure to show. */}
       <td className="is-numeric" role="cell" data-label="Annual dividend">
-        <Amount value={total.annualDividend} />
+        <PrivateAmount value={total.annualDividend} />
       </td>
     </>
   );
@@ -893,14 +837,14 @@ function Row({
               autoFocus
             />
           ) : (
-            <Amount value={holding.quantity} shape="quantity" />
+            <PrivateAmount value={holding.quantity} shape="quantity" />
           )}
         </td>
         <td className="is-numeric" role="cell" data-label="Price">
-          <Amount value={holding.price} />
+          <PrivateAmount value={holding.price} />
         </td>
         <td className="is-numeric" role="cell" data-label="Value">
-          <Amount value={holding.value} />
+          <PrivateAmount value={holding.value} />
         </td>
         <td className="is-numeric" role="cell" data-label="Cost basis">
           {canEdit ? (
@@ -922,23 +866,23 @@ function Row({
               autoComplete="off"
             />
           ) : (
-            <Amount value={holding.costBasis} />
+            <PrivateAmount value={holding.costBasis} />
           )}
         </td>
         <td className="is-numeric" role="cell" data-label="Unrealized">
           {holding.unrealized === null ? (
             "—"
           ) : (
-            <Delta
+            <PrivateDelta
               amount={holding.unrealized}
-              direction={holding.unrealizedDirection ?? undefined}
+              direction={holding.unrealizedDirection ?? "flat"}
             />
           )}
         </td>
         {/* $0, not a dash: `quote` can't tell "pays nothing" from "nobody asked" (§14 limitation 9). Plain `Amount`, not `Delta` — a payout isn't a movement. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
-            <Amount value={holding.annualDividend} />
+            <PrivateAmount value={holding.annualDividend} />
             {holding.yieldOnValue === null ? null : (
               <span className="cell-sub u-data">{formatShare(holding.yieldOnValue)}</span>
             )}
@@ -965,9 +909,16 @@ function Row({
             <div className="row-editor">
               <div>
                 {!canEdit ? (
-                  <p className="form-note">
-                    Use <b>Show amounts</b> in the navigation to reveal and edit this position.
-                  </p>
+                  <>
+                    {errors?.form === undefined ? null : (
+                      <p id="revise-error-form" className="field-error" role="alert">
+                        {errors.form}
+                      </p>
+                    )}
+                    <p className="form-note">
+                      Use <b>Show amounts</b> in the navigation to reveal and edit this position.
+                    </p>
+                  </>
                 ) : messages.length > 0 ? (
                   messages.map(([field, message]) => (
                     <p
@@ -1025,7 +976,7 @@ function Row({
             <p className="form-note" role="status">
               Recorded. {editor.written.accountName} now reads{" "}
               <b className="u-data">
-                <Amount value={editor.written.quantity} shape="quantity" />
+                <PrivateAmount value={editor.written.quantity} shape="quantity" />
               </b>{" "}
               of{" "}
               {editor.written.instrumentName}.

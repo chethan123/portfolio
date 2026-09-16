@@ -8,16 +8,16 @@ Every breakdown is a ring beside a table; the last panel, unrealized gains, is a
 own.
 
 If a line at the top says "Based on 17 of 18 holdings", that is every figure on the page telling
-you what it was computed from: a holding nobody can price contributes nothing here rather than
+you what it was computed from. A holding nobody can price contributes nothing here rather than
 counting as zero. See [prices.md](prices.md).
 
 ## The breakdowns
 
-- **Net worth by owner** — who owns what.
-- **Value by account type** — Brokerage, Workplace plan, IRA, Bank, Liability.
-- **Value by asset class** — Equity, Bonds, Cash, Other.
-- **Value by classification** — your own labels, exactly as instruments were filed under them
-  when first uploaded. The finer cut the asset-class rollup coarsens.
+- **Net worth by owner**: who owns what.
+- **Value by account type**: Brokerage, Workplace plan, IRA, Bank, Liability.
+- **Value by asset class**: Equity, Bonds, Cash, Other.
+- **Value by classification**: your own labels, exactly as instruments were filed under them when
+  first uploaded. That breakdown is the finer cut the asset-class rollup coarsens.
 
 Each table has three columns: the name, its **Value**, and its **% of total**. The ring beside it
 is a picture of the same rows, and the figure in the hole of it is total net worth.
@@ -34,19 +34,19 @@ left hollow, and the panel says so under the table:
 > and its percentage is of gross assets rather than of the total in the centre.
 
 That second half matters when you check the arithmetic. **A negative row's percentage is a share
-of gross assets** — everything positive added together — not of the total in the middle of the
-ring. So the positive rows come to 100% and the loan's −2.1% sits outside that. The reasoning is
-in [the project tour](../../README.md#analysis--where-the-money-actually-sits).
+of gross assets**, not of the total in the middle of the ring. Gross assets are everything positive
+added together. So the positive rows come to 100% and the loan's −2.1% sits outside that. The
+reasoning is in [the project tour](../../README.md#analysis-where-the-money-actually-sits).
 
 ### More than five rows
 
-Everything past the fifth row shares one grey wedge — grey on purpose, so the merged remainder
-never looks like one of the five coloured groups. Each row keeps its own value and its own
-percentage in the table; only the picture merges them. The panel says so when two or more rows
-share the wedge; a lone sixth row simply wears the grey as its own, with nothing to explain.
+Everything past the fifth row shares one grey wedge. The wedge is grey on purpose, so the merged
+remainder never looks like one of the five coloured groups. Each row keeps its own value and its own
+percentage in the table; only the picture merges them. The panel says so when two or more rows share
+the wedge; a lone sixth row is grey on its own, with nothing to explain.
 
-You never have to match a wedge to its row by colour: **hover any wedge and it names itself** —
-the group and its exact share, or the grey wedge's list of members.
+You never have to match a wedge to its row by colour. **Hover any wedge** and it names the group
+and its exact share, or lists the members of the grey wedge.
 
 ### When nothing is owned outright
 
@@ -57,7 +57,7 @@ the percentages read as dashes, and the amounts are the answer.
 
 Rows group holdings as individual stocks, funds/ETFs, or other assets. Only groups with holdings
 appear. An unknown or missing provider quote type also lands in **Cash, loans and everything else**,
-even for a stock. Unrealized gain sums each computable position’s value minus cost basis.
+even for a stock. Unrealized gain sums each computable position's value minus cost basis.
 
 A dash means the gain cannot be computed; zero means no gain. Coverage counts say how many
 holdings contribute. Potential tax is dashed when there is no positive taxable gain.
@@ -65,9 +65,10 @@ holdings contribute. Potential tax is dashed when there is no positive taxable g
 ### Only a taxable account can owe the tax
 
 A gain inside an IRA or a 401k appears under **Unrealized** and contributes nothing to **Potential
-tax**. The panel says so under the table. That is not a rounding decision — a Roth withdrawal is
-not taxed at all, and a traditional one is taxed as ordinary income on the way out, so neither
-belongs at a capital gains rate.
+tax**. The panel says so under the table. Excluding them from **Potential tax** is not a rounding
+decision. A Roth
+withdrawal is not taxed at all, and a traditional one is taxed as ordinary income on the way out, so
+neither belongs at a capital gains rate.
 
 The rows stay in the table either way, because dropping them would hide the largest distinction
 on the balance sheet.
@@ -77,9 +78,9 @@ on the balance sheet.
 The panel header reads "Taxed at 23.8% · change rate". The link goes to Settings → Tax, where the
 household's own rate is set; see [settings.md](settings.md).
 
-23.8% is only the starting value — the 20% long-term capital gains rate plus the 3.8% net
-investment income tax. A household in a lower bracket, or in a state that taxes gains of its own,
-has a different number.
+23.8% is only the starting value, the 20% long-term capital gains rate plus the 3.8% net investment
+income tax. A household in a lower bracket, or in a state that taxes gains of its own, has a
+different number.
 
 Nothing anywhere else on any screen uses this rate, and no figure is filed with it.
 
@@ -101,24 +102,25 @@ Coverage is counted separately here, because a gain needs **both** a price and a
 ## Reading it as one owner
 
 The owner filter narrows every panel at once, and its control at the top of this screen sets
-the same selection Overview, Holdings and Income carry — see
+the same selection Overview, Holdings and Income carry. See
 [reading a screen as one owner](owner-filter.md). The **Net worth by owner** panel then shows the
 chosen owners alone, which is the one place the narrowing is visible twice: the ring is of them, and
 so are its rows.
 
 ## Before anything is uploaded
 
-The page shows one sentence and no panels. No rings, no zeros, no empty frames — a net worth of
-zero and an instance with nothing in it are different things. Start at [upload.md](upload.md).
+The page shows one sentence and no panels. No rings, no zeros, no empty frames, because a net
+worth of zero and an instance with nothing in it are different things. Start at
+[upload.md](upload.md).
 
 ## On a phone
 
 ![Net worth by owner on a phone: the ring above its table](images/analysis-mobile.png)
 
 Each panel stacks what a wide screen sets side by side: the ring first, full width, then its table
-underneath rather than beside it. The ring itself is unchanged — same colours, same rank — there is
-just no room left to put it next to the numbers it explains.
+underneath rather than beside it. The ring itself is unchanged, with the same colours and the same
+rank. There is no room left to put it next to the numbers it explains.
 
 ---
 
-**Next:** [Income](income.md) — what the same portfolio is projected to pay over the coming year.
+**Next:** [Income](income.md), what the same portfolio is projected to pay over the coming year.

@@ -7,12 +7,12 @@ The [root README](../../README.md) renders these files in light and dark themes.
 
 Use [capture-screenshots.ts](../../scripts/capture-screenshots.ts) with the
 [development recipe](../developing.md#retake-screenshots-after-changing-a-screen).
-It also captures the guide images. Use a separate demo database: the script creates a placeholder
-passkey record and synthetic unlock grant, and refuses a database with other passkeys.
+It also captures the guide images. Use a separate demo database, because the script creates a
+placeholder passkey record and synthetic unlock grant, and refuses a database with other passkeys.
 
 ## Capture choices
 
-- Desktop: 1600 × 1000; enough width for Holdings’ columns.
+- Desktop: 1600 × 1000; enough width for Holdings' columns.
 - Mobile: 390 × 900, not full-page. A full-page capture misplaces the fixed bottom navigation.
 - Keep the unprotected-instance banner: the capture server has no OAuth gate.
 - Show amounts except in masking examples. Never use real financial data.

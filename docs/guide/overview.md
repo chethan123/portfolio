@@ -6,10 +6,10 @@ What the household is worth today, and the line behind it.
 
 ## The headline and the chip beside it
 
-**Total net worth** adds the current value of open accounts. Loans subtract.
-The change chip compares current value with the value at the range’s start. This remains true
-for Custom ranges ending in the past: the chip is not the change between the chart’s endpoints.
-If the starting value is zero, only the amount is shown.
+**Total net worth** adds the current value of open accounts. Loans subtract. The change chip
+compares current value with the value at the range's start. This remains true for Custom ranges
+ending in the past. The chip is not the change between the chart's endpoints. If the starting
+value is zero, only the amount is shown.
 
 The **As of** line is the oldest provider timestamp among currently held feed-priced instruments,
 across the household. A successful refresh need not advance it. [Prices](prices.md).
@@ -18,37 +18,38 @@ across the household. A successful refresh need not advance it. [Prices](prices.
 
 Nine options, top right: **1D**, **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All**,
 **Custom**. You get 1Y unless you pick another, or unless a browser you have chosen a range on
-before opens here again — see below.
+before opens here again. See below.
 
-- **1D** is the most recent trading session, and it is the one option that is not a span of days —
-  see below.
-- **1W / 1M / 3M / 1Y / 5Y** are trailing spans back from today — a week, a calendar month, a
+- **1D** is the most recent trading session, and it is the one option that is not a span of days.
+  See below.
+- **1W / 1M / 3M / 1Y / 5Y** are trailing spans back from today: a week, a calendar month, a
   calendar quarter, a year, five years.
 - **YTD** is January 1st of this year through today.
-- **All** starts at the earliest date anything is recorded — your first statement, or the oldest
+- **All** starts at the earliest date anything is recorded: your first statement, or the oldest
   hand-typed point if that is older still. It is not a fixed number of years.
 - **Custom** opens a small form with a start and end date. Both boxes refuse a date before your
   earliest data or after today, so you cannot pick a span that could only fail. Once applied, the
   button shows the two dates you chose instead of the word "Custom".
 
-**A greyed-out option is one your data cannot reach yet** — a household eight months old sees 5Y
+**A greyed-out option is one your data cannot reach yet.** A household eight months old sees 5Y
 disabled rather than a click that silently does the same thing All already does. 1D greys out for a
 different reason: an instance with no stored price observations has no session to draw yet.
 
 **Narrowing to an owner can grey more of them out**, because a narrowed chart reaches back only as
-far as the selected owners' own first recorded holdings — see the dashed line below. The options
+far as the selected owners' own first recorded holdings. See the dashed line below. The options
 come back the moment you press **Show everyone**.
 
-The choice lives in the address bar as `?range=3m` (or, for Custom, `?range=custom&start=…&end=…`). So it
-survives a reload, you can bookmark it, and you can send the address to the other person in the
-household and they will see the same window you did. Absent an address-bar range, this browser
-reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a
-household setting, so it is not in Settings and does not follow you to another browser.
+The choice lives in the address bar as `?range=3m` (or, for Custom,
+`?range=custom&start=…&end=…`). So it survives a reload, you can bookmark it, and you can send the
+address to the other person in the household and they will see the same window you did. With no
+range in the address bar, this browser reopens on whichever range you picked here last time,
+remembered in a cookie. That choice is a convenience, not a household setting, so it is
+not in Settings and does not follow you to another browser.
 
-The owner filter, whose control sits beside this one, works the other way round on purpose: it is
+The owner filter, whose control sits beside this one, works the other way round on purpose. It is
 the address and nothing else, with no cookie behind it, so opening the base address shows the whole
-household; a bookmark or restored tab keeps the selection in its URL. A remembered range shows you the same shape of the same money; a remembered owner would
-quietly show you a smaller total. See
+household; a bookmark or restored tab keeps the selection in its URL. A remembered range shows you
+the same shape of the same money; a remembered owner would quietly show you a smaller total. See
 [reading a screen as one owner](owner-filter.md#it-lasts-as-long-as-the-address-does).
 
 ## Reading a point off the line
@@ -57,7 +58,7 @@ The readout names the last plotted point until you point at the chart. It then f
 point, with a vertical guide. It describes a historical or observed price; the headline uses current
 quotes, so the figures can differ even when the range ends today.
 
-## 1D — the latest trading session
+## 1D: the latest trading session
 
 ![The Overview at the 1D range, its axis labelled by time of day](images/overview-range-1d.png)
 
@@ -65,7 +66,7 @@ quotes, so the figures can differ even when the range ends today.
 last. If fetching stopped, that session may be older than the latest market day. There must be at
 least two observations at distinct times to draw a line.
 
-- The axis and readout show time on the market’s clock.
+- The axis and readout show time on the market's clock.
 - Every distinct observed instant is plotted; one refresh can add several points.
 - The change chip compares current value with the close before the displayed session.
 - Current quantities are used across the session, so an upload can change the whole 1D line.
@@ -95,7 +96,7 @@ coverage is complete. [Prices](prices.md) explains missing and stale values.
 ## The accounts list
 
 Every open account, largest first, with its institution, its kind and its owner. The count in the
-header — "6 active" — is how many are listed.
+header, "6 active", is how many are listed.
 
 - **Click a row to open that account**: its own chart, and what it holds. See
   [account-detail.md](account-detail.md).
@@ -114,7 +115,7 @@ The bars are a share of what is **owned**, not a share of the net total.
 That has one consequence worth knowing: an account holding nothing ownable has no bar. A loan has
 none, and neither does an account whose every position is unpriced. The note under the bars says
 so when it applies. The reasoning is in
-[the project tour](../../README.md#overview--what-the-household-is-worth).
+[the project tour](../../README.md#overview-what-the-household-is-worth).
 
 Only the five largest accounts get a bar. When there are more, the note says how many hold value
 altogether.
@@ -124,11 +125,12 @@ to [Analysis](analysis.md).
 
 ## When there is nothing to draw
 
-A line needs at least two plotted points, which can include the household’s manual history. Try **All** or let more dated samples
-accumulate; a second statement is not required. For 1D, prices must have been observed at two
-distinct times. The empty panel still says a second statement is needed; that wording is outdated
-([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)).
-An account with no records differs from one with records but no prices.
+A line needs at least two plotted points, which can include the household's manual history. Try
+**All** or let more dated samples accumulate; a second statement is not required. For 1D, prices
+must have been observed at two distinct times. The empty panel still says a second statement is
+needed; that wording is outdated
+([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)). An account with no
+records differs from one with records but no prices.
 
 ## On a phone
 
@@ -152,5 +154,5 @@ same reason as above.
 
 ---
 
-**Next:** [The owner filter](owner-filter.md) — narrowing every figure on these screens to one
+**Next:** [The owner filter](owner-filter.md), narrowing every figure on these screens to one
 person's.

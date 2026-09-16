@@ -68,7 +68,7 @@ export function readMaskingCookie(request: Request): string | undefined {
   return readCookie(request, MASKING_COOKIE);
 }
 
-/** The rail and phone controls share one fetcher key, so a newer toggle cancels the older request. */
+/** The rail and phone controls share one fetcher key, so every amount sees the pending choice. */
 export const MASKING_FETCHER_KEY = "masking";
 
 /** Carries the state being flipped *to*. */

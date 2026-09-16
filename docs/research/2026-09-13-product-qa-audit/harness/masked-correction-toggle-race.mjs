@@ -82,6 +82,8 @@ try {
   const hideCaptured = deferred();
   const hideRelease = deferred();
   const hideFinished = deferred();
+  let showDelivery = "pending";
+  let hideDelivery = "pending";
   let sequence = 0;
 
   await page.evaluate(() => {
@@ -117,8 +119,12 @@ try {
 
     try {
       await route.fulfill({ response });
+      if (number === 1) showDelivery = "delivered";
+      if (number === 2) hideDelivery = "delivered";
     } catch (error) {
       if (!/closed|canceled|cancelled|Invalid Interception/i.test(String(error))) throw error;
+      if (number === 1) showDelivery = "cancelled";
+      if (number === 2) hideDelivery = "cancelled";
     } finally {
       if (number === 1) showFinished.resolve();
       if (number === 2) hideFinished.resolve();
@@ -143,6 +149,7 @@ try {
 
   hideRelease.resolve();
   await waitForBarrier(hideFinished, "the Hide response delivery");
+  assert.equal(hideDelivery, "delivered", "The newer Hide response must reach the router.");
   await page
     .getByRole("banner")
     .getByRole("button", { name: "Show amounts", exact: true })
@@ -151,6 +158,12 @@ try {
 
   showRelease.resolve();
   await waitForBarrier(showFinished, "the stale Show response delivery");
+  assert.equal(
+    showDelivery,
+    "delivered",
+    "The older Show response must reach the router for this harness to exercise precedence.",
+  );
+  console.log(`Race delivery: Hide ${hideDelivery}; older Show ${showDelivery}.`);
   await page.waitForLoadState("networkidle");
   await nextPaint(page);
 
@@ -190,7 +203,9 @@ try {
   );
 
   await failedContext.close();
-  console.log("PASS: stale Show data and a failed Hide never remount correction inputs.");
+  console.log(
+    `PASS: Hide ${hideDelivery}; older Show ${showDelivery}; neither stale Show data nor a failed Hide remounted correction inputs.`,
+  );
 } finally {
   await browser.close();
 }

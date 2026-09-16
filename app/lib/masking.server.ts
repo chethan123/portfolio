@@ -30,7 +30,7 @@ async function resolveRequestMasking(request: Request): Promise<RequestMasking> 
 /** Set before awaiting so concurrently-started loaders share the same deferred read and outcome. */
 export function maskingForRequest(
   request: Request,
-  context: Readonly<RouterContextProvider>,
+  context: RouterContextProvider,
 ): Promise<RequestMasking> {
   const existing = context.get(requestMaskingContext);
   if (existing !== null) return existing;

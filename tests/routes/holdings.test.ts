@@ -19,6 +19,11 @@ afterAll(closeTestDatabase);
 
 const SHOW_AMOUNTS = `${MASKING_COOKIE}=${UNMASKED}`;
 
+/** A correction form exists only after an intentional reveal, so every ordinary correction carries that precondition. */
+function correct(path: string, fields: Record<string, string>): Request {
+  return post(path, fields, SHOW_AMOUNTS);
+}
+
 /** One priced position, which is the smallest thing this screen can draw. */
 async function seedOnePosition(
   ctx: Pick<
@@ -259,7 +264,7 @@ describe("reading the table as an owner", () => {
       const destination = await redirectTo(() =>
         action(
           args(
-            post(`/holdings?owner=${alice.id}&edit=${key}`, { quantity: "120" }, SHOW_AMOUNTS),
+            correct(`/holdings?owner=${alice.id}&edit=${key}`, { quantity: "120" }),
           ),
         ),
       );
@@ -525,6 +530,27 @@ describe("the canonical bounce, through a real URL", () => {
 
 describe("correcting one row", () => {
   it(
+    "refuses a correction against a position the account no longer carries, keeping what was typed and writing nothing",
+    withDatabase(async (ctx) => {
+      const { account, instrument, rowKey } = await seedOnePosition(ctx);
+      // A later statement without the row: the editor was opened before it landed.
+      await ctx.seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
+
+      const outcome = await outcomeOf(() =>
+        action(args(correct(`/holdings?edit=${rowKey}`, { quantity: "150", costBasisPerShare: "" }))),
+      );
+
+      // Rendered beside the form with what was typed kept, not a redirect claiming it landed.
+      expect(outcome).not.toBeInstanceOf(Response);
+      expect(outcome).toMatchObject({
+        errors: { form: expect.stringMatching(/no longer carries this position/) },
+        values: { quantity: "150", costBasisPerShare: "" },
+      });
+      expect(await currentPosition(account.id, instrument.id, ctx.db)).toBeNull();
+    }),
+  );
+
+  it(
     "refuses a correction whose address names no row, and writes nothing",
     withDatabase(async (ctx) => {
       const { account, instrument } = await seedOnePosition(ctx);
@@ -553,10 +579,9 @@ describe("correcting one row", () => {
       const destination = await redirectTo(() =>
         action(
           args(
-            post(
+            correct(
               `/holdings?owner=${owner.id}&sort=bogus&dir=sideways&nonsense=1&edit=${rowKey}`,
               { quantity: "150", costBasisPerShare: "180" },
-              SHOW_AMOUNTS,
             ),
           ),
         ),

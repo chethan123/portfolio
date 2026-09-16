@@ -8,6 +8,7 @@ import { currentPosition } from "~/lib/positions.server";
 
 import {
   TEST_DATABASE_URL,
+  UNREACHABLE_DATABASE_URL,
   closeTestDatabase,
   withDatabase,
 } from "../support/database.ts";
@@ -46,10 +47,25 @@ describe("a correction on masked Holdings", () => {
       const { key } = await seedPosition(ctx);
       const path = `/holdings?edit=${key}`;
       const data = await loader(args(get(path, cookie(MASKED))));
+      const shownData = await loader(args(get(path, cookie(UNMASKED))));
       const serialized = JSON.stringify(data);
 
-      expect(serialized).not.toContain(QUANTITY);
-      expect(serialized).not.toContain(BASIS);
+      const shownRow = shownData.rows?.[0];
+      const exactAmounts = [
+        shownRow?.quantity,
+        shownRow?.price,
+        shownRow?.value,
+        shownRow?.costBasisPerShare,
+        shownRow?.costBasis,
+        shownRow?.unrealized,
+        shownRow?.annualDividend,
+        shownData.total.value,
+        shownData.total.costBasis,
+        shownData.total.unrealized,
+        shownData.total.annualDividend,
+      ].filter((amount): amount is string => typeof amount === "string");
+
+      for (const amount of exactAmounts) expect(serialized).not.toContain(JSON.stringify(amount));
 
       const grouped = await loader(
         args(get(`/holdings?group=account&edit=${key}`, cookie(MASKED))),
@@ -94,9 +110,7 @@ describe("a correction on masked Holdings", () => {
       const { key } = await seedPosition(ctx);
       await ctx.db.updateTable("app_setting").set({ masking_policy: "unmasked" }).execute();
       const shared = args(get(`/holdings?edit=${key}`));
-      const unreachable = createDatabase(
-        "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_codex_294_tests",
-      );
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
 
       try {
         expect((await withDb(unreachable, () => rootLoader(shared))).masked).toBe(true);
@@ -209,6 +223,12 @@ describe("a correction on masked Holdings", () => {
       expect(JSON.stringify(refused)).not.toContain("999.12345678");
       expect(JSON.stringify(refused)).not.toContain("88.4321");
       expect(refused.errors.form).toMatch(/show amounts/i);
+      const maskedData = await loader(args(get(path, cookie(MASKED))));
+      const refusedMarkup = renderRoute(Holdings, path, maskedData, {
+        masked: true,
+        actionData: refused,
+      });
+      expect(refusedMarkup).toMatch(/Show amounts before correcting a position/i);
       expect((await currentPosition(account.id, instrument.id, ctx.db))?.quantity).toBe(QUANTITY);
 
       const invalid = await action(

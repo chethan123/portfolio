@@ -73,7 +73,9 @@ holdings, and nothing downstream would flag it. So removals are never a count.
 - [ ] `external_account_number` is captured on the account when the file carried one and the account
       had none
 - [ ] Success redirects to `/accounts/:id?uploaded=<setId>` with a confirmation naming the counts and
-      the date, so the reader lands on the holdings the upload just changed
+      the date, so the reader lands on the holdings the upload just changed (Revisited by #181: only
+      true when the statement is not filed behind the account's current one — a backdated statement
+      lands on the account with a receipt naming what it still reports instead)
 - [ ] Posting a committed draft again renders the expired-or-already-recorded page from step 01, with
       a link to the account — not a second set, and not a 500
 - [ ] `latest_position_set` returns the new set immediately afterwards, and Overview, Holdings,

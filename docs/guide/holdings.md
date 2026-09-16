@@ -6,20 +6,20 @@ Every position the household holds, in one table you can narrow, group and sort.
 
 ## The seven ways to slice it
 
-There are seven dimensions. **Six work as both a filter and a grouping. Owner groups only** —
-narrowing to an owner is a household-wide reading you set once and carry across all four money
-screens, from the control at the top of this one — the button naming who you are looking at. See
+There are seven dimensions. **Six work as both a filter and a grouping. Owner groups only.**
+Narrowing to an owner is a household-wide reading you set once and carry across all four money
+screens, from the control at the top of this one, the button naming who you are looking at. See
 [reading a screen as one owner](owner-filter.md).
 
-- **Owner** — who the account belongs to. Grouping only; the control at the top does the narrowing.
-- **Account** — one account by name. The dropdown adds the institution, because two accounts can
+- **Owner**: who the account belongs to. Grouping only; the control at the top does the narrowing.
+- **Account**: one account by name. The dropdown adds the institution, because two accounts can
   be called "Roth IRA".
-- **Brokerage** — the institution the account is held at.
-- **Account type** — Brokerage, Workplace plan, IRA, Bank, Liability.
-- **Tax treatment** — taxable, tax-deferred, tax-free.
-- **Classification** — your own label for what a holding is: "S&P 500", "US total bond",
+- **Brokerage**: the institution the account is held at.
+- **Account type**: Brokerage, Workplace plan, IRA, Bank, Liability.
+- **Tax treatment**: taxable, tax-deferred, tax-free.
+- **Classification**: your own label for what a holding is, such as "S&P 500", "US total bond",
   "Money market".
-- **Asset class** — Equity, Bonds, Cash, Other.
+- **Asset class**: Equity, Bonds, Cash, Other.
 
 **To filter**, set one or more dropdowns in the bar at the top and press **Apply**. **Clear
 filters** appears beside it once something is set.
@@ -38,27 +38,27 @@ to the other person in the household.
 
 **A dropdown only appears once the data holds two different values for it.** A household that
 banks in one place gets no Brokerage filter; one holding only brokerage accounts gets no Account
-type filter. Nothing is being hidden — there is simply no choice to offer.
+type filter. Nothing is being hidden. There is no choice to offer.
 
 Every option in a dropdown is a value something in the portfolio really has. Because of that, **no
 single filter can leave you with an empty table.**
 
-Two of them still can — nobody holds bonds at that particular brokerage — and when that happens
-the screen names the pair rather than leaving you to work it out:
+Two of them still can. Nobody holds bonds at that particular brokerage, say. The screen then names
+the pair rather than leaving you to work it out:
 
 > No holding matches every filter at once. Nothing in the portfolio is at Fidelity and bonds.
 
 The sentence also says how many holdings are recorded in all, and a **Clear filters** button sits
 beneath it.
 
-An old link can also point at something that no longer exists — an account you have since closed.
-That reads differently, as a filter naming something the portfolio does not hold, and the
+An old link can also point at something that no longer exists, such as an account you have since
+closed. That reads differently, as a filter naming something the portfolio does not hold, and the
 dropdown shows "Not in this portfolio" so you can see which one it was.
 
 **An empty result is not an empty portfolio.** A table with nothing in it because of a filter says
 so in those words. It never says "nothing has been uploaded yet", which would be false.
 
-**With the owner filter also set, the sentence names whose portfolio it means** — "Alex Rivera
+**With the owner filter also set, the sentence names whose portfolio it means**: "Alex Rivera
 holds nothing at Fidelity." The dropdowns are built from every holding in the household rather than
 from the selected owner's, so an unqualified "nothing in the portfolio is at Fidelity" would be
 plainly untrue on a narrowed table. The owner filter has its own empty answers, in
@@ -73,37 +73,37 @@ plainly untrue on a narrowed table. The owner filter has its own empty answers, 
 Each group gets a heading with its own count, its rows, then a subtotal.
 
 On a phone the **Group by** strip scrolls sideways instead of wrapping, the same way the range
-buttons on Overview do. Grouped by Asset class here, but nothing above says so — the chip that
-would show it is scrolled off to the right. Swipe the strip to check which grouping is active
+buttons on Overview do. Grouped by Asset class here, but nothing above says so, because the chip
+that would show it is scrolled off to the right. Swipe the strip to check which grouping is active
 before reading a heading as the default.
 
-The percentage under a subtotal — "81.5% of gross assets" — is a share of the positive groups
+The percentage under a subtotal, "81.5% of gross assets", is a share of the positive groups
 added together, not of the Total row underneath. With a loan in the table the two differ, so the
 denominator is named rather than assumed. A group nothing could price has no percentage at all.
 
 The panel header counts what you are looking at: "14 holdings · 4 accounts · filtered from 18".
-That last part is there so a filtered table never looks like the whole portfolio — including to
+That last part is there so a filtered table never looks like the whole portfolio, including to
 you, a day later, following your own bookmark.
 
 Grouping by Owner or by Account drops that column from the table, since the heading above each
 group already says it.
 
-Grouping by Owner is still worth doing under the owner filter — set to two owners, it is how you
+Grouping by Owner is still worth doing under the owner filter. Set to two owners, it is how you
 read one table as two.
 
 ## The columns
 
-- **Asset** — the instrument, with its symbol as a badge, its classification and its asset class
+- **Asset**: the instrument, with its symbol as a badge, its classification and its asset class
   underneath.
-- **Account** — the account that holds it, with the institution underneath. The name is a link to
+- **Account**: the account that holds it, with the institution underneath. The name is a link to
   that account's page.
-- **Owner** — whose account that is.
-- **Quantity** — units held. Negative for something owed.
-- **Price** — the last price known for it.
-- **Value** — quantity times price.
-- **Cost basis** — what the whole position cost.
-- **Unrealized** — value minus cost basis, with an arrow and a sign.
-- **Annual dividend** — what the position is projected to pay over the next year, with that as a
+- **Owner**: whose account that is.
+- **Quantity**: units held. Negative for something owed.
+- **Price**: the last price known for it.
+- **Value**: quantity times price.
+- **Cost basis**: what the whole position cost.
+- **Unrealized**: value minus cost basis, with an arrow and a sign.
+- **Annual dividend**: what the position is projected to pay over the next year, with that as a
   percentage of its own value underneath. The amount grows with the size of the position; the
   percentage is the figure that compares one row against another.
 
@@ -111,17 +111,17 @@ A dash is not a zero. A dash means the figure is not known: no price recorded, o
 recorded.
 
 **Annual dividend is the exception, and it never shows a dash.** A holding with no dividend rate on
-file reads `$0` — including one nobody can price, which shows a blank Value and `$0` in the same
-row. There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both
-are counted as nothing and the projection omits missing rates, including income and loan costs. It is incomplete rather than
-a guaranteed minimum for net income. A holding worth nothing has an amount and no
-percentage, since there is nothing to be a percentage of.
+file reads `$0`, including one nobody can price, which shows a blank Value and `$0` in the same row.
+There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both are
+counted as nothing and the projection omits missing rates, including income and loan costs. The
+projection is incomplete rather than a guaranteed minimum for net income. A holding worth nothing
+has an amount and no percentage, since there is nothing to be a percentage of.
 
-Something owed can show a negative figure. A loan whose note carries a rate reads as money going
-out rather than coming in, with the rate it is charged at underneath — the same two lines as any
-other row, with the other sign.
+Something owed can show a negative figure. A loan whose note carries a rate reads as money going out
+rather than coming in, with the rate it is charged at underneath. The row shows the same two lines
+as any other, with the other sign.
 
-This column added up — for the whole portfolio, and split by tax treatment and by account — is the
+This column added up, for the whole portfolio and split by tax treatment and by account, is the
 [Income](income.md) screen.
 
 ## The totals, and the coverage counts under them
@@ -146,9 +146,9 @@ missing. Annual dividend never carries one: every row has a figure, so there is 
 
 Under the asset name, after the classification and asset class:
 
-- **never priced** — no price has ever been recorded for it. Its price and value show a dash and
+- **never priced**: no price has ever been recorded for it. Its price and value show a dash and
   it is left out of the totals.
-- **price is stale** — the last known price is being used rather than discarded.
+- **price is stale**: the last known price is being used rather than discarded.
 
 Both are explained in [prices.md](prices.md).
 
@@ -169,7 +169,7 @@ amounts** in the navigation to load the exact defaults and begin editing. Pressi
 while a correction is open removes the boxes immediately. Save and Cancel both close the editor;
 the global amount setting stays as you left it.
 
-On a phone the row is already a card — the whole table reflows to one below 768px, the asset name
+On a phone the row is already a card. The whole table reflows to one below 768px, the asset name
 as its heading and every other column a labelled line underneath. Open for correction, that gives
 the two boxes a full line each rather than a cramped half each, which is the shape above.
 
@@ -183,11 +183,11 @@ Two things to know before you type:
 
 ### What saving actually does
 
-Saving appends the account’s full snapshot with one position changed. The date is today, or the
-current statement’s date if later. Other positions are copied and earlier snapshots remain stored.
+Saving appends the account's full snapshot with one position changed. The date is today, or the
+current statement's date if later. Other positions are copied and earlier snapshots remain stored.
 For any date, valuation uses the latest snapshot effective on that date.
 
-A correction today does not change an earlier day’s quantities. Same-day corrections supersede
+A correction today does not change an earlier day's quantities. Same-day corrections supersede
 one another. Backdated uploads or balances can change historical values without deleting records.
 Undo a correction by recording another.
 
@@ -213,12 +213,12 @@ your view alone, and a half-typed correction does not follow you into a differen
 
 The six filters stack two to a row rather than one long column, and the owner control sits above
 them rather than beside the title. Below the fold, this is the one screen that changes *shape*
-rather than just width — every row becomes its own card, shown above under grouping and under
-correcting a row. Nothing on it is hidden; the table is simply not a table any more.
+rather than just width. Every row becomes its own card, shown above under grouping and under
+correcting a row. Nothing on it is hidden; the table is not a table any more.
 
-Narrowing to one owner works the same as everywhere else — see [reading a screen as one
+Narrowing to one owner works the same as everywhere else. See [reading a screen as one
 owner](owner-filter.md#how-to-narrow) for what that control does on a phone.
 
 ---
 
-**Next:** [Analysis](analysis.md) — the same portfolio as four breakdowns.
+**Next:** [Analysis](analysis.md), the same portfolio as four breakdowns.

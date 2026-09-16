@@ -22,6 +22,7 @@ export default [
     route("people", "routes/settings/people.tsx"),
     route("accounts", "routes/settings/accounts.tsx"),
     route("accounts/:accountId", "routes/settings/account.tsx"),
+    route("instruments", "routes/settings/instruments.tsx"),
     route("tax", "routes/settings/tax.tsx"),
     route("prices", "routes/settings/prices.tsx"),
     route("display", "routes/settings/display.tsx"),

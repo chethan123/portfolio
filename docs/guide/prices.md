@@ -32,8 +32,9 @@ than guessing an exchange rate. A holding quoted in another currency cannot be p
 
 ---
 
-The reasoning behind all of this — why an unpriceable holding is excluded rather than zeroed, and
-why a quote is filed under the day the market gave it — is in
-[the README](../../README.md#where-prices-come-from).
+The reasoning behind all of this is in [the README](../../README.md#where-prices-come-from): why an
+unpriceable holding is excluded rather than zeroed, and why a quote is filed under the day the
+market gave it.
 
-**Next:** [Settings](settings.md) — the dials behind these screens, the refresh cadence among them.
+**Next:** [Settings](settings.md), the settings behind these screens, the refresh cadence among
+them.

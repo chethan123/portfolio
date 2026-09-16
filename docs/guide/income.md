@@ -13,7 +13,7 @@ owner selection and no additional Holdings filters.
 rate. It is a projection, not payments received or a payment calendar.
 
 **Weighted yield** divides that total by positive holding values added together. Debt does not
-reduce the denominator. Holdings shows each position’s own rate beneath its annual dividend.
+reduce the denominator. Holdings shows each position's own rate beneath its annual dividend.
 
 ### The total is a lower bound
 
@@ -25,7 +25,7 @@ omitted. [Holdings](holdings.md#the-columns) uses the same figures.
 ## Annual dividend by tax treatment
 
 The table groups annual dividend as taxable, tax-deferred, or tax-free. These describe the
-account’s tax treatment, not its kind: a workplace plan can be tax-deferred or tax-free.
+account's tax treatment, not its kind: a workplace plan can be tax-deferred or tax-free.
 
 ### The sheltered line
 
@@ -38,23 +38,23 @@ the two subtotals are amounts, not percentages of each other.
 The same total again, one row per account, largest first. This is the panel that answers which
 statement the money turns up in.
 
-**An account that pays nothing is still a row**, reading $0.00 — a savings account, or a loan. That
-is the missing-rate rule showing its effect: the app is not claiming those accounts pay nothing,
-only that it has no rate on file for them.
+**An account that pays nothing is still a row**, reading $0.00, like a savings account or a loan.
+That row is the missing-rate rule showing its effect: the app is not claiming those accounts pay
+nothing, only that it has no rate on file for them.
 
 ## The rings, and when a percentage is missing
 
 Both panels are the panel [Analysis](analysis.md) draws, and they behave the same way:
 
-- **Colour means rank**, not a particular account or treatment — the same rank is the same colour in
+- **Colour means rank**, not a particular account or treatment. The same rank is the same colour in
   every panel on every screen. See [Analysis](analysis.md#the-breakdowns).
-- **A long breakdown folds its tail into one grey wedge** — grey on purpose, so the remainder never
-  looks like a coloured group — while every row keeps its own figures in the table. See
+- **A long breakdown folds its tail into one grey wedge**, grey on purpose so the remainder never
+  looks like a coloured group, while every row keeps its own figures in the table. See
   [More than five rows](analysis.md#more-than-five-rows).
 - **A negative row gets no wedge and a hollow dot**, and its percentage is a share of everything
   positive rather than of the figure in the middle of the ring. The panel says so under the table
   when it happens. The sentence differs from the one on Analysis, because a negative here is
-  interest going out rather than a debt being held — the arithmetic is the same and the reading
+  interest going out rather than a debt being held. The arithmetic is the same and the reading
   is not.
 - **If nothing in a breakdown pays anything there is no ring at all**, the percentages read as
   dashes, and the amounts are the answer.
@@ -66,7 +66,7 @@ dividend total should match Income for the same owner selection. Missing value o
 
 ## Before anything is uploaded
 
-The page shows one sentence and nothing else — no ring, no zeros, no empty frame. A portfolio that
+The page shows one sentence and nothing else: no ring, no zeros, no empty frame. A portfolio that
 genuinely pays nothing and an instance nothing has been recorded in yet are different things, and
 they do not get the same screen. Start at [upload.md](upload.md).
 
@@ -75,9 +75,9 @@ they do not get the same screen. Start at [upload.md](upload.md).
 ![Annual dividend by tax treatment on a phone, the ring above its table](images/income-mobile.png)
 
 Same figures, same two panels, but each one stacks: the ring first, full width, its table below
-rather than beside it — the same reflow [Analysis](analysis.md#on-a-phone) uses for its own rings,
-since this screen draws them.
+rather than beside it. That reflow is the same one [Analysis](analysis.md#on-a-phone) uses for its
+own rings, since this screen draws them.
 
 ---
 
-**Next:** [Overview](overview.md) — the whole household at a glance, and the chart's two lines.
+**Next:** [Overview](overview.md), the whole household at a glance, and the chart's two lines.

@@ -16,7 +16,7 @@ it does not enrol a working passkey.
 - Desktop is 1600 × 1000. Phone captures are 390 × 900 and not full-page, so fixed navigation
   stays at the viewport edge.
 - Capture each upload step, including unmapped and mapped columns and the removal review.
-- Keep account type, owner, range, grouping, and masking consistent with the guide’s explanation.
+- Keep account type, owner, range, grouping, and masking consistent with the guide's explanation.
 - Capture the unlocked app with the synthetic grant and the unlock screen without one.
 
 The script owns exact routes and filenames. Retake affected images after UI changes; never

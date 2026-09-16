@@ -1,4 +1,4 @@
-# Portfolio Tracker — Architecture
+# Portfolio Tracker architecture
 
 **An engineering reference for the system as built.** Where [DESIGN.md](DESIGN.md) records *what was
 decided and why*, this document records *how the running system is put together*: its processes, its
@@ -41,7 +41,7 @@ wrong one is the usual way to end up re-litigating a settled decision:
 | [`docs/design/`](docs/design) | *What should the screen look and behave like?* UI briefs. | Authoritative on **screen behaviour**. |
 
 This document does not restate DESIGN.md's reasoning. Where a structural fact exists because of a
-decision, it cites the section — `§4.1`, `§6.2` — and moves on.
+decision, it cites the section, `§4.1` or `§6.2`, and moves on.
 
 **A note on the source.** This codebase argues its decisions in module headers rather than in commit
 messages. Almost every non-obvious choice below has a paragraph of prose above it in the file that
@@ -95,21 +95,22 @@ graph LR
 
 **External dependencies, in full.** Two, and they belong to different components. **Yahoo Finance**
 is the price worker's, and its only one: no email, no object store, no queue, no cache tier, no
-analytics — and, since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md), no longer reached
-from the application process at all. `app` crosses a unix socket to `worker` for every price fetch
+analytics. Since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md), the application process
+no longer reaches Yahoo at all. `app` crosses a unix socket to `worker` for every price fetch
 (`app/lib/provider-socket.server.ts`) and opens no connection of its own; `worker` in turn reaches
 Yahoo only through `egress-proxy`, which admits a `CONNECT` to five hosts and checks the TLS server
 name inside the tunnel against the host it was opened to (§3.1, §7.5,
 [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). Yahoo
-is reached three ways, over two endpoints — the poller's batched *quote* fetch and the per-symbol
+is reached three ways, over two endpoints: the poller's batched *quote* fetch and the per-symbol
 *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the request path
 entirely, and `socketProbe`, a currency check over every symbol one submission creates, run *inside*
 the form submission that creates them (§6.1). The last is the only place a third party can make a
 person wait. All three go through the one interface in §7.5, precisely because the endpoint is
 unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
-the browser is redirected there to sign in and the sidecar exchanges the code for a token — one call,
-to `www.googleapis.com:443` — both outside the app process entirely. That seam is what keeps "an
-identity provider" out of the application's dependency list while the instance still has one.
+the browser is redirected there to sign in and the sidecar exchanges the code for a token in one
+call, to `www.googleapis.com:443`. Both happen outside the app process entirely. That seam is what
+keeps "an identity provider" out of the application's dependency list while the instance still has
+one.
 
 **Trust boundaries.** Marked here because §7.6 depends on them:
 
@@ -118,15 +119,15 @@ identity provider" out of the application's dependency list while the instance s
 | Browser → Caddy | HTTP request, the gate's session cookie | No. The gate decrypts the cookie itself and re-checks its address against the allowlist on every request; every form input is re-validated server-side. |
 | House proxy → Caddy | `X-Forwarded-*` | Believed, bounded by `trusted_proxies static private_ranges` in the `Caddyfile`. The honest reading: **any LAN peer can forge these headers**, because this repository cannot know the operator's proxy address. See below for why that is affordable. |
 | Caddy → gate | `X-Forwarded-*`, `X-Real-IP`, `X-Forwarded-Uri` | **Yes, unconditionally.** The sidecar runs in reverse-proxy mode and builds its sign-in redirects from them, which is why `gate` publishes no port. |
-| Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally** — which is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
-| Browser → app | `__Host-unlock_grant` cookie, forwarded through Caddy unmodified | **No.** It carries no claim — an opaque, cryptographically random id (`length(id) >= 32`) addressing a row in `unlock_grant`. A forged value names nothing; a copied live one only ever names the row it was copied from, which is what makes the row deletable and the honest limit of a bearer token. The row is the authority, never the cookie (docs/adr/0012). |
-| worker → Yahoo | An HTTP response over the tunnel `egress-proxy` opened | Not this repository's to trust — `egress-proxy` checks only the TLS server name against the host the tunnel was opened to (§3.1, §7.5); the body passes through unread, all the way to the app. |
+| Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally.** That is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
+| Browser → app | `__Host-unlock_grant` cookie, forwarded through Caddy unmodified | **No.** It carries no claim, only an opaque, cryptographically random id (`length(id) >= 32`) addressing a row in `unlock_grant`. A forged value names nothing; a copied live one only ever names the row it was copied from, which is what makes the row deletable and the honest limit of a bearer token. The row is the authority, never the cookie (docs/adr/0012). |
+| worker → Yahoo | An HTTP response over the tunnel `egress-proxy` opened | Not this repository's to trust. `egress-proxy` checks only the TLS server name against the host the tunnel was opened to (§3.1, §7.5), and the body passes through unread, all the way to the app. |
 | worker → app, over the shared-volume socket | The same JSON quote and chart payloads, forwarded unmodified | No. Both parsed through Zod, currency-guarded, floats converted at the boundary. A split the chart payload cannot be read through refuses that instrument's whole history rather than filling some rows right and some wrong. |
 
 **Why a forgeable forwarded header is affordable.** Nothing downstream *authorises* on one. The
 gate's verdict comes from a session cookie it decrypts itself, and the origin it sends people back
 to is pinned in `compose.yaml` rather than read off a `Host` header. What a forged header can still
-reach is the *cosmetics* of a sign-in redirect and whatever Caddy logs as the client address — not
+reach is the *cosmetics* of a sign-in redirect and whatever Caddy logs as the client address, not
 admission. That is the trade this repository makes deliberately: naming the operator's proxy address
 would be a guess, and `private_ranges` states the real bound instead of pretending to a narrower one.
 An operator who knows their proxy's address can narrow it in one line.
@@ -137,10 +138,10 @@ An operator who knows their proxy's address can narrow it in one line.
 
 The deliverable is one application image plus a Compose file. `docker compose up -d` on a fresh
 machine with an empty data directory produces a working instance once the gate's Google credentials exist,
-and **refuses to start until they do** — the required gate variables use Compose's `${VAR:?}` form,
-which is evaluated before any container runs (DESIGN.md §10.1). Fail-closed replaced an older
+and **refuses to start until they do**. The required gate variables use Compose's `${VAR:?}` form,
+which Compose evaluates before any container runs (DESIGN.md §10.1). Fail-closed replaced an older
 no-manual-steps promise that was kept by booting an unprotected instance.
-The image is pulled from GitHub Container Registry rather than built on the host: CI publishes a
+The image is pulled from GitHub Container Registry rather than built on the host. CI publishes a
 multi-architecture image on a `v*` tag, and `compose.yaml` deliberately carries no `build:` stanza
 so a deployment cannot silently become a build (§8.2).
 
@@ -183,10 +184,10 @@ graph TB
 
 Seven networks, not one: `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal with no
 default route out at all (`gateway_mode_ipv4: isolated` closes the escape an internal bridge otherwise
-still keeps — a route to the host and whatever else it binds); `egress-proxy`, `egress-gate` and
+still keeps, a route to the host and whatever else it binds); `egress-proxy`, `egress-gate` and
 `ingress` are plain bridges, because carrying a default route out is the whole point of the first two
-and the published port is the only thing the third carries. `app` and `worker` share none of these —
-the two containers never dial each other by IP, only through the socket in the volume both mount.
+and the published port is the only thing the third carries. `app` and `worker` share none of these. The
+two containers never dial each other by IP, only through the socket in the volume both mount.
 
 Each service is a decision rather than an accident:
 
@@ -196,41 +197,41 @@ Each service is a decision rather than an accident:
   way anywhere is `egress-proxy`, which admits a `CONNECT` to exactly the five hosts `yahoo-finance2`
   contacts and checks the TLS server name inside the tunnel against the host it was opened to. What
   did not change: `app` keeps the refresh loop, every price rule, and the one write to `price_daily`
-  (§4.2, §6.2) — only the network call moved. [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)
+  (§4.2, §6.2). Only the network call moved. [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)
   has the argument and the alternatives it was taken over.
 - **A separate `gate` container, and enforcement in *this* stack's Caddy.** Authentication is one
   sidecar answering `forward_auth`, not code in the app (ADR-0005). It sits here rather than in the
   operator's house-wide proxy because a LAN device can dial this box's published port and land on
-  this Caddy directly — and that device is the threat the gate exists for.
+  this Caddy directly, and that device is the threat the gate exists for.
 - **No published port on `app`, `db`, `gate`, `worker`, `egress-proxy` or `dump`.** Only `caddy` is
   reachable from the host. This is what makes the forwarded-header trust safe (§7.6), keeps the
   database credentials off the LAN, and is the *whole* reason the gate cannot be walked around:
   there is no route to `app` that does not pass the door where the check happens.
 - **Two volumes, a directory and a tmpfs, for two different reasons.** `db-store` is
-  `./volumes/db/data` — every byte of persistent state, so it is still the one backup target,
-  `pg_dump`, documented rather than built in. It reaches the container as a volume name the local
+  `./volumes/db/data`, which holds every byte of persistent state, so it is still the one backup
+  target, `pg_dump`, documented rather than built in. It reaches the container as a volume name the local
   driver binds to that path, because a plain bind mount arrives root-owned and stops `initdb` under
   the pinned uid 70; a volume over an empty directory takes the image's ownership for it instead.
-  `price-worker-sock` holds nothing worth keeping — only the socket file `worker` binds and `app`
-  dials — so it is a `tmpfs`, sized at 1 MB, gone the moment the host is. `compose.yaml` carries the
+  `price-worker-sock` holds nothing worth keeping, only the socket file `worker` binds and `app`
+  dials, so it is a `tmpfs`, sized at 1 MB, gone the moment the host is. `compose.yaml` carries the
   transcript for both.
 
-**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
-for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`, `/config`
-and `/data` for `caddy`. That is enforcement, not intention — a statement that none of them writes to
-its own filesystem and that any can be destroyed and recreated freely. It holds for the gate because
-its sessions live in an encrypted cookie in the browser (a sidecar with a session database would need
-a volume, and this one does not have one), for `db` because all of its state is in the bound directory
-above, and for `worker` because the one thing it needs to write — its socket — lives on the volume
-mounted at `/run/price-worker`, not on the container's own root.
+**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes:
+`/tmp` for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`,
+`/config` and `/data` for `caddy`. That pairing is enforcement, not intention. It states that none
+of them writes to its own filesystem and that any can be destroyed and recreated freely. It holds
+for the gate because its sessions live in an encrypted cookie in the browser (a sidecar with a
+session database would need a volume, and this one does not have one), for `db` because all of its
+state is in the bound directory above, and for `worker` because the one thing it needs to write, its
+socket, lives on the volume mounted at `/run/price-worker`, not on the container's own root.
 
 Alongside it, on all seven: every Linux capability dropped and `no-new-privileges` set, an
-unprivileged uid pinned on six of them — `gate` alone runs as root, which `compose.yaml` argues and
-`scripts/smoke-test.sh` asserts rather than leaves to drift — and exactly two capabilities granted
-back. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
-operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, not to bind
-anything — 8080 needs nothing — but because the image's binary carries that file capability and the
-kernel will not `exec` it from an empty bounding set.
+unprivileged uid pinned on six of them, and exactly two capabilities granted back. `gate` alone runs
+as root, which `compose.yaml` argues and `scripts/smoke-test.sh` asserts rather than leaves to
+drift. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
+operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, which is not there
+to bind anything. Binding 8080 needs no capability. It is granted because the image's binary
+carries that file capability and the kernel will not `exec` it from an empty bounding set.
 
 ### 3.2 Startup sequence
 
@@ -261,8 +262,8 @@ sequenceDiagram
 ```
 
 **Why migrations run in the entrypoint rather than as a one-shot service.** No request is ever served
-against a half-migrated schema. Migrations are idempotent — the runner skips what the
-`schema_migrations` ledger already records — so a restart is always safe.
+against a half-migrated schema. Migrations are idempotent. The runner skips what the
+`schema_migrations` ledger already records, so a restart is always safe.
 
 **Why `/healthz` also checks migrations.** A migration on disk that the database has no record of
 means the image and the database disagree: the instance is running, but it is serving pages against a
@@ -272,35 +273,35 @@ healthcheck gates `caddy` on it.
 ### 3.3 Configuration surface
 
 Every setting is an environment variable, and `server/config.ts` is the only module that
-*interprets* one. Callers hand the environment in — `loadConfig(env)` is pure — so
+*interprets* one. Callers hand the environment in, and `loadConfig(env)` is pure, so
 `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` and `scripts/capture-screenshots.ts`
 pass `process.env` without knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
 is a Zod schema, parsed once. It carries no cross-field rules: the one it used to have coupled the
 deleted password to the deleted cookie secret, and every remaining variable stands alone.
 
 The table below is a deliberate second copy of [`DESIGN.md`](DESIGN.md) §10.1's environment surface
-table — for a contributor reading the code rather than an operator configuring a deployment. Named
+table, for a contributor reading the code rather than an operator configuring a deployment. Named
 here, in place, with DESIGN.md's table given as the one to believe.
 
 | Variable | Default | Required | Effect |
 |---|---|---|---|
-| `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true of the bundled database: an operator never sets it, the code never guesses it, and the password travels as `PGPASSWORD` instead. Running against a Postgres this project does not own is the exception on both counts — the operator sets it themselves, and `.env.example` shows it carrying its own password, which wins over `PGPASSWORD` when present. |
-| `PUBLIC_ORIGIN` | — | **yes** | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it — the first variable *the lock* needs shared with the sidecar, not the first shared full stop: `TZ` already reaches both `app` and `gate` below. Also read by the `gate` service, which builds its redirect from it. |
-| `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
+| `DATABASE_URL` | no default | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true of the bundled database: an operator never sets it, the code never guesses it, and the password travels as `PGPASSWORD` instead. Running against a Postgres this project does not own is the exception on both counts. The operator sets it themselves, and `.env.example` shows it carrying its own password, which wins over `PGPASSWORD` when present. |
+| `PUBLIC_ORIGIN` | no default | **yes** | The `https://` origin the house proxy serves this instance at, bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it, the first variable *the lock* needs shared with the sidecar, though not the first variable shared with it at all, since `TZ` already reaches both `app` and `gate` below. Also read by the `gate` service, which builds its redirect from it. |
+| `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing, since the app authenticates nobody either way, and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
 | `PRICE_WORKER_SOCKET` | `/run/price-worker/worker.sock` | no | Unix socket used by the app; override for local worker development |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
-| `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
+| `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`.** Under the documented deployment it is permanently 10 MB (§11.3). |
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
-| `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. `compose.yaml` passes this same value to `gate` too — the app's actual first variable shared with the sidecar, ahead of `PUBLIC_ORIGIN` above. |
+| `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. `compose.yaml` passes this same value to `gate` too, the app's actual first variable shared with the sidecar, ahead of `PUBLIC_ORIGIN` above. |
 
 More variables exist that the application never reads, all Compose-level and none of them validated
 by `server/config.ts`, which never sees them. **`POSTGRES_PASSWORD`** is consumed by the `db`
-service directly, and by `app` and `dump` as `PGPASSWORD` — it no longer lives inside `DATABASE_URL`
+service directly, and by `app` and `dump` as `PGPASSWORD`. It no longer lives inside `DATABASE_URL`
 at all, so there is nothing there left to keep in sync; changing it on a running instance means
 changing the role to match (`docs/operating.md`, Upgrading), not editing a URL. **`APP_VERSION`**
 selects the published image tag the `app` service runs, defaulting to the floating major. **The
-rest of the gate's settings are not in the table above, because the app reads none of the rest** —
-its Google client id and secret and its cookie encryption key genuinely are the gate's alone:
+rest of the gate's settings are not in the table above, because the app reads none of the rest.**
+Its Google client id and secret and its cookie encryption key genuinely are the gate's alone:
 Compose-level variables consumed only by the `gate` service, with no default, and a missing one
 stops `docker compose up` naming it, before any container runs, the same way a missing
 `PUBLIC_ORIGIN` does. Who may enter is not a variable at all: it is `allowed-emails.txt`,
@@ -319,7 +320,7 @@ Two properties of this module are structural rather than cosmetic:
 The settings that are deliberately *not* environment variables are the household's own: the capital
 gains rate, the masking policy and the refresh cadence, each a column on the single-row
 `app_setting` table. They are the household's numbers rather than descriptions of the deployment,
-and the person who wants one changed is the person reading the screen — not the person with a shell
+and the person who wants one changed is the person reading the screen, not the person with a shell
 on the container (`migrations/0005_app_setting.sql`; `0008_refresh_cadence.sql` for why the
 cadence's old `PRICE_POLL_INTERVAL_MINUTES` variable was removed outright rather than kept as a
 fallback).
@@ -368,70 +369,72 @@ the framework handles serialisation.
 ```
 
 **The layering rule that matters most:** *the arithmetic goes down, never up.* Money is multiplied and
-summed in SQL at `numeric` precision. When a figure has to be combined in JavaScript — a subtotal
-under a grouped table, a percentage — it goes through `app/lib/money.ts`, which works on `BigInt`
+summed in SQL at `numeric` precision. When a figure has to be combined in JavaScript, a subtotal
+under a grouped table or a percentage, it goes through `app/lib/money.ts`, which works on `BigInt`
 counts of the last decimal place. Nothing adds a money value except through `money.ts`'s units.
 
 ### 4.2 Single-site invariants
 
 A recurring shape in this codebase: a hazard is contained by making exactly one place able to cause
-it. These are the ones worth knowing before changing anything — but they are not all the same kind of
-guarantee, and treating them as one kind is how a reader ends up disproving the table with a single
-grep. They come in three tiers.
+it. The invariants below are the ones worth knowing before changing anything, but they are not all
+the same kind of guarantee, and treating them as one kind is how a reader ends up disproving the
+table with a single grep. They come in three tiers.
 
-**Enforced by structure — a second site is not reachable without deleting the first.**
+**Enforced by structure.** A second site is not reachable without deleting the first.
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all — its whole import set (`server/price-worker.ts:7-17`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
-| Importing `yahoo-finance2` | `server/yahoo-client.ts:47` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
-| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all — it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
-| Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
-| Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
-| Arming the scheduled price refresh | `app/root.tsx`'s `middleware` export — `pricePollerMiddleware`, listed **last**, after `crossOriginMutationMiddleware` and `lockMiddleware` | Last so a refusal never carries the side effect: `lockMiddleware` throws for a locked, grant-less request before calling `next()`, and only a request that reaches `next()` all the way through the array arms the poller. Being last still means `/healthz` and `/unlock` — the lock's own exemptions — arm it, which is the shipped healthcheck's situation. A second site (a route or loader calling `startPricePoller` on its own) would race the same idempotent guard for no benefit and could reintroduce the render-only bootstrap this row replaces (`app/lib/price-poller.server.ts`). |
+| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all. Its whole import set (`server/price-worker.ts:7-17`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:47` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it, quotes and daily history, and a second importer would double what a swap costs. |
+| Writing a price | `app/lib/prices.server.ts`, the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all, since it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
+| Enforcing the lock | `app/root.tsx`'s `middleware` export, `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it, the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
+| Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes, which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
+| Arming the scheduled price refresh | `app/root.tsx`'s `middleware` export, `pricePollerMiddleware`, listed **last**, after `crossOriginMutationMiddleware` and `lockMiddleware` | Last so a refusal never carries the side effect: `lockMiddleware` throws for a locked, grant-less request before calling `next()`, and only a request that reaches `next()` all the way through the array arms the poller. Being last still means `/healthz` and `/unlock`, the lock's own exemptions, arm it, which is the shipped healthcheck's situation. A second site (a route or loader calling `startPricePoller` on its own) would race the same idempotent guard for no benefit and could reintroduce the render-only bootstrap this row replaces (`app/lib/price-poller.server.ts`). |
 
 **Owned by a module, upheld by its callers.**
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:71`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:172-173`) by Node's own `fetch`/undici — neither `server/config.ts` nor any application code reads either. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:42`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
-| Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller passes `process.env` in, and none of them reads a variable itself: the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, and the capture script. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:71`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:172-173`) by Node's own `fetch`/undici. Neither `server/config.ts` nor any application code reads either. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling. The route (`app/routes/upload.tsx:42`) must read the multipart body through `readUploadForm`, which counts bytes as they stream, and never through `request.formData()`, which buffers a chunked body without limit. Every other action goes through `formFields`, which drops file parts by design. |
+| Everything read off a closed vocabulary: an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind, one for which kinds hold their whole position in one number and one for which run negative, are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data, because the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
-| Settling the owner-filter reading — the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading` — what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it — or, for the chart's reads, name it to the module that makes them, which §6.3 sets out — so whose money a loader reads stays visible in review rather than hidden inside this one. |
+| Settling the owner-filter reading: the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading`, what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it. For the chart's reads they name it to the module that makes them, which §6.3 sets out. Either way, whose money a loader reads stays visible in review rather than hidden inside this one. |
+| Resolving masking for one request | `app/lib/masking.server.ts:maskingForRequest` | Root and Holdings call this helper with React Router's request context, so parallel loaders share one deferred policy-and-cookie read and one fail-closed result. Nothing else calls `resolveMasked` while serving a screen. The `/masking` action reads the policy only to choose the cookie lifetime, and Settings reads it to draw and save the policy itself. |
+| Appending to an account's history, and closing the account | `app/lib/accounts.server.ts` | `withAccountLock` takes `select … for no key update` on the account row inside one transaction and hands the writer the row it locked. The obligation is on every writer that inserts a `position_set`, and on `closeAccount`: run inside it from the read decided on to the insert, and thread its transaction through every query on the way. A writer that reads the latest set outside it reintroduces #283 (§7.2). |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:125` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:132` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
-| Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons — both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
+| Whose money a screen is reading | The readers' own signatures, where the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons, both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip, since a new screen can pass `ALL_OWNERS` and draw no control. It can only make the filter **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:783` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+- `prices.server.ts:775` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
   `holding` and `position_set` that §11.1 warns about, to find the earliest date an instrument was
-  held — the batch's next few and the whole list Settings → Prices renders, sharing one predicate
+  held, the batch's next few and the whole list Settings → Prices renders, sharing one predicate
   so a household and a tick cannot disagree about what has a gap. Both read dates and count nothing;
   neither touches a money column. Neither takes an `OwnerFilter` and neither should: a coverage gap
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
-  diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
-  in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
+- `uploads.server.ts:460` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+  diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
+  compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
 - `valuation.server.ts:417` (`readSessionSeries`) values holdings from `price_observation` rather
-  than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
+  than through `holding_valued`, the 1D chart's line and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
   both, so the rule stays "one module values holdings" rather than becoming "one view does". It
   hand-writes the join to `holding` that §11.1 warns about, because no view can express "priced at
-  an instant", and it earns that by living beside the readers it must agree with — the last point of
+  an instant", and it earns that by living beside the readers it must agree with. The last point of
   its line and `netWorth()` are the same figure by construction (ADR-0006). A screen writing its own
   join over `price_observation` has left the mitigation exactly as one over `holding` has.
 
@@ -443,8 +446,8 @@ a real boundary, not a naming preference:
 - `*.server.ts` may import the database, the config, and Node built-ins.
 - `*.ts` in `app/lib` must be safe in a browser bundle. `allocation.ts` and `holdings-view.ts`
   import `ValuedHolding`, and `account-options.ts` imports
-  `AccountKind`/`TaxTreatment`/`AssetClass`, from `valuation.server.ts` — all **type-only
-  imports**, which are erased at compile time and pull no server code across. That is what lets a
+  `AccountKind`/`TaxTreatment`/`AssetClass`, from `valuation.server.ts`. All are **type-only
+  imports**, which the compiler erases and which pull no server code across. That is what lets a
   screen component call `allocationBy()` on loader data, and the upload wizard render its
   asset-class options from the same list the resolver validates against.
 
@@ -456,7 +459,7 @@ the boundary. Worth fixing before that happens rather than after.
 
 ### 4.4 Request lifecycle
 
-A representative read — `GET /holdings?owner=2&group=account` — end to end. The parameter order
+A representative read, `GET /holdings?owner=2&group=account`, end to end. The parameter order
 matters: `toSearch` builds a canonical search string, and a URL that does not match it is bounced
 before any database work happens (`holdings.tsx:75`), so `?group=account&owner=2` would 302 first.
 
@@ -493,12 +496,12 @@ sequenceDiagram
 Three properties of this path are deliberate:
 
 1. **The gate is in front of the process, not inside it, and decides *who*.** A request that reaches
-   a loader has already been admitted at the front door — that judgment is made there and nowhere
-   else. Everything the app serves is behind it, static assets included — which the in-app gate this
+   a loader has already been admitted at the front door, and that judgment is made there and nowhere
+   else. Everything the app serves is behind it, static assets included, which the in-app gate this
    replaced could not manage, because assets are served ahead of the router. A route added by a later
    slice is protected the moment it exists, and nobody has to remember to protect it. See §7.6.
-   **The app does now carry authentication middleware and an open list of its own** — the lock's
-   `middleware` export and its `LOCK_EXEMPT_PATHS` (`app/root.tsx`, ADR-0012; §4.2, §7.6 below) — but
+   **The app does now carry authentication middleware and an open list of its own**, the lock's
+   `middleware` export and its `LOCK_EXEMPT_PATHS` (`app/root.tsx`, ADR-0012; §4.2, §7.6 below), but
    they refuse a *browser* holding no live grant, never decide *which person* is asking. That
    judgment is still the gate's alone.
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
@@ -519,40 +522,46 @@ after its action (React Router 7.18.2), so showing amounts obtains a fresh exact
 correction inputs mount.
 
 The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
-publishes its synchronous write, and the cookie stays ahead of loader data after the fetcher settles
-or fails. This prevents an older exact Show revalidation from remounting correction inputs after a
-newer Hide. A successful policy resolution is an explicit root-loader field; when the policy read
-fails, that field keeps the browser masked even if a pre-existing cookie says to show. The hook's
-server snapshot remains the root loader value, so hydration has no module-global request state.
-During either transition the editor requires both unmasked state and an exact projection, preventing
-stale exact data or a placeholder from becoming a form default.
+publishes its synchronous write. Redirect revalidations from two toggles can overlap, letting an
+older exact Show response finish after a newer redacted Hide response; cookie precedence keeps that
+late loader data from remounting correction inputs. A successful policy resolution is an explicit
+root-loader field. When the policy read fails, that field keeps the browser masked even if a
+pre-existing cookie says to show. The hook's server snapshot remains the root loader value, so
+hydration has no module-global request state. During either transition the editor requires both
+unmasked state and an exact projection, keeping stale exact data or a placeholder out of form
+defaults.
 
 ### 4.5 Write paths
 
-Every operation that produces **history** — the position sets every figure is computed from, the
-price spine they are valued against, and the vocabulary that makes them readable — appends. None
-rewrites a past fact. They are listed in full rather than counted, so adding one is a row here
+Every operation that produces **history** appends: the position sets every figure is computed from,
+the price spine they are valued against, and the vocabulary that makes them readable. None rewrites
+a past fact. They are listed in full rather than counted, so adding one is a row here
 rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
-| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes — a new set |
-| Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes — a new set |
-| Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:528`) |
-| Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
-| Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes — it fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
+| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` when still null | Yes, a new set |
+| Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes, a new set |
+| Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `upload_draft_answer` (the draft's own answer, never `instrument_alias`) | Yes, with one compensating delete: an instrument created for a string that vocabulary gained meanwhile, or that the same draft's earlier submit already answered, is removed rather than left as a duplicate |
+| Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No. The intraday tier is overwritten by design |
+| Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes. It fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
+
+The first three, the writers of history, run inside `withAccountLock` (§4.2, §7.2), and
+`closeAccount` with them; the rest touch no account's history.
 
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:161` edits an account and `:238` closes one, `people.server.ts:117`
-renames a person and `:138` deletes one outright when they own no accounts, `settings.server.ts:29`
+CRUD should: `accounts.server.ts:189` edits an account and `:268` closes one, `people.server.ts:117`
+renames a person and `:138` deletes one outright when they own no accounts,
+`instrument-aliases.server.ts`'s `changeAlias` repoints an alias in place or deletes it outright
+once a preview has been confirmed, `settings.server.ts:29`
 writes the tax rate, `column-mapping.server.ts:50` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
 every date the chart plots.
 
 **Why append-only is not a preference.** An `update holding set quantity = …` would not correct a
-number — it would silently restate every figure back to the date of the statement that row landed in.
+number. It would silently restate every figure back to the date of the statement that row landed in.
 Your March net worth would move because you fixed an August typo, with nothing on any screen saying
 so (`positions.server.ts` header).
 
@@ -584,7 +593,7 @@ Everything on the balance sheet is a position, including cash and debt:
 
 **The sign lives in quantity, never in price.** A price is a positive market fact; a negative quantity
 is the standard encoding for a liability. The structural consequence is that **net worth is a single
-`SUM` with no branches** — no `is_liability` column, and no branch for cash or debt in the view, the
+`SUM` with no branches**: no `is_liability` column, and no branch for cash or debt in the view, the
 as-of function, or any total.
 
 There is exactly one place the sign is read: the allocation denominator. A slice's share is computed
@@ -593,8 +602,8 @@ are not the same slice of anything (argued at `allocation.ts:12-13`, applied in 
 `:56-90`), and the Analysis screen prints that caveat to the reader.
 
 Four seed rows in `migrations/0001_initial_schema.sql` are what make this hold end to end: a `Cash`
-classification, a `USD` instrument with `price_source = 'fixed'`, a `quote` of `1.00`, and — the
-load-bearing one — a `price_daily` row for `USD` dated **1970-01-01**. Because the as-of function
+classification, a `USD` instrument with `price_source = 'fixed'`, a `quote` of `1.00`, and, the
+load-bearing one, a `price_daily` row for `USD` dated **1970-01-01**. Because the as-of function
 carries the last close forward, that single row resolves USD to `1.00` for every date the system will
 ever be asked about, including statements dated before the app was installed.
 
@@ -605,6 +614,8 @@ erDiagram
     PERSON ||--o{ ACCOUNT : "owns (single owner)"
     ACCOUNT ||--o{ POSITION_SET : "receives statements"
     ACCOUNT ||--o{ UPLOAD_DRAFT : "stages"
+    UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ANSWER : "answers"
+    INSTRUMENT ||--o{ UPLOAD_DRAFT_ANSWER : "answered as"
     POSITION_SET ||--o{ HOLDING : "photographs"
     INSTRUMENT ||--o{ HOLDING : "is held as"
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
@@ -703,6 +714,11 @@ erDiagram
         boolean had_first_sightings "nullable — the step strip's memory"
         timestamptz created_at "swept at 24h"
     }
+    UPLOAD_DRAFT_ANSWER {
+        bigint draft_id PK "composite with raw_string; on delete cascade"
+        text raw_string PK "collate C — byte-exact, as instrument_alias"
+        bigint instrument_id FK "on delete cascade"
+    }
     PASSKEY {
         text credential_id PK "exactly as the library returns it, never re-encoded"
         bytea public_key "the public half; the private half is never seen"
@@ -732,7 +748,7 @@ These tables stand outside the graph because they reference nothing:
 | `price_poll` | `id bigint PK`, `started_at timestamptz`, `requested`/`priced`/`stale integer` | One refresh attempt, recorded whether or not any observation resulted. Deliberately references no instrument: it describes the attempt, not a price. |
 | `schema_migrations` | `filename` PK, `applied_at` | The migration ledger. Created by the runner, since it must exist before anything else. |
 
-### 5.3 What deletion does — the history policy, read off the FKs
+### 5.3 What deletion does: the history policy, read off the FKs
 
 `ON DELETE` is where "nothing is ever deleted" stops being a promise and becomes a constraint. The
 split is exact and each side is a decision:
@@ -745,23 +761,28 @@ split is exact and each side is a decision:
 | `instrument.classification_id` → `classification` | `RESTRICT` | Not-null, so a row would be orphaned. |
 | `holding.position_set_id` → `position_set` | `CASCADE` | Holdings have no meaning apart from their set. |
 | `instrument_alias.instrument_id` → `instrument` | `CASCADE` | An alias is vocabulary about a row that no longer exists. |
-| `quote` / `price_daily` / `price_observation` / `price_backfill` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted — nor was its history ever fetched, which is why the backfill ledger cascades with the rest rather than standing outside the graph as `price_poll` does. |
+| `quote` / `price_daily` / `price_observation` / `price_backfill` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted, nor was its history ever fetched, which is why the backfill ledger cascades with the rest rather than standing outside the graph as `price_poll` does. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
-| `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it — how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
+| `upload_draft_answer.draft_id` → `upload_draft` | `CASCADE` | An answer is the draft's own. A draft abandoned, swept or committed takes its answers with it; the commit has promoted the ones it needed first (issue #291). |
+| `upload_draft_answer.instrument_id` → `instrument` | `CASCADE` | As `instrument_alias`: an answer naming a gone instrument says nothing. |
+| `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it, which is how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
-hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
-performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
-instrument that lost an alias race (`instrument-resolution.server.ts:528`) are the only two
-application deletes reaching that half, there is no account delete and no position-set delete
-anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
-about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
+hand.** Above `unlock_grant`'s own row, the application deletes a referenced row only where that row
+is scaffolding or was never held: an `upload_draft`, at commit and at the sweep, taking its
+`upload_draft_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
+`removePerson`); a just-created, never-held instrument that lost the race for its string
+(`instrument-resolution.server.ts`'s `resolveAll`). There is no account delete and no position-set
+delete anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql`
+session, not about a screen. The alias a household forgets (`instrument-aliases.server.ts`'s
+`changeAlias`) is a leaf nothing references, so it cascades nothing and belongs with the in-place
+writes above. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
 both routinely: removing a passkey (`removePasskey`), the explicit "Lock
 now" control (`app/routes/lock-now.ts`, through `deleteGrant`), and the
-expired-grant sweep every grant mint runs first (`mintGrant`) — each in
-`app/lib/lock.server.ts` — issue a real `DELETE`
+expired-grant sweep every grant mint runs first (`mintGrant`), each in
+`app/lib/lock.server.ts`, issue a real `DELETE`
 from a route. The cascade this table adds is what then carries a passkey removal into ending that
-passkey's own grants with it — a further delete the application never states as its own statement.
+passkey's own grants with it, a further delete the application never states as its own statement.
 
 Retirement is `account.closed_at`, never a delete. `holding_valued` excludes closed accounts;
 `holding_valued_at(d)` includes them for the dates they were open (`closed_at is null or closed_at >
@@ -793,27 +814,31 @@ DESIGN.md §8.2 names as the weakest point in the whole design.
                     ── ONE row type, not two ──
 ```
 
-**`latest_position_set(p_account_id, p_as_of)`** — `stable`, `cost 1000`, one function, one
-ordering. The cost is a planner hint rather than a property of the answer, argued in
-`0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per account, tie-broken by
+**`latest_position_set(p_account_id, p_as_of)`** is declared `stable` with `cost 1000`. It is one
+function with one ordering. The cost is a planner hint rather than a property of the answer, argued
+in `0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per account, tie-broken by
 `created_at desc` then `id desc`. Re-uploading a correction for an as-of date that already has a set
 is a real occurrence; without the tie-break the answer is a coin flip. Surrogate keys are `bigint
 generated always as identity` precisely so that "tie-break by id descending" means "the later insert
-wins" — a random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
-exactly, so this is an index scan stopping at the first row.
+wins". A random UUID would make it arbitrary. `created_at` is stamped by `statement_timestamp()` at
+the insert, not `now()` at `BEGIN` (`0014_position_set_created_at.sql`): a writer that waited for
+the account lock (§7.2) began its transaction before the set it then copies forward, and a
+`BEGIN`-time stamp would sort its set, the one carrying both edits, behind the one it waited for.
+The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping
+at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
-*predecessor* of a given set — "what did this account hold before this upload landed" — which the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1131`) needs the
+*predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
 
-**`holding_valued`** — a plain, **non-materialised** view. Data changes on upload, a household's
+**`holding_valued`** is a plain, **non-materialised** view. Data changes on upload, a household's
 portfolio is small, and a materialised view would introduce a refresh step whose omission shows up as
 silently stale totals. It exposes account, owner, institution, kind, tax treatment, instrument,
 classification and asset class alongside the numbers, so every dashboard grouping is available with
 no additional join.
 
-**`holding_valued_at(d date)`** — a set-returning function, because a plain view cannot be
+**`holding_valued_at(d date)`** is a set-returning function, because a plain view cannot be
 parameterised. Critically it is declared `returns setof holding_valued`, so it has *literally the
 view's row type*: adding a column to the view forces this to move with it. It is not a second
 definition of "holdings, valued"; it is the same definition varying only what must vary.
@@ -824,11 +849,11 @@ Four rules are encoded in the view, and each one is a refusal to understate:
    value and the row **still appears**, carrying `is_priced = false`. An inner join would make the
    holding vanish from every total silently.
 2. **Null propagates through `unrealized`.** `value - cost_basis` is null when either side is null.
-   Nothing coalesces a null cost basis to zero — that would report a fake gain equal to the entire
+   Nothing coalesces a null cost basis to zero, which would report a fake gain equal to the entire
    untracked position.
 3. **A stale price is used, not discarded.** `is_stale` is carried through where a price exists; the
    last known value beats a zero or a null. A holding with no `quote` row at all comes back
-   `is_stale = false`, not null — `coalesce(q.is_stale, false)` — because unpriced is not stale.
+   `is_stale = false`, not null, through `coalesce(q.is_stale, false)`, because unpriced is not stale.
    Staleness is a property of a price that exists.
 4. **Rounded to the money scale exactly once.** `quantity × price` carries scale 12 and is cast back
    to `numeric(20,4)` in a named `cross join lateral`, so `unrealized` is literally `value -
@@ -837,23 +862,24 @@ Four rules are encoded in the view, and each one is a refusal to understate:
 
 The carry-forward in `holding_valued_at` is what removes the calendar from the read path entirely.
 Non-trading days get no `price_daily` row at all (§6.2), so a Saturday resolves to Friday's close, a
-Sunday to the same Friday, and a market holiday to the trading day before it — with no calendar table
+Sunday to the same Friday, and a market holiday to the trading day before it, with no calendar table
 anywhere.
 
 ### 5.5 Indexes, and what each one is for
 
 | Index | Definition | Serves |
 |---|---|---|
-| `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
+| `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set`, matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
 | `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). Also the `Index Cond` every valuation read resolves `latest_position_set` into, since `0011_latest_position_set_cost.sql` priced the call out of a hash join. |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
-| `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:30-36`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
+| `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:30-36`), on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value, since it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
 | `account_owner_id_idx` | `(owner_id)` | Grouping by person. |
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
+| `upload_draft_answer_instrument_id_idx` | `(instrument_id)` | The instrument cascade, as `instrument_alias_instrument_id_idx`; the answers themselves are reached through the primary key `(draft_id, raw_string)`. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
-| `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at` — an index scan stopping at the first row, executed once per holding per plotted date. |
+| `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at`, an index scan stopping at the first row, executed once per holding per plotted date. |
 | `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. |
 | `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. |
 
@@ -872,13 +898,13 @@ const STRING_TYPE_OIDS = [
 Three OIDs, for three different reasons. `NUMERIC` (1700) is the one that changes behaviour:
 `node-postgres` parses `numeric` into a JavaScript number by default. A six-figure balance then
 surfaces later as two dashboards disagreeing by cents, with no error anywhere. Registering the
-override anywhere other than at pool construction would leave a code path that gets numbers — which
+override anywhere other than at pool construction would leave a code path that gets numbers, which
 is why there is exactly one construction site (§4.2).
 
 `DATE` (1082) is the same class of bug in different clothing: `pg` parses Postgres `date` into a JS
 `Date` at *local* midnight, so formatting it back in any timezone west of UTC yields the previous day.
 `position_set.as_of_date` shifting by a day would select the wrong position set, silently. `INT8`
-(20) changes nothing — `pg` already returns bigints as strings — and is listed to make the guarantee
+(20) changes nothing, since `pg` already returns bigints as strings, and is listed to make the guarantee
 explicit rather than inherited, which is why every surrogate key crosses the boundary as a string.
 
 `timestamp` and `timestamptz` are deliberately left alone. `created_at`, `closed_at` and
@@ -903,11 +929,11 @@ Postgres numeric(20,4)  ──▶  "12345.6700"  ──▶  toUnits(s, 4) → 12
 Three rules follow, and the codebase holds all three:
 
 - **Never `Number()`, `parseFloat`, or JSON round-trip a money value.** Almost every `Number()` call
-  in `app/lib` is on a cardinality — a row count, a header index, a clock minute. There are exactly
-  two deliberate exceptions, and both are narrow enough to state: `format.ts:139` (`toPlotValue`)
+  in `app/lib` is on a cardinality: a row count, a header index, a clock minute. There are exactly
+  two deliberate exceptions, and both are narrow enough to state. `format.ts:139` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
-  and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:99` floats a yield or a per-share dividend rate only to decide
+  and rounded to a screen coordinate, so never use it for a figure that is shown, compared or
+  summed. `price-provider.server.ts:99` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -918,7 +944,7 @@ The generated types carry the **read** half of this: `npm run db:types` runs `ky
 --numeric-parser string --date-parser string` against the live database, including views, so a
 `numeric` column selects as a `string`. Two caveats a reader needs:
 
-- The generated `Numeric` is `ColumnType<string, number | string, number | string>` — the select side
+- The generated `Numeric` is `ColumnType<string, number | string, number | string>`. The select side
   is a string, but an insert or update still *accepts* a JavaScript number. On the write path the
   rule is a convention, not a compile-time guarantee.
 - Postgres reports every column of a view as nullable regardless of the underlying column, so
@@ -933,7 +959,7 @@ regeneration after a migration mandatory rather than remembered.
 
 ## 6. Dataflows
 
-### 6.1 Ingest — a brokerage CSV becomes a position set
+### 6.1 Ingest: a brokerage CSV becomes a position set
 
 The largest subsystem in the application, and the one where a wrong answer would be silent. It is
 four screens, each a real URL with no client state, over one staging row.
@@ -960,30 +986,34 @@ flowchart TD
         R1["readCsv"] --> R2["parseStatement"] --> R3["assembleDiff<br/><i>folds AGAIN, by RESOLVED instrument</i>"] --> R4["commitUpload<br/>one transaction"]
     end
 
-    A[("instrument_alias")]
-    I4 -->|writes| A
-    A -->|"read back — never handed<br/>over in memory"| R3
+    DA[("upload_draft_answer<br/><i>this draft's answers</i>")]
+    A[("instrument_alias<br/><i>vocabulary</i>")]
+    I4 -->|writes| DA
+    DA -->|"read back — never handed<br/>over in memory"| R3
+    A -->|"read too — outranks<br/>the draft's answer"| R3
+    R4 -->|"promotes, for the strings<br/>the file names"| A
 
     classDef store fill:#f2efe6,stroke:#8a7a5c,color:#3b3222
-    class D,A store
+    class D,DA,A store
 ```
 
 **Nothing passes between steps in memory.** Each screen re-reads the draft's bytes, re-parses them
-through the saved mapping, and re-resolves against the alias table. `resolveAll` is not a stage that
-hands its output to the commit — it has one caller, the instruments route, and it communicates with
-the commit only by having written rows into `instrument_alias`. That is what makes a reload, the back
-button and a bookmarked half-finished upload all behave, and it is why the mapping records its own
-delimiter rather than letting a second sniff reach a different verdict.
+through the saved mapping, and re-resolves against vocabulary and the draft's own answers.
+`resolveAll` is not a stage that hands its output to the commit. It has one caller, the instruments
+route, and it communicates with the commit only by having written rows into `upload_draft_answer`.
+That is what makes a reload, the back button and a bookmarked half-finished upload all behave, and
+it is why the mapping records its own delimiter rather than letting a second sniff reach a different
+verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
-again by the *resolved instrument*, so two spellings of one fund — `FCASH` and `CASH & CASH
-INVESTMENTS` — collapse once the alias table says they are the same thing. The parser cannot do the
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:486`) folds
+again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
+INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
 
-Both parsing halves are **pure** — no database, no request — so every awkward file in existence is a
-fixture and a test rather than a bug found on the review screen with a household's real statement in
-hand. Six live in `tests/fixtures/statements/`: Fidelity, Schwab, a 401k, a liability, a lot-level
+Both parsing halves are **pure**, with no database and no request, so every awkward file in
+existence is a fixture and a test rather than a bug found on the review screen with a household's
+real statement in hand. Six live in `tests/fixtures/statements/`: Fidelity, Schwab, a 401k, a liability, a lot-level
 export, and a semicolon-delimited one.
 
 Two invariants everything downstream leans on:
@@ -991,21 +1021,21 @@ Two invariants everything downstream leans on:
 - **`readCsv` never throws on content.** Malformed UTF-8 becomes replacement characters, an
   unterminated quote runs to end of file, a stray quote mid-field is kept as a character. A file it
   cannot make sense of still yields rows for the caller to judge, so the refusal a reader eventually
-  sees is a sentence about their statement — never a stack trace.
+  sees is a sentence about their statement, never a stack trace.
 - **Row indices are stable.** Blank rows are *kept* in the row list, because a saved mapping's
   `headerRow` is an index into these rows. Dropping a blank line would silently shift every mapping
   made against a file after it.
 
 **`parseStatement` returns refusals as data, not throws.** Each problem carries the row and the column
-that caused it. The *column* is what the screen uses structurally — `problemFieldsOf`
-(`columns.tsx:179`) marks the offending `<select>` as invalid, because remapping is the fix; the row
+that caused it. The *column* is what the screen uses structurally: `problemFieldsOf`
+(`columns.tsx:179`) marks the offending `<select>` as invalid, because remapping is the fix. The row
 travels inside the message the reader sees ("on line 12"). A thrown error could name only the first
 fault, and a screen cannot point at a stack trace.
 
 Problems present means the file must not be committed. Whether anything is still returned depends on
 what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
-so the screen has something to show beside the complaint. A problem with the **mapping itself** — a
-required column not named, a column name the header row does not carry — returns no positions at all
+so the screen has something to show beside the complaint. A problem with the **mapping itself**, a
+required column not named or a column name the header row does not carry, returns no positions at all
 (`statement.ts:192`), because nothing below it could be trusted. The second case is the ordinary
 one: a saved mapping meeting a renamed column.
 
@@ -1020,7 +1050,7 @@ stateDiagram-v2
     Columns --> Instruments: mapping saved, file raises<br/>a string no alias resolves
     Columns --> Review: mapping saved, every string known
 
-    Instruments --> Review: resolveAll() — aliases written NOW,<br/>not at commit
+    Instruments --> Review: resolveAll() — answers written on<br/>the draft; vocabulary waits for commit
 
     Review --> Columns: mapping no longer parses —<br/>DraftNotReadyError, resume where the answer is
     Review --> Instruments: a first sighting reappeared
@@ -1037,15 +1067,15 @@ stateDiagram-v2
 **Where the draft got to is a property of the row, not a status column.** `mapping` is null until the
 columns step passes; with one, the file's own strings decide between instruments and review.
 `parseDraft` computes that in one place. `/upload/:draftId` matches two things: a layout
-(`upload/draft.tsx` — the page title, the step strip, and the one expired-draft error boundary all
-four steps throw into) and an index route with no page of its own (`upload/index.tsx`), whose loader
-redirects to whichever step is still owed. Nothing renders at the bare address; a screen there would
+(`upload/draft.tsx`, which carries the page title, the step strip, and the one expired-draft error
+boundary all four steps throw into) and an index route with no page of its own
+(`upload/index.tsx`), whose loader redirects to whichever step is still owed. Nothing renders at the bare address; a screen there would
 be a fifth step nobody asked to stand on.
 
 **A dead draft is one page, not four.** Swept, already committed, mistyped and
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
-next move — start again from `/upload` — is the same in every case. The one variation is deliberate: a
-re-POSTed review knows which account the statement already landed in, so it throws
+next move, starting again from `/upload`, is the same in every case. The one variation is
+deliberate: a re-POSTed review knows which account the statement already landed in, so it throws
 `data({ accountId }, { status: 404 })` (`review.tsx:87`) and that rendering adds a second link to the
 account. Every other step throws a plain-string 404 and gets the single link.
 
@@ -1061,17 +1091,20 @@ The two sensitivities are chosen in opposite directions, deliberately:
 | Change to the header | Same fingerprint? | Consequence |
 |---|---|---|
 | `SYMBOL` retitled `Symbol` | **Yes** | A brokerage changing case has not changed what any column means. |
-| Columns reordered | **No** | One re-map — cheaper than a mapping that silently follows a column that moved. |
+| Columns reordered | **No** | One re-map, cheaper than a mapping that silently follows a column that moved. |
 
 `NOT_IN_FILE` (`"__none__"`) is a sentinel distinct from the empty string: "unset" and "not in this
 file" are different answers, and only the deliberate one survives a save.
 
-#### Instrument resolution: vocabulary, remembered forever
+#### Instrument resolution: vocabulary, remembered once recorded
 
-Lookup against `instrument_alias` is **byte-exact** — that is `collate "C"` doing its job. No
+Lookup against `instrument_alias` is **byte-exact**, which is `collate "C"` doing its job. No
 trimming, no case folding, no heuristics. A respelling is rightly a first sighting even when the
 instrument is old news, because a heuristic that "helpfully" merged two near-identical strings would
-attach a holding to the wrong fund silently. A miss prompts once and is remembered permanently.
+attach a holding to the wrong fund silently. A miss prompts once per draft; the answer is the
+draft's own (`upload_draft_answer`) until its statement is recorded, when the commit promotes it into
+`instrument_alias` ([ADR-0013](docs/adr/0013-a-first-sighting-answer-is-the-drafts-until-recorded.md)).
+Vocabulary wins over a draft's answer wherever both name a string.
 
 ```mermaid
 sequenceDiagram
@@ -1095,90 +1128,120 @@ sequenceDiagram
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end
     IR->>PG: BEGIN
+    IR->>PG: select upload_draft … for update — none? 404, the draft was swept
     IR->>PG: insert classification (new ones, deduped within the submit)
     IR->>PG: insert instrument
-    IR->>PG: insert instrument_alias — ON CONFLICT: existing row wins
-    Note right of IR: Lost the race? The instrument this<br/>submit just created is DELETED rather<br/>than left as a duplicate.
+    IR->>PG: select instrument_alias — vocabulary gained meanwhile wins
+    IR->>PG: insert upload_draft_answer — ON CONFLICT (this draft's own earlier submit): that row wins
+    Note right of IR: Lost either way? The instrument this<br/>submit just created is DELETED rather<br/>than left as a duplicate.
     IR->>PG: COMMIT
     IR-->>R: ResolvedAlias[]
     R-->>U: redirect → review
 ```
 
-**The writes happen at this step rather than at commit, deliberately.** An alias is a fact about
-vocabulary, not about this statement, so re-uploading a corrected file must not ask the same
-questions again. A draft abandoned after this step leaves the vocabulary behind, which is correct:
-the next upload is quieter, and nothing was recorded as held.
+**The instrument and classification rows are written at this step; the alias is not.** The answer
+lands on the draft, and `commitUpload` promotes it into vocabulary for the strings the recorded file
+names. Until then it is read by this draft alone, so a wrong match made in an upload nobody finished
+never resolves the next one silently (audit QA-04, issue #291). The cost is deliberate: a file
+corrected and re-uploaded *before* the first attempt was recorded asks its questions again. A
+created instrument does outlive an abandoned draft, unaliased and unheld, which is clutter rather
+than a wrong figure; Settings → Instruments is where a promoted alias is repointed or forgotten.
 
 There is deliberately **no skip**. A skipped row is a holding silently missing from the statement.
 
 #### Commit: the flow's one write
 
-`commitUpload` is the deepest function in the codebase — three parameters over an entry check, seven
-guards and a transaction. The order is the design:
+`commitUpload` is the deepest function in the codebase, three parameters over an entry check, the
+account lock, seven guards and a transaction. The order is the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> A1{"draft still there?"}
-    A1 -->|no| R0["404 — swept, or already committed"]
+    A["commitUpload(draftId, input)"] --> A0{"draft still there?<br/>(only to learn which account)"}
+    A0 -->|no| R0["404 — swept, or already committed"]
+    A0 -->|yes| T["BEGIN, lock the account row<br/>(withAccountLock, §7.2)"]
+    T --> A1{"draft still there,<br/>read under the account lock?"}
+    A1 -->|no| R0
     A1 -->|yes| B{"account closed?"}
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
     C -->|yes| R2["refuse: stale or forged form"]
-    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, classify"]
-    D --> E{"file names two<br/>different accounts?"}
+    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, resolve the<br/>date, classify against ITS<br/>dated baseline (#181)"]
+    D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
+    D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
+    D1 -->|no| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
-    F -->|no| G{"file dated itself?"}
-    G -->|no| G1{"posted asOf a real,<br/>non-future date?"}
-    G1 -->|no| R5["refuse: the statement date"]
-    G -->|yes| H
-    G1 -->|yes| H
-    H{"quantity × basis, or<br/>quantity × price,<br/>overflows numeric(20,4)?"}
+    F -->|no| H{"quantity × basis, price or<br/>dividend rate overflows<br/>numeric(20,4)?"}
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
-    H -->|no| I{"majority removed and<br/>not confirmed?"}
-    I -->|yes| R7["refuse, stating the ratio"]
-    I -->|no| T["BEGIN"]
-
-    T --> T1["DELETE the draft FIRST"]
+    H -->|no| J{"posted baselineSetId ≠ the<br/>diff's; filed behind and<br/>unconfirmed; or majority removed<br/>and unconfirmed?"}
+    J -->|any| R7["refuse, naming every applicable<br/>reason — the stale-baseline sentence<br/>fires whenever the baseline moved and<br/>no unconfirmed filed-behind demand is<br/>left to subsume it (#181)"]
+    J -->|none| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
+    T0 --> T1["DELETE the draft"]
     T1 --> T2{"0 rows deleted?"}
-    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT"]
-    T2 -->|no| T3["INSERT position_set"]
+    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT, promotion included"]
+    T2 -->|no| T2b{"vocabulary for the file's strings,<br/>read FOR SHARE: any meaning differing<br/>from the diff's, or missing?"}
+    T2b -->|yes| R9["refuse: recorded, repointed or forgotten<br/>under the review; promotion rolled back"]
+    T2b -->|no| T3["INSERT position_set"]
     T3 --> T4["INSERT holdings"]
     T4 --> T5["UPDATE account.external_account_number<br/>only where still null"]
     T5 --> T6["COMMIT"]
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9 refuse
 ```
 
-Three of those deserve emphasis:
+Five of those deserve emphasis:
 
-- **The as-of guard is easy to miss** and sits in the middle of the run. When the file dates itself,
-  that date is used; when it does not, the date the reader typed is validated here — not in
-  `parseStatement`, which never saw it.
-- **The product guard.** A product past `numeric(20,4)` does not fail the *write* — it succeeds, and
+- **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the two-account and
+  account-number guards rather than between them. When the file dates itself, that date is used;
+  when it does not, the date the reader typed is validated here, not in `parseStatement`, which
+  never saw it. Resolving it first is what lets every guard after read the dated baseline the
+  commit will actually act on, and it is the one refusal in this diagram that is not a
+  `RefusedUpload`: no diff exists yet for a bad date to attach to.
+- **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
+  classifies against the latest set at or before the resolved date, not always "now"; `J` collects
+  every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
+  the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
+  majority removal — and throws once, naming every applicable one. The stale-baseline sentence
+  fires whenever the baseline moved and no unconfirmed filed-behind demand is left to subsume it —
+  reason 2 subsumes reason 1 whenever it applies, not only on an untouched first submission. Ticks
+  are irrelevant to it: an untouched first submit of a backdated, undated file also has its
+  baseline "move" between the loader's guess and the commit's own resolved date, and that is not
+  the reader's round trip to answer for (see §7.2's baseline-moving row).
+- **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
-  together. Checking both multiplications before storing turns a site-wide outage into one sentence
+  together. Checking every multiplication before storing turns a site-wide outage into one sentence
   about one row.
-- **Delete-first as the transaction's guard.** The draft's deletion leads: a concurrent commit that
-  got here first has already taken the row, so `numDeletedRows === 0` aborts everything, and nothing
-  before that point wrote anything. The entry check at the top is the cheap version of the same
-  question; this one is the version that is safe under a race.
+- **Everything under the account lock, promotion then delete-first inside it.** The first draft
+  read only learns which account to lock; the draft is read again once the row is held, so a
+  concurrent commit of the same draft waits, finds the row gone, and gets its 404 before it has
+  decided anything. The promotion of the draft's answers comes first because the delete cascades
+  those rows away; the deletion then leads the rest of the writes, and `numDeletedRows === 0`
+  still aborts everything, the promotion included. No commit reaches that abort now, but
+  `createDraft`'s 24-hour sweep runs under no lock, so a day-old draft can still vanish between
+  the re-read and the delete.
+- **Vocabulary is re-read inside the transaction.** The diff resolved the file's strings before the
+  transaction opened. A string another upload recorded, or Settings repointed or forgot, in that
+  gap would land the holding under an instrument the alias no longer names, for the next re-upload
+  to diff away. So the commit re-reads `instrument_alias` for those strings, share-locked so a
+  repoint waits for it, and refuses with a sentence on any difference or absence, which rolls the
+  promotion back with the rest.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:776-782`, guarded by
-`where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
-itself on the first upload, and every later statement is checked against it.
+file carries one, the commit writes it onto the account (`uploads.server.ts:1086-1093`, guarded by
+`where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
+predicate stays as the write's own statement of the rule). The guard arms itself on the first upload,
+and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
 majority removal demands an explicit tick.
 
-### 6.2 Pricing — quotes into three tiers
+### 6.2 Pricing: quotes into three tiers
 
 ```mermaid
 sequenceDiagram
@@ -1252,22 +1315,22 @@ sequenceDiagram
 ```
 
 A refresh writes the three tiers below, plus `price_poll`, plus `instrument.quote_type` when the
-provider names one — the latter is what keeps the Analysis screen's stocks-versus-funds split correct
-for instruments created before that column was filled in — plus `price_backfill` and a second pass
-over `price_daily` for the batch that follows the quotes.
+provider names one, plus `price_backfill` and a second pass over `price_daily` for the batch that
+follows the quotes. The `quote_type` write is what keeps the Analysis screen's stocks-versus-funds
+split correct for instruments created before that column was filled in.
 
 **The three tiers, and why the split exists** (ADR-0006 fixes the vocabulary: an observation is not
 history and a quote is not a fact):
 
 | Table | Cardinality | Lifecycle | Read by |
 |---|---|---|---|
-| `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries` — the 1D line, and nothing else |
-| `quote` | one row per instrument | overwritten in place | `holding_valued` — today's figures |
-| `price_daily` | **at most** one row per instrument per trading day | dated prices: quote refreshes upsert rows; backfill inserts only missing rows | `holding_valued_at(d)` — every historical figure |
+| `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries`, the 1D line, and nothing else |
+| `quote` | one row per instrument | overwritten in place | `holding_valued`, today's figures |
+| `price_daily` | **at most** one row per instrument per trading day | dated prices: quote refreshes upsert rows; backfill inserts only missing rows | `holding_valued_at(d)`, every historical figure |
 
 `quote` is deliberately **not** a projection of the log and is not derivable from it: the seeded
 `USD` row that prices every bank balance and liability will never generate an observation, and
-`is_stale` asserts the *absence* of one — something an append-only log cannot represent.
+`is_stale` asserts the *absence* of one, something an append-only log cannot represent.
 
 The whole *quote* write is one transaction, so a committed fetch is recorded in all of them or in
 none. The one thing that does not follow from it: a refresh whose writes fail leaves no `price_poll`
@@ -1276,34 +1339,34 @@ refresh that ran and could not commit.
 
 The batch that follows is **one transaction per instrument**, not one for the batch: an attempt's
 closes and the `price_backfill` row describing them commit together or not at all, and nothing spans
-two attempts. That is deliberate — a batch is a bounded sequence of independent fetches, and one
-unreachable instrument must not undo the four that already landed.
+two attempts. The per-instrument boundary is deliberate, because a batch is a bounded sequence of
+independent fetches, and one unreachable instrument must not undo the four that already landed.
 
-`price_backfill` is `price_poll`'s sibling and shares its argument — an attempt recorded whether or
+`price_backfill` is `price_poll`'s sibling and shares its argument, an attempt recorded whether or
 not it produced anything, so a silence can be read. Two
 things are its own: it references the instrument, because an attempt is about one, and it stores a
 named `outcome` and the provider's `error` text where `price_poll` stores only counts. That is what
-makes it the retry clock — an instrument attempted in the last day is not a candidate, so an
-unfillable gap costs one request a day rather than one every tick — and what lets Settings → Prices
-give a reason rather than a silence.
+makes it the retry clock, since an instrument attempted in the last day is not a candidate and an
+unfillable gap costs one request a day rather than one every tick. Those two things also let
+Settings → Prices give a reason rather than a silence.
 
 **`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
-the same precedent that keeps every uploaded CSV in `position_set.raw_file` — an audit artifact that
+the same precedent that keeps every uploaded CSV in `position_set.raw_file`, an audit artifact that
 may later be re-read, never computed from. `price` is the only column in that table any query may
 compute from; a figure needed for arithmetic is promoted to a typed `numeric` column in its own
 migration, because summing out of `payload` is precisely the §5.6 violation the numeric boundary
 exists to prevent. The honest rationale for keeping it is option value, and no consuming feature
-exists or is planned — a future reader should not go hunting for one.
+exists or is planned, so a future reader should not go hunting for one.
 
 **The single most important line in the pricing subsystem** is which date a close is filed under: *the
-date inside the quote's own timestamp, in the market's zone — never today's date.* Two silent failures
+date inside the quote's own timestamp, in the market's zone, never today's date.* Two silent failures
 follow from getting it wrong:
 
 - A mutual fund strikes one NAV after the close. An afternoon poll sees yesterday's NAV still
   standing; filed under today it becomes a fabricated close for a day that has not finished, and
   tomorrow's poll files the real one a day late, permanently.
 - A poll on a market holiday sees Friday's quote. Filed under the holiday it manufactures a row for a
-  day the market did not trade — which history queries then read as real, because a real row and an
+  day the market did not trade, which history queries then read as real, because a real row and an
   absent one mean different things to the carry-forward.
 
 Keyed on the quote's own instant, both cases collapse into rewriting the row that quote already owns.
@@ -1312,26 +1375,26 @@ This is the **trust asymmetry** that is `market-hours.ts`'s real interface:
 | Function | Kind | If it is wrong |
 |---|---|---|
 | `isScheduledQuoteWindow(instant, tz)` | cost optimisation | The poller wastes a handful of requests on Good Friday. Stored data is still correct. |
-| `marketDateOf(instant, tz)` | **correctness mechanism** | A real price is written under the wrong date — an error in dated valuation. |
+| `marketDateOf(instant, tz)` | **correctness mechanism** | A real price is written under the wrong date, an error in dated valuation. |
 
 `marketDateOf` never consults the holiday calendar. That is why the calendar is allowed to be a
 hardcoded five-year list rather than a rule engine: it decides whether to spend a request, never what
 to store.
 
-**Failure is a marked price, never a missing one.** A provider that throws — network failure, rate
-limit, the unofficial endpoint changing shape — is the expected case. Left to propagate, the run would
+**Failure is a marked price, never a missing one.** A provider that throws is the expected case,
+whether from a network failure, a rate limit, or the unofficial endpoint changing shape. Left to propagate, the run would
 end with every `is_stale` flag exactly as it was, so the UI would keep presenting last week's prices
 as current. Instead the error is caught, the batch becomes empty, and every selected instrument falls
 through the same path a symbol that did not come back takes: **the last known price is kept and used,
 and the row is flagged.** Never zeroed, never nulled into a sum.
 
 That holds for anything that has ever had a price. An instrument that has never been priced has no
-`quote` row to flag, so the stale update touches nothing and it stays `is_priced = false` in the view
-— which is the honest answer, and the one the coverage counts are built to report.
+`quote` row to flag, so the stale update touches nothing and it stays `is_priced = false` in the
+view, which is the honest answer and the one the coverage counts are built to report.
 
 **The freshness line reports the *oldest* `as_of`, not the newest.** A portfolio where ninety-nine
 instruments updated a second ago and one has been failing for a week would report itself current under
-a newest-first reading — which is exactly the "silently showing yesterday's net worth as though it
+a newest-first reading, which is exactly the "silently showing yesterday's net worth as though it
 were live" failure this application refuses. Two more properties of `priceFreshness` are load-bearing:
 
 - It excludes `fixed` and `manual` sources. Every bank and loan account holds the seeded `USD` row,
@@ -1339,8 +1402,8 @@ were live" failure this application refuses. Two more properties of `priceFreshn
   the install timestamp forever. A hand-typed price is as fresh as the person who typed it, and a
   refresh loop has no claim on it.
 - It reads *through* `holding_valued`, so it is scoped to instruments actually held in an open
-  account, and counts `distinct instrument_id` rather than holdings — one fund held in three accounts
-  is one stale price, not three. An instrument nobody owns going stale is not a fact about anyone's
+  account, and counts `distinct instrument_id` rather than holdings, so one fund held in three
+  accounts is one stale price, not three. An instrument nobody owns going stale is not a fact about anyone's
   net worth, and reporting it would make the banner unclearable.
 
 **Poller hazards, all three handled explicitly** (`price-poller.server.ts`; the cross-process lock
@@ -1348,30 +1411,31 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 | Hazard | Guard |
 |---|---|
-| Two timers in one process — `react-router dev` re-executes the module graph on every edit | The handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
-| Two timers in two processes — a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
-| A tick outliving its interval — a slow provider | Serialised by a flag; an overlapping tick is **dropped, not queued** — a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
+| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
+| Two timers in two processes, a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
+| A tick outliving its interval, because the provider is slow | Serialised by a flag; an overlapping tick is **dropped, not queued**, because a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
 
 The interval itself is the household's refresh cadence (`app_setting.refresh_cadence_minutes`,
 edited at Settings → Prices). The timer is armed at the seeded 15 and each in-session tick re-reads
-the row, re-arming when the value moved — which is the entire propagation mechanism: no restart, no
-cross-process signal, every process converges within one old cadence because every process's next
-tick reads the same row.
+the row, re-arming when the value moved. That re-read is the entire propagation mechanism: no
+restart, no cross-process signal, and every process converges within one old cadence because every
+process's next tick reads the same row.
 
 `/healthz` now reads this same slot for `pricing.scheduler` and `pricing.quotes` (spec
-price-health/03) — the derivation itself lives in `price-health.ts`, and the loader only reads a
+price-health/03). The derivation itself lives in `price-health.ts`, and the loader only reads a
 snapshot; it never starts, stops or retimes the poller. This slot is the one status owner: scoped to
 this process alone, and the snapshot resets to `not_started` on a restart or an HMR disposal exactly
-as the poller's own live state does — a second app replica would report its own, and nothing here
-merges the two. What still goes unreported is timestamps and counts — logs, `price_poll`,
-`price_backfill` and Settings → Prices keep the detailed diagnosis. Provider failure does not fail the app’s HTTP health status. Compose restart policies act on
-process exits, not an unhealthy healthcheck result (§7.4).
+as the poller's own live state does. A second app replica would report its own, and nothing here
+merges the two. What still goes unreported is timestamps and counts, since logs, `price_poll`,
+`price_backfill` and Settings → Prices keep the detailed diagnosis. Provider failure does not fail
+the app's HTTP health status. Compose restart policies act on process exits, not an unhealthy
+healthcheck result (§7.4).
 
-### 6.3 Read path — dashboards
+### 6.3 Read path: dashboards
 
 Every screen that shows money reads through `valuation.server.ts`. Seven of its reads go through
-the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written once and pointed at
-either source; the rest are their own queries inside the same module, which is the point: they are
+the `ValuedSource` seam: `readHoldings`, `readTotal` and `readSeries`, written once and pointed at
+either source. The rest are their own queries inside the same module, which is the point: they are
 in the module, not scattered across routes.
 
 ```ts
@@ -1386,23 +1450,23 @@ netWorthSessionSeries(owners, session)
 netWorthChange(owners, since) / firstRecordedDate(owners)
 
 // Account-scoped: already narrower than an owner, so they take no filter.
-accountTotal(id) / accountHoldings(id) / accountSeries(id, dates)
-accountSessionSeries(id, session) / accountFirstRecordedDate(id)
+accountTotal(id) / accountHoldings(id) / accountHoldingsAt(id, '2026-02-14')
+accountSeries(id, dates) / accountSessionSeries(id, session) / accountFirstRecordedDate(id)
 
 // Neither: facts about the feed and about the hand-typed prefix.
 latestObservedSession()        // which session 1D plots, off the observation log
 manualNetWorth()
 ```
 
-`owners` is the **owner filter** (spec 0013, ADR-0008) — required, and with no default, on every
+`owners` is the **owner filter** (spec 0013, ADR-0008), required and with no default on every
 household-scoped read: `ALL_OWNERS` is the whole household and is a word somebody typed rather than
 an argument somebody forgot. An account-scoped read does not take it, because an account already has
 exactly one owner; `manualNetWorth` and `latestObservedSession` do not either, and
-`manualNetWorth`'s docstring says why for both. Three of the household-scoped reads —
-`firstRecordedDate`, `netWorthSeries` and `netWorthSessionSeries` — keep that same signature, but a
+`manualNetWorth`'s docstring says why for both. Three of the household-scoped reads,
+`firstRecordedDate`, `netWorthSeries` and `netWorthSessionSeries`, keep that same signature, but a
 screen no longer supplies the argument itself: `chart-series.server.ts` (spec 0015) calls them in the
 loader's place, off a `reading` the loader names as a required field of the `ChartScope` it hands that
-module — the argument is still there, and still refused without it, just one field of the one
+module. The argument is still there, and still refused without it, just one field of the one
 argument rather than an argument on its own.
 
 **Where the narrowing goes is the part a future change breaks silently**, so it is worth knowing
@@ -1410,29 +1474,30 @@ before editing any of these. Four shapes, and they are not interchangeable:
 
 - The `ValuedSource` reads narrow on `holding_valued.owner_id`, in an ordinary `WHERE`. Safe there
   because the source *is* the view.
-- **The dated series reader narrows inside the lateral**, on `v.owner_id` — never in the outer
+- **The dated series reader narrows inside the lateral**, on `v.owner_id`, never in the outer
   `WHERE`. An outer predicate is evaluated after the LEFT join and rejects the all-null row the
   join manufactures for a date the selected owners hold nothing on, which takes that date off the
   line instead of reporting it as uncovered. The chart silently starts later than it should. The
-  session readers narrow on the account alias in their holdings CTE — `a.owner_id` for the
-  household, `a.id` for one account — which is the same rule in a different shape: the instants come from the log and are joined to nothing, so an instant whose
-  selected owners hold nothing is still a point rather than a missing one.
+  session readers narrow on the account alias in their holdings CTE, `a.owner_id` for the
+  household and `a.id` for one account, which is the same rule in a different shape: the instants
+  come from the log and are joined to nothing, so an instant whose selected owners hold nothing is
+  still a point rather than a missing one.
 - `accountTotals` narrows on `account.owner_id`, because it selects from `account` and LEFT-joins the
   view so an account holding nothing still reports `0.0000`. An outer `WHERE` *is* right there:
   `account` is the preserved side, so narrowing it drops whole accounts rather than nulling coverage.
 - `firstRecordedDate` narrows by subquery, because `position_set` carries `account_id` and no owner
   (DESIGN.md §4.2). That subquery spans **closed** accounts where the view excludes them, so a
   narrowed first-recorded date and a narrowed `currentHoldings` can disagree about which owners have
-  any history — deliberately, and the Overview's chart reach depends on it.
+  any history. The disagreement is deliberate, and the Overview's chart reach depends on it.
 
 The id guard is shared: `isOneOf` binds ids as one `bigint[]` behind a digits-and-length test, so an
 id past the type's range answers "no such row" in SQL rather than erroring inside Postgres.
 
-The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
+The seam is `ValuedSource`: `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
 type, so a read built on it works for both. The reads that sit beside it rather than on it fall
 into three groups. `accountTotals`, `accountTotal` and `netWorthChange` hand-write aggregates the seam cannot
 express. `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` deliberately read
-elsewhere — `manual_networth` for the pre-app series, and `position_set` for "when does history
+elsewhere: `manual_networth` for the pre-app series, and `position_set` for "when does history
 start", which must not depend on anything being priced. And `latestObservedSession`,
 `netWorthSessionSeries` and `accountSessionSeries` read the observation log, which the seam cannot
 reach at all: `ValuedSource`'s two adapters both price per *date*, and a session is priced per
@@ -1445,9 +1510,9 @@ after the join and would reject the all-null row a `LEFT JOIN` manufactures for 
 taking the uncovered date down with it. See §10.
 
 **The three intra-session reads are the module's second front** (ADR-0006). `latestObservedSession`
-resolves which trading session 1D plots — `max(price_observation.market_date)`, so the session comes
-from what was observed rather than from a calendar, and the UTC-today versus market-day seam never
-decides what is drawn. `netWorthSessionSeries` and `accountSessionSeries` then value the positions
+resolves which trading session 1D plots, using `max(price_observation.market_date)`, so the session
+comes from what was observed rather than from a calendar, and the UTC-today versus market-day seam
+never decides what is drawn. `netWorthSessionSeries` and `accountSessionSeries` then value the positions
 held *now* at each of that session's distinct instants, taking each instrument's latest observation
 at or before the instant and falling back to the last close from **strictly before** the session.
 That strictness is the load-bearing word: the session's own `price_daily` row is provisional and
@@ -1485,8 +1550,12 @@ separately rounded new value less the rounded value it replaced (spec 0016, meas
                  chart-series.server.ts
 ```
 
+`accountHoldingsAt` sits beside `accountHoldings` in the same module but is not a dashboard reader:
+its one caller is the upload flow's `assembleDiff` (`uploads.server.ts`), which classifies a
+statement against the account's holdings on its own date rather than today's (#181).
+
 **No dashboard writes its own join.** Filtering, grouping and subtotalling happen as pure functions
-over the array the query layer already returned, because the grouping key is already on every row —
+over the array the query layer already returned, because the grouping key is already on every row:
 `holding_valued` was built to expose exactly the eight dimensions DESIGN.md §8.3 names. Three
 `GROUP BY` queries would be three more hand-rolled dashboard queries, which is the drift the view
 exists to prevent.
@@ -1507,7 +1576,7 @@ closed therefore shows an empty table the reader can *see and clear*, rather tha
 widened behind their back.
 
 **History starts at the first upload.** An account with no position set at or before a date
-contributes **no rows** — not a zero. Callers read `coverage.total` rather than the amount to decide
+contributes **no rows**, not a zero. Callers read `coverage.total` rather than the amount to decide
 where a line begins, so a chart starts where history starts instead of climbing out of a fictional
 zero. The pre-app period is `manual_networth`'s job, and computed values win on overlapping dates.
 
@@ -1521,29 +1590,33 @@ more ceremony than the fact deserves.
 | Where | Account page, `bank` and `liability` only | Inline on the Holdings table |
 | Module | `balances.server.ts` | `positions.server.ts` |
 | Writes | `position_set(source='manual')` + one `USD` holding | `position_set(source='manual')` + the whole account carried forward, one row changed |
-| The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL — a correction can never file *behind* the statement it corrects |
-| The sign | **Derived, never typed** — the household types what they owe and the module negates it | **Refused if it flips in one edit** — zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
+| The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL, so a correction can never file *behind* the statement it corrects |
+| The sign | **Derived, never typed.** The household types what they owe and the module negates it | **Refused if it flips in one edit.** Zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
 | Guards, in order | Account exists → kind accepts it → not closed → the seeded `USD` row exists → the current statement lists nothing but that row → fields parse | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
-| Atomicity | One statement — a data-modifying CTE, with the pre-check repeated **inside** the write; zero rows written is the refusal | The same, asked of one position rather than of the whole statement |
+| Atomicity | One transaction under the account lock (§7.2), and inside it one statement, a data-modifying CTE, so the set and its row land together or not at all; the pre-check is repeated **inside** the write, and zero rows written is still a refusal | The same, asked of one position rather than of the whole statement |
 
 **Why one statement and not two.** A `position_set` that landed without its holdings would not read as
-a failed write. It would read as a *successful* one meaning "this account now holds nothing" — and by
+a failed write. It would read as a *successful* one meaning "this account now holds nothing", and by
 the tie-break it would outrank every earlier statement. Both writers are therefore a single
 data-modifying CTE, so the set and its rows exist together or not at all.
 
-**Why both writers ask their question twice.** `currentPosition` and `currentStatement` run before
-the write as ordinary pre-checks, so the form can refuse politely and name what is in the way. Those
-reads race. The checks that do not are inside the writes themselves: `revisePosition`'s `source` CTE
-selects `latest_position_set(...)` *and* requires the instrument still be in it
-(`positions.server.ts:220-235`), and `setBalance`'s `guard` CTE requires that same set to hold
-nothing but the cash row it is replacing (`balances.server.ts:122-141`). Both inserts select from
-those CTEs, so an account that changed underneath an open form produces no rows at all — no position
-set, no holding — and "nothing landed" is what becomes the refusal.
+**Why both writers take the account lock.** `currentPosition` and `currentStatement` run before the
+write so the form can refuse politely and name what is in the way, and until #283 those reads
+raced: two corrections to different rows each copied the same latest set forward, and whichever
+landed last restated the account without the other's edit. Every writer that appends a position
+set, and `closeAccount`, now runs inside `withAccountLock` (`accounts.server.ts:141-159`): `select
+… for no key update` on the account row, one transaction from the read the writer decides on to its
+insert, so the later writer's read is the earlier writer's commit. The in-write checks stay, because
+the data-modifying CTE is what makes the set and its rows one statement: `revisePosition`'s `source`
+CTE still requires the instrument be in the latest set (`positions.server.ts:234-262`) and
+`setBalance`'s `guard` CTE still requires that set to hold nothing but the cash row
+(`balances.server.ts:132-149`), and a write that selects nothing is still a refusal rather than a
+half-landed set.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
-change behind it — `createDraft` (`uploads.server.ts:120`) reads only whether the account is closed,
-so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
+change behind it, because `createDraft` (`uploads.server.ts:139`) reads only whether the account is
+closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
 Both differ from an upload only in carrying `source = 'manual'` and no filename. Nothing downstream
@@ -1552,7 +1625,7 @@ in the application moves because one row landed in the table they all already re
 argument for routing them through the same mechanism instead of giving each a code path.
 
 Why the sign is handled differently in the two: a form that accepts a signed number accepts `14500`
-for a debt, which does not fail — it silently moves household net worth by twice the loan.
+for a debt, which does not fail. It silently moves household net worth by twice the loan.
 `setBalance` avoids that by refusing to accept a sign at all. `revisePosition` cannot, because its box
 opens containing the number the table prints, so it refuses the *change* instead.
 
@@ -1566,11 +1639,11 @@ Three error types, and the layer each one is answered at.
 
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
-| `ValidationError` | domain modules | `FieldErrors` — a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
+| `ValidationError` | domain modules | `FieldErrors`, a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
 | `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:87` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
 
-**A refusal is an ordinary outcome of a form submission — never a 500.** That rule is what keeps
+**A refusal is an ordinary outcome of a form submission, never a 500.** That rule is what keeps
 routes thin: a route reads the form, hands the raw fields to a domain function, and renders whatever
 comes back. It never imports Zod, and it never states a rule that a second caller could then get a
 different answer for.
@@ -1584,27 +1657,35 @@ an address is not a refusal.
 
 ### 7.2 Transactions and concurrency
 
-Single-instance deployment makes contention unlikely rather than impossible — a restart can overlap a
-still-shutting-down container, and a determined operator can run two.
+Single-instance deployment makes contention unlikely rather than impossible. A restart can overlap a
+still-shutting-down container, a determined operator can run two, and two browser tabs are two
+requests on one process whatever the deployment, which is how #283 was reproduced.
 
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
-| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's — the checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
+| Two refreshes anywhere, from a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's. The checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
-| Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
-| Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:159` is the earlier, racing pre-check | `positions.server.ts:220-235` |
-| A balance typed against a statement that changed under it | The same shape: the write's own `guard` CTE requires the latest set to list nothing but the cash row being replaced, so a statement that landed in the gap leaves both inserts nothing to select from. `currentStatement` at `:95` is the earlier, racing pre-check | `balances.server.ts:122-141` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:161` |
-| An account closed while a draft sat open | Checked *before* field validation, in every write path | all three writers |
+| Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; zero rows deleted still aborts everything, the promotion included, which only the unlocked 24-hour sweep can now cause | `uploads.server.ts` |
+| Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
+| Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
+| A string recorded, repointed or forgotten between the review's diff and the commit | The commit re-reads vocabulary for the file's strings inside its transaction, `for share`, and refuses on any difference or absence; the throw takes the promotion with it. The promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` |
+| A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
+| An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts:141-159`, taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
+| A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
+| A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
+| A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
+| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock. Its `update` does queue behind a writer holding the account row, but the read it decided on may predate that writer; what the gap can cost is a label briefly disagreeing with the rows, never a row, because `setBalance` re-reads the rows under the lock | `accounts.server.ts:189` |
+| An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:268` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
 `7295380114023641` (migrations) and `…42` (poller). With a shared key the collision would be
 one-directional rather than mutual: the migration takes a blocking `pg_advisory_lock` and would queue
 behind a poll, while the poller takes `pg_try_advisory_lock` and would simply drop its tick.
 
-**`inTransaction` and the test seam.** Three modules carry the same small helper:
+**`inTransaction` and the test seam.** One helper in `db.server.ts`, used by `prices.server.ts`,
+`instrument-resolution.server.ts` and `withAccountLock`:
 
 ```ts
 db.isTransaction ? body(db) : db.transaction().execute(body)
@@ -1621,11 +1702,11 @@ transaction (§9). The check is therefore load-bearing rather than defensive.
 | `startPricePoller()` | Yes | After the first call it is a property lookup on `globalThis` |
 | A quote refresh | Yes | Upserts keyed on `instrument_id` and `(instrument_id, date)` |
 | Re-POSTing a commit | **No, and deliberately so** | The draft is gone, so the second POST is a 404 rather than a second position set |
-| Re-uploading the same statement | No | It appends a new set. Uploads append, never mutate (DESIGN.md §5.2) — the tie-break decides which speaks |
+| Re-uploading the same statement | No | It appends a new set. Uploads append, never mutate (DESIGN.md §5.2), and the tie-break decides which speaks |
 
 A past `price_daily` row *can* be rewritten, and that is not a violation: it is only ever rewritten
 with the provider's own price for the day that provider says it belongs to, so a rewrite is idempotent
-unless the provider itself revises a close — which is a correction, not corruption. Bounded, since
+unless the provider itself revises a close, which is a correction, not corruption. Bounded, since
 spec 0018 §3.1, to seven days either side of today's market date: past that a claimed date is not
 a correction but a different day asserted. A past day so skipped is filled later only while the
 instrument is still a backfill candidate; a future one is beyond any batch, whose range ends today.
@@ -1637,36 +1718,36 @@ one household's instance and the operator reads `docker compose logs`.
 
 | Signal | Where |
 |---|---|
-| `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener — but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses. `pricing.scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `pricing.quotes` (`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) read the price poller's own live state passively (spec price-health/03) — no Yahoo call, no database heartbeat — and `pricing.ok` is a boolean conjunction over all three; none of the three ever gates the status either |
-| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
+| `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener, but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses. `pricing.scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `pricing.quotes` (`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) read the price poller's own live state passively (spec price-health/03), with no Yahoo call and no database heartbeat, and `pricing.ok` is a boolean conjunction over all three; none of the three ever gates the status either |
+| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound: `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes, observed, providerFailed }` |
-| Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
-| Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale — the one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues — stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:358`) — and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
+| Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }`, stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
+| Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale. The one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues, stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:358`), and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
 
 The two non-goals of `/healthz` are as important as what it checks: it never tests the price provider,
 and it never requires credentials. That second property no longer survives on the `Caddyfile` alone:
 the lock (ADR-0012) checks its own `LOCK_EXEMPT_PATHS` in `app/root.tsx` before a request ever reaches
-a loader, and `/healthz` is on that list beside `/unlock` (§7.6) — pulling the app-side entry, even
+a loader, and `/healthz` is on that list beside `/unlock` (§7.6). Pulling the app-side entry, even
 with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
 
 **Three healthchecks now, and no two of them prove the same thing.** `app`'s (`compose.yaml:151`)
 is the `/healthz` above, over HTTP on `PORT`. `worker`'s (`compose.yaml:189`) is `GET /healthz`
-over the unix socket, run as the container's own uid — the right party to prove the socket's
-permissions — and it proves only that the worker is accepting requests on its socket: a Yahoo outage
+over the unix socket, run as the container's own uid, the right party to prove the socket's
+permissions, and it proves only that the worker is accepting requests on its socket: a Yahoo outage
 still answers it `200`. `egress-proxy`'s (`compose.yaml:221`) asks its own `127.0.0.1:8888`,
 deliberately not a bare TCP connect: with all eight `maxConnections` slots held by stalled tunnels the
 accept queue still completes a handshake, so only a request the HTTP server itself answers proves the
-proxy is not saturated. None restarts a container on failure — all three are for a human reading
+proxy is not saturated. None restarts a container on failure, and all three are for a human reading
 `docker compose ps`. `app`'s own now proves one hop none of the other two can: not "is `worker`
 accepting requests on its socket" (that's `worker`'s own check, run from inside its container, on the
 uid that owns the mount) but "can *this app process*, over its separate read-only mount, actually
-reach it" — the hop `scripts/smoke-test.sh` proved only once, at deploy, before this. It is still a
-bounded, cached probe of the worker's listener alone: it says nothing about `egress-proxy` or Yahoo,
-and a transition can lag its five-second cache. `docs/operating.md`'s "Verify it actually worked" has
-the uncached, one-shot version of the same check, worth running by hand right after any change to the
-host's engine or container runtime.
+reach it". `scripts/smoke-test.sh` proved that hop only once, at deploy, before this. `app`'s check
+is still a bounded, cached probe of the worker's listener alone: it says nothing about
+`egress-proxy` or Yahoo, and a transition can lag its five-second cache. `docs/operating.md`'s
+"Verify it actually worked" has the uncached, one-shot version of the same check, worth running by
+hand right after any change to the host's engine or container runtime.
 
 ### 7.5 The provider seam
 
@@ -1683,50 +1764,50 @@ host's engine or container runtime.
         (provider-socket.server.ts:213) no test reaches the network
 ```
 
-One seam, two implementations either side of a process boundary — not the two boxes above, which are
+One seam, two implementations either side of a process boundary, not the two boxes above, which are
 one of those implementations and its test double. The other implementation is `worker` itself: it
 answers `socketProvider()`'s request by calling `server/yahoo-client.ts` directly and writing back
-`yahoo-finance2`'s own JSON, unparsed and unenveloped — no schema of the socket's own, no currency
-guard, no split un-adjust. Every conversion this module owns — floats to decimal strings, the
-currency guard, the split un-adjust below — still happens exactly once, but now on the *app* side of
+`yahoo-finance2`'s own JSON, unparsed and unenveloped: no schema of the socket's own, no currency
+guard, no split un-adjust. Every conversion this module owns, floats to decimal strings, the
+currency guard and the split un-adjust below, still happens exactly once, but now on the *app* side of
 that raw JSON, after it crosses back: `socketProvider()`'s `getQuotes`/`getDailyCloses` run the very
 same `toProviderQuote`/`toProviderHistory` a direct call to the library would have. `yahoo-finance2`
 is an unofficial client for an endpoint Yahoo never published, with no SLA. What makes that tolerable
-is that swapping it is a day's work — which is only true while `server/yahoo-client.ts` is the sole
+is that swapping it is a day's work, which is only true while `server/yahoo-client.ts` is the sole
 importer of the library (ARCHITECTURE.md §4.2's single-site table), reached only from `worker` since
 [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moved the app behind the unix socket:
 `socketProvider()` above never imports the library at all. Both methods are required, not optional: a
 provider that cannot answer history is not this application's provider, and an optional method would
 let a batch be skipped with nothing saying so. Two tests (`tests/yahoo-client.test.ts:66`, `:81`) pin
-the static-versus-instance shape the client depends on — `yahoo-finance2`'s default export is the
+the static-versus-instance shape the client depends on: `yahoo-finance2`'s default export is the
 `YahooFinance` *class*, whose own static
 `quote`/`chart` type-check and throw the moment either runs, before any network access. The first
 swaps in a `fetch` that only records that it was reached: a regression back to the bare class would
 throw first and the fake would never see a call. The second asserts the throw where it happens, on
-the export, which is why that file imports the library directly — the one exemption §4.2's
+the export, which is why that file imports the library directly, the one exemption §4.2's
 single-site table makes.
 
 These conversions happen at this boundary and nowhere else:
 
 - **Floats become decimal strings.** The provider hands back JavaScript numbers, which is exactly what
-  a money column must never see. The conversion happens once, here — not in the write path, where it
+  a money column must never see. The conversion happens once, here, not in the write path, where it
   would be one more place to forget.
 - **The payload is parsed through Zod**, so a shape change is a refusal rather than a `NaN`.
 - **The currency guard.** A non-USD quote is refused. `getQuotes` turns that into an *absent* quote,
   because a refresh must not lose ninety-nine prices over one foreign listing. `socketProbe`, used at
-  instrument creation, returns it *named* per symbol — because there the caller is a person
-  creating instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
+  instrument creation, returns it *named* per symbol, because there the caller is a person creating
+  instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
   the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
   before a figure is read.
 - **The split un-adjust**, on history only. The feed restates closes through later splits while a
   statement records shares as held on the day, so each close is multiplied back by the ratio of every
   split later than it. It happens *here*, at the seam, on `money.ts`'s `BigInt` units with one
-  rounding at the end — never as a float, and never in the writer, which inserts what it is handed
+  rounding at the end, never as a float, and never in the writer, which inserts what it is handed
   and multiplies nothing (§5.6, ADR-0011).
 
 ### 7.6 Security posture
 
-**The LAN is not the trust boundary — the gate is.** This used to say the threat model was a
+**The LAN is not the trust boundary. The gate is.** This used to say the threat model was a
 household LAN rather than the open internet, and that reading is now the wrong one: the LAN is where
 the adversary is. It carries guest phones, a TV and whatever else joined the wifi, any of which can
 find this box and dial its published port. Being on the network grants nothing; being on the
@@ -1734,28 +1815,29 @@ allowlist does.
 
 | Control | State |
 |---|---|
-| Authentication | **Outside the app, and mandatory, for *who* is asking.** `caddy` asks the `gate` sidecar (oauth2-proxy, OIDC to Google) about every request and refuses anything it has not vouched for. The app still carries no password and no login route of its own. It does carry a cookie now — the lock's (ADR-0012): a grant names one browser at one moment, never a person, so it settles nothing about *who* is asking, only whether *this browser* has passed a check |
-| Authorisation | **None; every session sees everything.** There is no user table and no per-person permissions. The verified email arrives on every request and the app reads it nowhere — attribution, never permission (`CONTEXT.md`, "Authenticated email"). A screen that consulted it would be inventing a household rule nobody made |
+| Authentication | **Outside the app, and mandatory, for *who* is asking.** `caddy` asks the `gate` sidecar (oauth2-proxy, OIDC to Google) about every request and refuses anything it has not vouched for. The app still carries no password and no login route of its own. It does carry a cookie now, the lock's (ADR-0012): a grant names one browser at one moment, never a person, so it settles nothing about *who* is asking, only whether *this browser* has passed a check |
+| Authorisation | **None; every session sees everything.** There is no user table and no per-person permissions. The verified email arrives on every request and the app reads it nowhere: attribution, never permission (`CONTEXT.md`, "Authenticated email"). A screen that consulted it would be inventing a household rule nobody made |
 | Admission policy | One flat file of addresses, mounted read-only into `gate`. Deliberately not an email-domain rule: the narrowest domain that admits this family also admits every Gmail account alive |
-| Enforcement point | This stack's `caddy`, and only there for *person* authentication. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` used to be the single list of exemptions in the deployment; the lock (ADR-0012) now keeps a second, `LOCK_EXEMPT_PATHS` in `app/root.tsx` — `/unlock` and `/healthz` again, since a locked browser still needs both — pinned by a test that fails the moment that array grows without a decision behind it. The operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
+| Enforcement point | This stack's `caddy`, and only there for *person* authentication. **Everything is challenged except `/healthz`**, static assets included, which the in-app gate could not cover. The `Caddyfile` used to be the single list of exemptions in the deployment; the lock (ADR-0012) now keeps a second, `LOCK_EXEMPT_PATHS` in `app/root.tsx`, holding `/unlock` and `/healthz` again, since a locked browser still needs both, pinned by a test that fails the moment that array grows without a decision behind it. The operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
 | What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
-| Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy`, `egress-gate`, and `ingress` carry default routes. Each is attached to its own external-facing service. `app` and `worker` share none of them — a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
-| The worker's egress | `worker`'s only route anywhere is `egress-proxy` (`server/egress-proxy.ts`), a `CONNECT`-only forward proxy admitting exactly the five hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host it was opened to. A compromised worker can still open a tunnel to an admitted host and send it whatever it likes — the allowlist is on the host, never on the bytes |
-| The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:139`), so it can dial the socket but cannot `chmod` the directory or unlink the file — a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
-| Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
-| Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres — a minted unlock grant, addressed by the grant cookie above — never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in. Not one row per browser: `mintGrant` inserts unconditionally, so a browser that loses its cookie and unlocks again leaves the old row live beside the new one until its own expiry sweeps it |
-| Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own** — the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
+| Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy`, `egress-gate`, and `ingress` carry default routes. Each is attached to its own external-facing service. `app` and `worker` share none of them: a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
+| The worker's egress | `worker`'s only route anywhere is `egress-proxy` (`server/egress-proxy.ts`), a `CONNECT`-only forward proxy admitting exactly the five hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host it was opened to. A compromised worker can still open a tunnel to an admitted host and send it whatever it likes, because the allowlist is on the host, never on the bytes |
+| The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:139`), so it can dial the socket but cannot `chmod` the directory or unlink the file, since a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
+| Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere, because the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
+| Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres, a minted unlock grant addressed by the grant cookie above, never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in. Not one row per browser: `mintGrant` inserts unconditionally, so a browser that loses its cookie and unlocks again leaves the old row live beside the new one until its own expiry sweeps it |
+| Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own**, the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
-| TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — Google’s registered redirect URI is that origin plus `/oauth2/callback` |
-| Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
+| TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves. Google's registered redirect URI is that origin plus `/oauth2/callback` |
+| Upload bounds | Guarded twice. The whole body is counted as it streams: a declared `Content-Length` over the cap is refused before any read, and a chunked body is cut off at the cap. `File.size` is checked after |
+| Request body size | Capped at `caddy`, counted as read so a chunked body is capped too: 16 MiB on `/upload`, `/upload/` and `/upload.data`, 1 MiB on every other path. A browser declares an upload's size, so the app refuses an oversized file first, with its own sentence. Caddy's bare 413 reaches a person only if `MAX_UPLOAD_MB` is raised to 16 or more without raising the cap. Checked by `scripts/caddy-body-cap-test.sh` |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
-| Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field — or its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
-| Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
+| Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field, or its backslash spelling, lands on `/`. Both resource routes (`masking`, `refresh`) use it |
+| Error disclosure | Contained. The error page prints fixed wording chosen by the response status, and nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
 
 **The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
 proxy within `private_ranges`, and `app` and `gate` trust `caddy` unconditionally. Both rest on one
 deployment requirement: **neither `app` nor `gate` may be reachable directly**, because anything that
-can connect to them can set these headers — which is why `compose.yaml` publishes no port for either.
+can connect to them can set these headers, which is why `compose.yaml` publishes no port for either.
 What is at stake if the LAN half is forged is worth being exact about, because it is small: the app
 reads no forwarded header at all, so a forged one reaches the gate's redirect construction and
 Caddy's idea of the client address, and nothing that decides admission. The verified email is the one
@@ -1764,13 +1846,13 @@ replaces any client-supplied value with the gate's own before the request is for
 
 **One consequence of the app never terminating TLS**, a deployment constraint rather than a bug: the
 secure context a service worker needs comes from the house proxy, so a phone that reaches the
-instance at `PUBLIC_ORIGIN` can install it and one reaching the box by LAN IP over plain HTTP cannot
-— and the gate refuses that second request anyway.
+instance at `PUBLIC_ORIGIN` can install it and one reaching the box by LAN IP over plain HTTP
+cannot, and the gate refuses that second request anyway.
 
 **What this posture is not.** It is not a claim that this stack is safe to publish to the internet as
 it stands. What the gate buys is that reachability is no longer access: an instance found by an
 unwelcome device is met by Google sign-in and refused by the allowlist. What it does not buy is
-everything else an internet-facing deployment wants — TLS terminated in front of it (assumed here,
+everything else an internet-facing deployment wants: TLS terminated in front of it (assumed here,
 enforced by nothing in this repository), rate limiting and abuse handling at the edge, and a
 considered answer to the exposed `/healthz` path, which answers a pinned body to anyone who asks. The
 gate is also a single point of failure by design: if it cannot start, nobody gets in. That is the
@@ -1780,23 +1862,23 @@ second way through the front door.
 ### 7.7 The installed shell
 
 The instance is an installable PWA, shaped by one decision: **the service worker stores nothing**
-(ADR-0007). `public/sw.js` is network-only — no Cache Storage, no IndexedDB, no precache — and
+(ADR-0007). `public/sw.js` is network-only, with no Cache Storage, no IndexedDB and no precache, and
 exists for exactly one page: the inlined offline notice a phone shows when the instance is
 unreachable. Anything that is not a GET navigation passes it untouched, so loaders, actions and the
 upload flow's multipart posts never meet it. Two seams are structural:
 
 - **The worker must never branch on `response.ok`.** The gate answers a navigation with a 302 that
-  a worker's `fetch` resolves as an `opaqueredirect` — `ok === false` — which the browser then
+  a worker's `fetch` resolves as an `opaqueredirect`, with `ok === false`, which the browser then
   follows itself. Treating anything but a 200 as "down" would swallow sign-in; only a *rejected*
   fetch means unreachable, and `sw.js` says so in place.
 - **Install has to work from behind the gate.** The manifest is fetched with credentials
   (`crossOrigin="use-credentials"` on the `<link>` in `app/root.tsx`) and its `icons` array carries
-  `data:` URIs, because Android's install probe sends no cookies — a fetched icon URL would get the
-  sign-in redirect and installation would grey out. No asset path is exempted in the `Caddyfile`
+  `data:` URIs, because Android's install probe sends no cookies, so a fetched icon URL would get
+  the sign-in redirect and installation would grey out. No asset path is exempted in the `Caddyfile`
   for it.
 
-`tests/pwa-shell.test.tsx` pins the storage-free rule. The secure-context consequence — installation
-is offered at `PUBLIC_ORIGIN`, never over LAN-IP HTTP — is §7.6's.
+`tests/pwa-shell.test.tsx` pins the storage-free rule. The secure-context consequence, that
+installation is offered at `PUBLIC_ORIGIN` and never over LAN-IP HTTP, is §7.6's.
 
 ---
 
@@ -1847,14 +1929,14 @@ Three stages, each with one job:
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-**One image, three entrypoints.** `worker` and `egress-proxy` are not separate builds — they are the
+**One image, three entrypoints.** `worker` and `egress-proxy` are not separate builds. They are the
 same `ghcr.io/chethan123/portfolio-app` image with `entrypoint:` replaced in `compose.yaml`, dropping
 the image's own `CMD` in favour of `node ./server/price-worker.ts` and `node ./server/egress-proxy.ts`
 respectively (§3.1). One version to tag, one image to pull three times, and one release train: a fix
 to either process ships and rolls back exactly as an app fix does. The nine `server/*.ts` files in the
 runtime image are why `server/config.ts` and `server/db.ts` are dependency-light and side-effect free:
-`config.ts`, `db.ts` and `migrations.ts` are executed two different ways — bundled into the server
-build by Vite for the app, and run directly by Node underneath the entrypoint's config gate and
+`config.ts`, `db.ts` and `migrations.ts` are executed two different ways, bundled into the server
+build by Vite for the app and run directly by Node underneath the entrypoint's config gate and
 migration runner. `validate-config.ts` and `migrate.ts` are those two runners themselves and are
 reached only the second way, from `docker-entrypoint.sh`; nothing under `app/` imports either, so
 they enter no bundle. It is their *dependencies* that have to survive both, which is the same
@@ -1862,8 +1944,8 @@ constraint arriving by one path instead of two. `yahoo-client.ts`, `price-worker
 `egress-proxy.ts` are reached only the second way, by the two alternate entrypoints above; nothing
 under `app/` imports them, so `npm run build`'s server bundle never carries them. `symbol-pattern.ts`
 is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:13`), and
-`app/lib/provider-socket.server.ts:11` imports the same file, so Vite bundles it into the app too —
-the two sides of the socket sharing one guard rather than each keeping its own copy (Appendix A).
+`app/lib/provider-socket.server.ts:11` imports the same file, so Vite bundles it into the app too,
+with the two sides of the socket sharing one guard rather than each keeping its own copy (Appendix A).
 
 ### 8.2 CI
 
@@ -1932,7 +2014,7 @@ job: publish                  ── ONLY on a refs/tags/v* ref
 
 The `db:types -- --verify` step is what makes regeneration after a migration mandatory rather than
 remembered. The `smoke` job is the only thing standing between a `compose.yaml` or `Dockerfile` edit
-and a broken deployment — the `vitest` suite cannot see either file. It runs against a build of the
+and a broken deployment, because the `vitest` suite cannot see either file. It runs against a build of the
 tree under test rather than the published image: `scripts/smoke-test.sh` sets `COMPOSE_FILE` to
 layer `compose.dev.yaml` over `compose.yaml`, and without that it would certify the last release and
 go green regardless of the change in front of it.
@@ -1944,7 +2026,7 @@ nothing in CI checks it.
 
 ### 8.3 Adding a migration
 
-1. Add `migrations/000N_name.sql` with a zero-padded numeric prefix — files are applied in **filename
+1. Add `migrations/000N_name.sql` with a zero-padded numeric prefix. Files are applied in **filename
    order compared as plain strings**.
 2. Write it so it can run exactly once; the runner's ledger guarantees that, and seeds carry their own
    `ON CONFLICT` guards anyway, because a seed that depends on bookkeeping elsewhere to stay singular
@@ -1966,8 +2048,9 @@ no SQLite. (For the size of the suite, count it: `find tests -name '*.test.ts*'`
 in Postgres-specific SQL and in `numeric` handling, and both disappear under a substitute: a fake
 database would pass while the real one silently rounded money or resolved the wrong position set.
 
-Alongside the `vitest` suite there is exactly one other test: `scripts/smoke-test.sh`, run as its own
-CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and §8.1.
+Alongside the `vitest` suite there is one other test job: `scripts/smoke-test.sh`, which is the only
+coverage of the deployment claims in §3.1, §3.2 and §8.1. It also runs `scripts/caddy-body-cap-test.sh`,
+which checks the `Caddyfile`'s body caps against a stub upstream.
 
 ### 9.1 The three groups
 
@@ -1989,6 +2072,9 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 │  migrations.test.ts · numeric.test.ts                                    │
 │  They open their own pool because what they test IS the pool and the     │
 │  migration runner — the things withDatabase depends on.                  │
+│  lock · lock-schema · account-lock, and one price-backfill case: they    │
+│  commit (races on two connections, a real ledger write) and sweep        │
+│  their own rows, so the database is still left as found                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -2000,17 +2086,17 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-`fileParallelism: false` — integration tests share one Postgres and are kept off each other's toes.
+`fileParallelism: false`, because integration tests share one Postgres and are kept off each other's toes.
 The Vitest config deliberately omits the React Router plugin; its route and manifest generation only
 gets in the way of server-module tests.
 
 ### 9.2 Rules the suite is held to
 
-- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes the builders —
+- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes the builders:
   `seedPerson`, `seedAccount`, `seedClassification`, `seedInstrument`, `seedInstrumentAlias`,
   `seedPositionSet`, `seedQuote`, `seedDailyClose`, `seedObservation`, `seedPoll`,
   `seedUploadDraft`, `seedManualNetWorth`, and `usdInstrument`. Raw `INSERT` statements belong in
-  the builder and nowhere else — that is what keeps
+  the builder and nowhere else, which is what keeps
   a schema change from rewriting every test. One live exception, now stale: `plantAlias` in
   `column-mapping.test.ts:43` inserts aliases directly, justified by a domain writer that did not
   exist at the time and does now (§11.3).
@@ -2027,7 +2113,7 @@ that no test imported anything under `app/routes/**`; `tests/routes/` now does, 
 journey and invariant suites, which is the better arrangement rather than a violation of it.
 
 What those tests import is the point: a `loader` and an `action`, called directly. Everything still
-living unexported in a route module's body — `describe(filters)` in `holdings.tsx` among it — is
+living unexported in a route module's body, `describe(filters)` in `holdings.tsx` among it, is
 untestable not by framework limitation but by where it was put. That is a stronger argument for thin
 routes than "routes cannot be tested", and it is the one this repo actually supports.
 
@@ -2045,9 +2131,9 @@ instruments, and three or four statement uploads a quarter. Every structural cho
 that, and each would be wrong at a hundred times the scale.
 
 Most of the figures below describe the design target rather than a measurement: the demo household
-in `scripts/seed-demo.ts` — two people, six accounts, three years of statements — is what almost
+in `scripts/seed-demo.ts`, two people, six accounts and three years of statements, is what almost
 everything here has actually been run against. Two things are measured rather than targeted, and
-both were measured on one household — the 21 accounts, 97 holdings and 98 feed instruments that
+both were measured on one household, the 21 accounts, 97 holdings and 98 feed instruments that
 `docs/research/2026-09-01-overview-1d-latency/harness/scale-shape.sql` builds, which is still the
 single reproduction path: the 1D read, in
 [`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md),
@@ -2058,9 +2144,9 @@ and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_se
 | `holding_valued` is **not** materialised | The data changes on upload and the row count is in the hundreds. A refresh step whose omission shows up as silently stale totals costs more than the scan | Tens of thousands of holdings, or a read-heavy multi-tenant load |
 | Filtering and grouping in JavaScript over the full array | Seven dimensions over a few hundred rows; agreement between a row and its subtotal is structural | A table that cannot be sent to the browser whole |
 | One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
-| Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set — 1 minute is ~15× — or a host where the database is not the largest thing on the disk |
-| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. An instant is per instrument, so a session holds of the order of polls × feed instruments — 1,620 measured at the seeded cadence on ~100 instruments, against `SAMPLE_BUDGET`'s 180 dates for a long range | The payload before the query, now that the line is a running total over the session's observations: 1,620 points is ~97 KB of loader data and ~20 ms of query, and a 1-minute cadence is 23,460 points, ~1.4 MB and ~200 ms — paid on every Overview load with 1D selected |
-| In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling — two app containers would both poll, and only the advisory lock keeps that correct rather than efficient |
+| Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set, where 1 minute is ~15×, or a host where the database is not the largest thing on the disk |
+| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. An instant is per instrument, so a session holds of the order of polls × feed instruments, 1,620 measured at the seeded cadence on ~100 instruments, against `SAMPLE_BUDGET`'s 180 dates for a long range | The payload before the query, now that the line is a running total over the session's observations: 1,620 points is ~97 KB of loader data and ~20 ms of query, and a 1-minute cadence is 23,460 points, ~1.4 MB and ~200 ms, paid on every Overview load with 1D selected |
+| In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling, since two app containers would both poll and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
@@ -2068,12 +2154,12 @@ and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_se
 here becomes a scan of the table and a sort. Because `0011_latest_position_set_cost.sql` prices it
 at 1000, `latest_position_set` runs once per account for a plain read, and once per (account, date)
 across a plotted series: before that the planner hash-joined on the call and re-evaluated it per
-bucket candidate — 7,415 calls on the harness shape against the 3,780 the work needs — and the cost
+bucket candidate, 7,415 calls on the harness shape against the 3,780 the work needs, and the cost
 is what put `holding_one_row_per_instrument` on this path at all, as the `Index Cond` the call
-becomes. `position_set_account_as_of_idx` matches its ordering exactly — stopping at the first row;
+becomes. `position_set_account_as_of_idx` matches its ordering exactly, stopping at the first row;
 adding a column to that ordering without adding it to the index would turn every dashboard read into
-a sort. The carry-forward lateral inside `holding_valued_at` runs far more often — once per holding
-per plotted date — and rides `price_daily`'s primary key the same way. And the 1D reader rides
+a sort. The carry-forward lateral inside `holding_valued_at` runs far more often, once per holding
+per plotted date, and rides `price_daily`'s primary key the same way. And the 1D reader rides
 `price_observation`'s primary key, `(instrument_id, as_of)`, twice per holding: once stopping at the
 price in force when the session opened, and once as a range scan over that holding's observations
 inside the session; that key is also the dedup that keeps the log a record of distinct instants
@@ -2084,15 +2170,15 @@ object.
 price in force at the open is looked up once per holding, and each held instrument's observations
 inside the session are read once per holding; the total then moves by each observation's new value
 less the one it replaced. So its cost is the observations of held instruments plus one pass over the
-instants — not instants × holdings, which is what it was and what made a 1,620-instant session
+instants, not instants × holdings, which is what it was and what made a 1,620-instant session
 157,140 inner rows. The session itself resolves from `price_observation_market_date_idx` in one
-backward index scan. What grows here is the table, not the query — but only because the session's
+backward index scan. What grows here is the table, not the query, but only because the session's
 span is passed to that per-holding scan as scalar subqueries, which the planner can put into an
-index condition; joined in from a one-row CTE instead, the span reaches the scan as a join
-condition, and the whole log is scanned — materialised or not.
+index condition. Joined in from a one-row CTE instead, the span reaches the scan as a join
+condition, and the whole log is scanned, materialised or not.
 
 **`netWorthSeries` is one round trip, not one per point.** The dates are joined laterally against
-`holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral — a `WHERE` in the outer
+`holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral. A `WHERE` in the outer
 query is evaluated after the join and would reject the all-null row a `LEFT JOIN` manufactures for an
 uncovered date, taking the uncovered date down with it.
 
@@ -2102,7 +2188,7 @@ uncovered date, taking the uncovered date down with it.
 
 ### 11.1 The weakest point, named by the design itself
 
-> Hand-rolled queries can disagree on edge cases — null cost basis, stale prices, an account
+> Hand-rolled queries can disagree on edge cases: null cost basis, stale prices, an account
 > whose first position set starts mid-chart. You will not get an error; you will get two pages showing
 > different totals. (DESIGN.md §8.2)
 
@@ -2114,12 +2200,12 @@ disagree**, and the first thing to check in a review of any new dashboard.
 
 | Limit | Consequence | What lifting it costs |
 |---|---|---|
-| Positions, not transactions | No realized gains, no dividend history, no tax lots, no time- or money-weighted return | A transaction ledger — a substantially different ingest problem |
-| No cash-flow tracking | The history chart cannot separate market movement from contributions. A $10k deposit and a 40% rally look identical — which is why it is labelled **"Total value"**, never "return" | The same ledger |
+| Positions, not transactions | No realized gains, no dividend history, no tax lots, no time- or money-weighted return | A transaction ledger, a substantially different ingest problem |
+| No cash-flow tracking | The history chart cannot separate market movement from contributions. A $10k deposit and a 40% rally look identical, which is why it is labelled **"Total value"**, never "return" | The same ledger |
 | Single owner per account | Joint accounts are not modelled | Revisiting `account.owner_id`, and multi-user auth alongside it |
 | USD only | A non-USD instrument is refused at creation | A currency dimension through every money column and every sum |
-| Authentication outside the app, no user table | The gate knows which family member is at the door; nothing behind it does. No per-person permissions, and no sign-out control — revocation is the allowlist or the cookie secret, both the operator's | A separate design, per DESIGN.md §10: `person` is an ownership label, and binding identity to it means revisiting single-owner accounts first |
-| In-process poller | A restart mid-session misses a poll until the next tick | Not `worker` — it holds no schedule and answers only what it is asked (§3.1, ADR-0010); moving the *cadence itself* out of `app` would be a separate, larger change, one image and one more entrypoint beside the two `worker` and `egress-proxy` already are |
+| Authentication outside the app, no user table | The gate knows which family member is at the door; nothing behind it does. No per-person permissions, and no sign-out control, since revocation is the allowlist or the cookie secret, both the operator's | A separate design, per DESIGN.md §10: `person` is an ownership label, and binding identity to it means revisiting single-owner accounts first |
+| In-process poller | A restart mid-session misses a poll until the next tick | Not `worker`, which holds no schedule and answers only what it is asked (§3.1, ADR-0010); moving the *cadence itself* out of `app` would be a separate, larger change, one image and one more entrypoint beside the two `worker` and `egress-proxy` already are |
 
 ### 11.3 Live architectural debt
 
@@ -2127,13 +2213,11 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **`inTransaction` exists three times** — in `prices.server.ts`, `instrument-resolution.server.ts`
-  and `uploads.server.ts` — identically. All three already import from `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
   still there. Latent rather than live.
-- **Logic stranded in route module bodies** — `describe(filters)` in `holdings.tsx` among it —
+- **Logic stranded in route module bodies**, `describe(filters)` in `holdings.tsx` among it,
   untestable where it currently sits (§9.3).
 - **`<FieldError>` is open-coded at roughly fifteen sites.**
 
@@ -2144,132 +2228,136 @@ still live in the current code:
 - **`statement.ts:15` imports a `.server` module as a value** (§4.3). It stays out of the client
   bundle only by tree-shaking.
 - **`plantAlias` in `column-mapping.test.ts:43`** inserts fixtures raw, on a justification that has
-  since expired — both the domain writer and a `seedInstrumentAlias` builder now exist.
+  since expired: both the domain writer and a `seedInstrumentAlias` builder now exist.
 
 ### 11.4 Where the next feature probably goes
 
 | Wanted | Likely shape |
 |---|---|
-| A saved view builder (DESIGN.md §8.3) | `holdings-view.ts` already models seven of §8.3's eight dimensions — `instrument` is deliberately excluded — so the missing piece is persistence, plus absorbing the five array calls in `holdings.tsx` into a `holdingsTable` |
+| A saved view builder (DESIGN.md §8.3) | `holdings-view.ts` already models seven of §8.3's eight dimensions, with `instrument` deliberately excluded, so the missing piece is persistence, plus absorbing the five array calls in `holdings.tsx` into a `holdingsTable` |
 | A second price provider | Implement `PriceProvider` and change one construction site. The interface was built for this |
 | A sign-out control | Not a UI change alone. The gate's sign-out URL clears only its own cookie and the next visit re-admits silently, so anything worth shipping has to end the Google session too or say plainly that it does not (DESIGN.md §14) |
 | Recording *who* did something | The verified email already arrives on every request (§2), so it is a column and a write, not an auth redesign. The rule it must not break is that it stays attribution: nothing may read it to decide what someone may do |
-| TLS inside this stack | A real hostname and a certificate in the `Caddyfile` site block, for an operator with no house-wide proxy — plus `http_port`/`https_port`, a second published pair, and Caddy's tmpfs swapped for volumes, because the pinned uid binds no privileged port and a certificate has to outlive the container (`docs/operating.md`). Nothing in the app changes — it terminates nothing and reads no forwarded header |
+| TLS inside this stack | A real hostname and a certificate in the `Caddyfile` site block, for an operator with no house-wide proxy, plus `http_port`/`https_port`, a second published pair, and Caddy's tmpfs swapped for volumes, because the pinned uid binds no privileged port and a certificate has to outlive the container (`docs/operating.md`). Nothing in the app changes, since it terminates nothing and reads no forwarded header |
 | Dividend history | A transaction ledger, and therefore a different ingest problem. Not an extension of this schema |
 
 ---
 
 ## Appendix A: module map
 
-### `server/` — runs both bundled and under Node's type stripping
+### `server/`: runs both bundled and under Node's type stripping
 
 | File | Role |
 |---|---|
-| `config.ts` | The whole configuration API. `loadConfig(env)` is pure — it neither reads `process.env` nor exits, which is what lets it run under Node's type stripping at container start; `getConfig()` is the one place a value is read and cached |
+| `config.ts` | The whole configuration API. `loadConfig(env)` is pure, since it neither reads `process.env` nor exits, which is what lets it run under Node's type stripping at container start; `getConfig()` is the one place a value is read and cached |
 | `db.ts` | The only Postgres pool construction site, because the type-parser overrides are registered here |
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
-| `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
+| `validate-config.ts` | The startup gate. It fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now — the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11` — while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable — the worker's check is the one that binds, the app's a courtesy |
-| `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host — the `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:257`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
+| `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host. The `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
-### `app/lib/` — domain (`.server`) and pure
+### `app/lib/`: domain (`.server`) and pure
 
 | File | Role |
 |---|---|
-| `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
+| `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
-| `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
+| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write, run inside the account lock (§7.2) |
+| `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
+| `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
-| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
-| `price-provider.server.ts` | The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe. The library itself is reached through `server/yahoo-client.ts`, its only importer |
-| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above — never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below — this module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
-| `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02) — extracted, not hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
-| `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener — never Yahoo, never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |
-| `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03) — the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
-| `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status — only `database` and `migrations` do |
+| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill: its candidate query, its batch, its ledger, and the composition every refresh runs |
+| `price-provider.server.ts` | The provider interface, both methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
+| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above, never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below. This module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
+| `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02), extracted rather than hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
+| `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener, never Yahoo and never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |
+| `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03): the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
+| `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
-| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03) — `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome — read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
-| `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
-| `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
-| `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
+| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
+| `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
+| `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
+| `accounts.server.ts` | Accounts, and `withAccountLock`, the row lock every position-set writer and `closeAccount` run inside (§7.2). Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
-| `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading` — what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
-| `chart-series.server.ts` | **The one place a chart's series is read** (spec 0015), for both surfaces: `chartReach` reads how far a surface can reach — its earliest recorded date and the latest observed session — and `chartSeries` picks the reader the resolved window implies, then applies §6.3's `coverage.total > 0` rule. That rule was two copies of route code before, one per screen, and forgetting it fails nothing: the chart just draws a climb out of a zero nobody recorded. `ChartScope` names the surface and what narrows it — §6.3 on where the owner filter then sits |
-| `lock.server.ts` | **The only module that imports `@simplewebauthn/server`.** Ceremony options, assertion and registration verification, grant minting and its rolling idle expiry, and the fresh-assertion authorisation that enrolling or removing a passkey requires (docs/adr/0012, spec 0019). The grant cookie's own builders live here too, `HttpOnly`, so nothing browser-reachable ever needs them. The middleware (`app/root.tsx`) asks this module one question — is there a live grant — and acts on the answer |
-| `lock.ts` | The lock's browser-safe vocabulary: the idle-window and re-entry-grace constants, the one encoding rule `passkey.transports` is written and read through, and the return-address query parameter the unlock screen carries. Plain `.ts`, not `.server.ts` — the same argument `masking.ts` makes for itself. Pure, and in the client bundle |
-| `unlock-ceremony.ts` | The unlock screen's client-only seam onto `@simplewebauthn/browser` — the one file naming that package, and only inside a dynamic `import()` in a function body, never at module scope, so it never sits in a server bundle. `supportsPasskeys()` decides only what the screen shows, never what the server allows |
-| `reentry.ts` | What a browser does about being hidden and shown again (docs/adr/0012, ticket 06): a visibility-based grace before an automatic "Lock now" post, and a `pageshow`/`event.persisted` re-check for a back-forward-cache restore. Plain `.ts`, in the client bundle, importing only `lock.ts`'s constants. A courtesy trigger, never the boundary — the grant's own rolling idle expiry is what actually enforces |
-| `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against — account kind, tax treatment, asset class — and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
-| `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
+| `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading`, what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
+| `chart-series.server.ts` | **The one place a chart's series is read** (spec 0015), for both surfaces: `chartReach` reads how far a surface can reach, its earliest recorded date and the latest observed session, and `chartSeries` picks the reader the resolved window implies, then applies §6.3's `coverage.total > 0` rule. That rule was two copies of route code before, one per screen, and forgetting it fails nothing: the chart just draws a climb out of a zero nobody recorded. `ChartScope` names the surface and what narrows it, and §6.3 says where the owner filter then sits |
+| `lock.server.ts` | **The only module that imports `@simplewebauthn/server`.** Ceremony options, assertion and registration verification, grant minting and its rolling idle expiry, and the fresh-assertion authorisation that enrolling or removing a passkey requires (docs/adr/0012, spec 0019). The grant cookie's own builders live here too, `HttpOnly`, so nothing browser-reachable ever needs them. The middleware (`app/root.tsx`) asks this module one question, whether there is a live grant, and acts on the answer |
+| `lock.ts` | The lock's browser-safe vocabulary: the idle-window and re-entry-grace constants, the one encoding rule `passkey.transports` is written and read through, and the return-address query parameter the unlock screen carries. Plain `.ts`, not `.server.ts`, the same argument `masking.ts` makes for itself. Pure, and in the client bundle |
+| `unlock-ceremony.ts` | The unlock screen's client-only seam onto `@simplewebauthn/browser`, the one file naming that package, and only inside a dynamic `import()` in a function body, never at module scope, so it never sits in a server bundle. `supportsPasskeys()` decides only what the screen shows, never what the server allows |
+| `reentry.ts` | What a browser does about being hidden and shown again (docs/adr/0012, ticket 06): a visibility-based grace before an automatic "Lock now" post, and a `pageshow`/`event.persisted` re-check for a back-forward-cache restore. Plain `.ts`, in the client bundle, importing only `lock.ts`'s constants. A courtesy trigger, never the boundary, since the grant's own rolling idle expiry is what actually enforces |
+| `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against, account kind, tax treatment and asset class, plus the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
+| `account-label.ts` | The upload picker's labels, grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
 | `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
-| `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter — narrowing to an owner is household-wide (`owner-filter.ts`) |
-| `allocation.ts` | `allocationBy` — one grouper over any figure, filed under whichever dimension `holdings-view.ts` hands it — plus unrealized gains by asset type |
+| `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter, because narrowing to an owner is household-wide (`owner-filter.ts`) |
+| `allocation.ts` | `allocationBy`, one grouper over any figure, filed under whichever dimension `holdings-view.ts` hands it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isScheduledQuoteWindow` and `isMarketOpen` (both optimisations) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
+| `raw-string.ts` | The one line-ending rule a raw instrument string needs when a form posts it back, browser-safe because the instruments step's action and the alias screen's rows both apply it |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
-| `masking.ts` | The masking vocabulary, cookie parsing and browser state reader (ADR-0002). React's external-store hook rereads the cookie after a same-tab toggle so the latest browser choice stays ahead of stale loader data; shared with the server and in the client bundle by design |
-| `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and the same fail-closed outcome |
-| `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request — attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
+| `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and fail-closed outcome |
+| `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request, attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
 **There is no module that decides *who* is asking, and that absence is still the design.** A
 contributor looking for one should read §7.6 and stop: identifying a person is a Compose service and
-a `Caddyfile`, not code in `app/`. What `lock.server.ts` above decides is a different question —
-*whether this browser holds a live grant* — and it decides that alone: a grant names a browser,
+a `Caddyfile`, not code in `app/`. What `lock.server.ts` above decides is a different question,
+*whether this browser holds a live grant*, and it decides that alone: a grant names a browser,
 never a person (docs/adr/0012), so nothing here reopens what the previous sentence rules out. The
 only other trace inside the process is `AUTH_GATE` deciding whether the warning banner is drawn, and
 a comment beside the lock's own `middleware` export in `app/root.tsx` recording that the verified
 email rides in on every request and is read by nothing.
 
-### `app/` and `app/routes/` — the shell and the screens
+### `app/` and `app/routes/`: the shell and the screens
 
 Ordered as `app/routes.ts` orders them: by how often a page is opened (DESIGN.md §8.4), flow-only
 and resource routes last. `root.tsx` and `routes.ts` sit one level up and lead the table because
 everything below is drawn inside the first and listed by the second. The one stylesheet,
-`app/app.css`, belongs to this tree too: several component headers argue decisions — the chart's
-custom properties, `.panel-form`'s wrapping, the mobile card reflow — that are only enforceable
-there.
+`app/app.css`, belongs to this tree too: several component headers argue decisions, the chart's
+custom properties, `.panel-form`'s wrapping and the mobile card reflow, that are only enforceable
+there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 
 | File | Role |
 |---|---|
-| `../root.tsx` | The shell every page is drawn inside — the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its `middleware` export — last in the array — starts the price poller, because `react-router-serve` leaves no server entry to hook and the middleware pipeline is the one server path every *request* passes through, resource routes included; a loader would miss `/healthz`, which has no `default`/`ErrorBoundary` to run one for. Also where the lock's `middleware` export lives (`lockMiddleware`, docs/adr/0012) — the first rule ever to fill the slot the gate's own middleware never did, refusing a request with no valid grant before `next()` is called, except for the two exempt paths (`/unlock`, `/healthz`). The same file still records, in the same place, that the gate's verified email rides in on every request and is read by nothing |
-| `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons — two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
+| `../root.tsx` | The shell every page is drawn inside: the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its `middleware` export, last in the array, starts the price poller, because `react-router-serve` leaves no server entry to hook and the middleware pipeline is the one server path every *request* passes through, resource routes included; a loader would miss `/healthz`, which has no `default`/`ErrorBoundary` to run one for. Also where the lock's `middleware` export lives (`lockMiddleware`, docs/adr/0012), the first rule ever to fill the slot the gate's own middleware never did, refusing a request with no valid grant before `next()` is called, except for the two exempt paths (`/unlock`, `/healthz`). The same file still records, in the same place, that the gate's verified email rides in on every request and is read by nothing |
+| `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons: two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
+| `../fonts/` | Inter, self-hosted, subset to latin, with no third-party round trip to draw a household's finances (DESIGN.md §13.4). Under `app/` rather than `public/` so Vite hashes it into `/assets/`, the one mount served `immutable`; `app.css` names it by relative `url()` and `root.tsx` preloads the same import |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
-| `holdings.tsx` | Every position across every account — §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
-| `analysis.tsx` | The portfolio cut four ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All four breakdowns group one read — four `GROUP BY` queries would be four more of the hand-rolled dashboard queries §8.2 names as the weakest point |
-| `income.tsx` | What the portfolio pays over the coming year and how much of it is taxed: the same figure by tax treatment and by account, off the same array Holdings reads — which is what makes the two structurally unable to disagree |
-| `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards — the size cap read twice, the empty file, the not-text file — live in `uploads.server.ts` so the action stays a thin translation |
-| `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader — the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
+| `holdings.tsx` | Every position across every account, §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
+| `analysis.tsx` | The portfolio cut four ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All four breakdowns group one read, since four `GROUP BY` queries would be four more of the hand-rolled dashboard queries §8.2 names as the weakest point |
+| `income.tsx` | What the portfolio pays over the coming year and how much of it is taxed: the same figure by tax treatment and by account, off the same array Holdings reads, which is what makes the two structurally unable to disagree |
+| `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards, the size cap read twice, the empty file and the not-text file, live in `uploads.server.ts` so the action stays a thin translation |
+| `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader, because the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
-| `upload/columns.tsx` | Step two — map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
-| `upload/instruments.tsx` | Step three — resolve first sightings, each answered once and remembered forever. The flow's one early write: it records vocabulary, not the statement. Reached only on a miss; otherwise the loader redirects to review |
-| `upload/review.tsx` | Step four — the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. Otherwise read-only — a wrong figure is fixed back on the columns step, because it is wrong in the mapping |
+| `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
+| `upload/instruments.tsx` | Step three: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
+| `upload/review.tsx` | Step four: the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. Otherwise read-only: a wrong figure is fixed back on the columns step, because it is wrong in the mapping |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
-| `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed — a tab rendering an apology is worse than one that is not there yet |
-| `settings/index.tsx` | What Settings holds and what it will hold — naming the unbuilt tabs is the honest version of a fresh install |
+| `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
+| `settings/index.tsx` | What Settings holds and what it will hold, since naming the unbuilt tabs is the honest version of a fresh install |
 | `settings/people.tsx` | The household roster; every rule lives in `people.server.ts` |
 | `settings/accounts.tsx` | The account list and the add form. Editing and closing are their own screen, not row affordances |
-| `settings/account.tsx` | One account: correct it, or close it — a separate submission with its own acknowledgement, refused by the domain when the tick is missing. Nothing here deletes anything |
-| `settings/tax.tsx` | The capital gains rate — a stored setting, not an environment variable, because it is the household's number (`0005_app_setting.sql`) |
-| `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls — and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
-| `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control** — ADR-0002 records why that lives in the chrome |
-| `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here — this route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
-| `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript — there is no progressive-enhancement path for a passkey check |
-| `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie — posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
+| `settings/account.tsx` | One account: correct it, or close it. Closing is a separate submission with its own acknowledgement, refused by the domain when the tick is missing. Nothing here deletes anything |
+| `settings/instruments.tsx` | The Instruments tab's alias half: every name a recorded statement taught the instance, the instrument each means, and a repoint or forget that always passes through a preview of what stays recorded. Every rule lives in `instrument-aliases.server.ts` |
+| `settings/tax.tsx` | The capital gains rate, a stored setting rather than an environment variable, because it is the household's number (`0005_app_setting.sql`) |
+| `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls, and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
+| `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control.** ADR-0002 records why that lives in the chrome |
+| `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here. This route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
+| `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript, since there is no progressive-enhancement path for a passkey check |
+| `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie, posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
 | `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
-| `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
-| `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied — those two alone decide the 200/503. Carries a `pricing` object beside them (spec 0021) which never changes that status: a live `worker` probe over the socket, and `scheduler`/`quotes`/`ok` read passively off the poller's own slot. Still never checks the provider, still never requires authentication (§7.4). A thin composer — `lib/health-response.ts` builds the body, `lib/price-health.ts` derives the categories |
+| `refresh.ts` | The one way a person spends a provider request on demand, a resource route like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
+| `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Those two alone decide the 200/503. Carries a `pricing` object beside them (spec 0021) which never changes that status: a live `worker` probe over the socket, and `scheduler`/`quotes`/`ok` read passively off the poller's own slot. Still never checks the provider, still never requires authentication (§7.4). A thin composer: `lib/health-response.ts` builds the body, `lib/price-health.ts` derives the categories |
 
 ### `app/components/`
 
@@ -2282,18 +2370,18 @@ also export pure helpers for testing.
 |---|---|
 | `amount.tsx` | **The one component that renders an amount** (spec 0007, ADR-0002): every absolute figure comes through here and every ratio does not. One component rather than a flag on the formatters, because the guarantee is only as good as its narrowest point; `masking-boundary.test.ts` asserts the import boundary in place of a linter. `Delta` lives here and asks it for the figure rather than being a second renderer |
 | `masking-toggle.tsx` | The control that hides every amount, in the chrome, labelled with what it will do rather than what is true. Two writers, one click: a real form to `/masking` for scripting-off, and a direct cookie write so the flip happens at the speed of a hand |
-| `lock-now-control.tsx` | The chrome's other control (ticket 06, docs/adr/0012): a real `<form method="post">` to `/lock-now`, drawn only while the household holds a passkey at all. Beside `MaskingToggle` and never mistakable for it — that one dots the amounts on a screen you are reading; this one ends the reading outright, on this browser, right now |
-| `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable — a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |
+| `lock-now-control.tsx` | The chrome's other control (ticket 06, docs/adr/0012): a real `<form method="post">` to `/lock-now`, drawn only while the household holds a passkey at all. Beside `MaskingToggle` and never mistakable for it: that one dots the amounts on a screen you are reading, while this one ends the reading outright, on this browser, right now |
+| `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable, because a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |
 | `first-run-prompt.tsx` | The one setup prompt, naming the next step only. Doing the thing it asks for is what removes it |
 | `error-page.tsx` | Where a thrown error lands. The wording is ours and the status alone picks it; nothing the throwing code wrote is printed (§7.6) |
 | `empty-state.tsx` | What a dashboard says when it has nothing to show: no figure and no axis at all, because a zero net worth and a never-uploaded instance are indistinguishable on screen and only one of them is alarming |
 | `stub-page.tsx` | A page header over a sentence saying what a screen will be, written for routes whose content belonged to a later slice. The slices landed: nothing imports it now |
 | `icons.tsx` | The icon set, inline, replacing the mock's CDN font for the same reasons the fonts are self-hosted (§13.7 of DESIGN.md). Decorative by design: every icon is `aria-hidden` beside a real text label |
-| `net-worth-chart.tsx` | The trend line, hand-drawn: one stroke over a gradient is a polyline, a path and some CSS, and a charting dependency would mean fighting its defaults to arrive back here. Colours resolve from custom properties through classes, because `stroke="#0055ff"` cannot follow a theme. The one file besides `amount.tsx` allowed to call a money formatter — its figures are axis ticks and per-point readouts, which no component can host — and the readout overlays are HTML positioned in percentages, not SVG children (ADR-0004) |
-| `chart-range-control.tsx` | The segmented range control. Every option links to its own explicit `range`, the default included — a bare relative link would read back whatever the cookie held. A disabled preset is a span, never a link, and every link carries the rest of the query |
+| `net-worth-chart.tsx` | The trend line, hand-drawn: one stroke over a gradient is a polyline, a path and some CSS, and a charting dependency would mean fighting its defaults to arrive back here. Colours resolve from custom properties through classes, because `stroke="#0055ff"` cannot follow a theme. The one file besides `amount.tsx` allowed to call a money formatter, since its figures are axis ticks and per-point readouts, which no component can host. The readout overlays are HTML positioned in percentages, not SVG children (ADR-0004) |
+| `chart-range-control.tsx` | The segmented range control. Every option links to its own explicit `range`, the default included, because a bare relative link would read back whatever the cookie held. A disabled preset is a span, never a link, and every link carries the rest of the query |
 | `owner-filter-control.tsx` | The owner filter (spec 0013, ADR-0008), in the page header's actions on every screen it reaches. A disclosure rather than a row of boxes, because a row grows with the household and reflowed differently everywhere. Its hidden fields arrive as a prop: the control knows no screen's vocabulary |
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
-| `price-freshness.tsx` | How old this page's figures are, and the control that changes it — one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
+| `price-freshness.tsx` | How old this page's figures are, and the control that changes it, one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
 | `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
 | `upload-steps.tsx` | The upload flow's step strip. Four entries always, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
 
@@ -2310,33 +2398,35 @@ also export pure helpers for testing.
 | `0007_masking_policy.sql` | The `masking_policy` column on `app_setting` |
 | `0008_refresh_cadence.sql` | The `refresh_cadence_minutes` column on `app_setting` |
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
-| `0010_price_backfill.sql` | `price_backfill` — one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
+| `0010_price_backfill.sql` | `price_backfill`, one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
-| `0012_lock.sql` | `passkey` and `unlock_grant` — the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
+| `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
+| `0013_upload_draft_answer.sql` | `upload_draft_answer`, a draft's own answers to its first sightings, keyed like `instrument_alias` and scoped by draft. `commitUpload` promotes the rows the recorded file names into vocabulary, and the draft's delete cascades the rest away (ADR-0013) |
+| `0014_position_set_created_at.sql` | `position_set.created_at` defaults to `statement_timestamp()`, the insert, not `now()`, the `BEGIN`, so a writer that waited for the account lock still sorts after the set it copied (§7.2) |
 
 ### `public/`
 
-Static files, served as-is — and all behind the gate like everything else.
+Static files, served as-is, and all behind the gate like everything else.
 
 | File | Role |
 |---|---|
 | `sw.js` | The whole service worker (§7.7, ADR-0007): network-only, stores nothing, exists for the inlined offline page. Deliberately hand-written and short enough to verify by eye |
-| `manifest.webmanifest` | The install manifest. Hand-written except the `icons` array, which `scripts/render-icons.ts` owns and rewrites — its entries are `data:` URIs so installation works from behind the gate (§7.7) |
+| `manifest.webmanifest` | The install manifest. Hand-written except the `icons` array, which `scripts/render-icons.ts` owns and rewrites. Its entries are `data:` URIs so installation works from behind the gate (§7.7) |
 | `icon.svg`, `icons/` | The drawing, and the committed rasterisations `render-icons.ts` produces from it |
-| `fonts/` | Inter, self-hosted, subset to latin — no third-party round trip to draw a household's finances (DESIGN.md §13.4) |
 
 ### `scripts/`
 
 Run by hand or by CI, never by the serving process. Each exists because the alternative was a
-recipe a human followed by hand — a defence that works until the day nobody has twenty minutes.
+recipe a human followed by hand, a defence that works until the day nobody has twenty minutes.
 
 | File | Role |
 |---|---|
-| `seed-demo.ts` | One plausible household portfolio, generated: several institutions, two people, years of statements, a drawdown, an instrument nobody can quote, a loan that sums negative — because a screenshot where everything is priced is a screenshot of the easy case. Idempotent, one transaction, and it refuses to touch a database missing its own marker. There is no `--force` |
-| `capture-screenshots.ts` | Every committed screenshot, retaken in one command against the demo household — the images are the one thing here that can go stale silently. Nothing the seed regenerates is hardcoded: accounts are found by kind, the edited row by having a cost basis. The first-run shots come from a second, migrated-but-unseeded database |
+| `seed-demo.ts` | One plausible household portfolio, generated: several institutions, two people, years of statements, a drawdown, an instrument nobody can quote, a loan that sums negative, because a screenshot where everything is priced is a screenshot of the easy case. Idempotent, one transaction, and it refuses to touch a database missing its own marker. There is no `--force` |
+| `capture-screenshots.ts` | Every committed screenshot, retaken in one command against the demo household, since the images are the one thing here that can go stale silently. Nothing the seed regenerates is hardcoded: accounts are found by kind, the edited row by having a cost basis. The first-run shots come from a second, migrated-but-unseeded database |
 | `render-icons.ts` | The committed PWA icons, rasterised from `public/icon.svg`, and the manifest's `data:`-URI `icons` array (§7.7). Committed rather than generated at build time so the artifacts change only when someone means them to |
-| `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference — so it cannot remove anything still reachable. Not a general garbage collector |
-| `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree — otherwise every run would silently certify the last release |
+| `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference, so it cannot remove anything still reachable. Not a general garbage collector |
+| `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree, since otherwise every run would silently certify the last release |
+| `caddy-body-cap-test.sh` | The `Caddyfile`'s request body caps, run against a stub `app` and `gate` that read every byte, because the live stack redirects an unauthenticated POST before reading its body. Run by `smoke-test.sh` |
 
 ### `tests/support/`
 
@@ -2345,10 +2435,10 @@ where each piece lives.
 
 | File | Role |
 |---|---|
-| `database.ts` | The primary seam: real Postgres, migrations applied once, every body in a transaction that is always rolled back — and `getDb()` scoped to it, so a loader querying with no argument reads the seeded rows |
-| `fixtures.ts` | **The one piece of test code allowed to know the schema** — the builders of §9.2. Money and quantity are decimal strings and the types refuse a number |
+| `database.ts` | The primary seam: real Postgres, migrations applied once, every body in a transaction that is always rolled back, and `getDb()` scoped to it, so a loader querying with no argument reads the seeded rows |
+| `fixtures.ts` | **The one piece of test code allowed to know the schema**, the builders of §9.2. Money and quantity are decimal strings and the types refuse a number |
 | `routes.ts` | Calling a route the way the framework calls it: the request built, the cookie carried, the thrown `Response` caught. Route modules import cleanly with no plugin because their one framework-shaped import is types only |
-| `render.tsx` | A page rendered through the real shell, where a React warning is a failure — the one known stub artefact is allowed by name and anything else throws |
+| `render.tsx` | A page rendered through the real shell, where a React warning is a failure. The one known stub artefact is allowed by name and anything else throws |
 
 ---
 
@@ -2359,15 +2449,16 @@ where each piece lives.
 | **Position set** | One photograph of everything an account held on one date. The unit of ingest. Immutable |
 | **Holding** | One instrument within a position set: a signed quantity and an optional cost basis per share |
 | **Latest** | `max(as_of_date)` per account, tie-broken by `created_at desc, id desc`. Defined once in SQL, in `latest_position_set`; `uploadReceipt` restates the ordering to reach a set's *predecessor*, which the function cannot express |
-| **First sighting** | A raw instrument string with no `instrument_alias` row behind it. Asked about once, remembered forever |
-| **Alias** | A byte-exact raw string from a statement, mapped to an instrument. `collate "C"` — no trimming, no case folding |
+| **First sighting** | A raw instrument string neither vocabulary nor the draft's own answers resolve. Asked about once per draft |
+| **Alias** | A byte-exact raw string from a recorded statement, mapped to an instrument. `collate "C"`, so no trimming and no case folding. Vocabulary: every upload reads it |
+| **Answer** | A draft's own resolution of a first sighting (`upload_draft_answer`), read by that draft alone. Promoted to an alias when the statement is recorded; gone with an abandoned draft |
 | **Fingerprint** | SHA-256 over a normalised header row. Order-sensitive, case-insensitive |
 | **Coverage** | `{ known, total }` beside every figure, so a partial answer is labelled partial rather than understated |
 | **Stale** | A price that exists and failed to refresh. Distinct from **unpriced**, which is a price that has never existed |
 | **Carry-forward** | Resolving a date to the last `price_daily` close at or before it. Why Saturday is worth Friday's close, and why USD prices at 1.00 on any date |
-| **The spine** | `price_daily` — at most one row per instrument per trading day. Non-trading days get no row at all; a missed poll is a visible gap the carry-forward closes, and one the next backfill of that instrument fills as a side effect |
-| **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history — history is finished days |
-| **The log** | `price_observation` — every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
+| **The spine** | `price_daily`, at most one row per instrument per trading day. Non-trading days get no row at all; a missed poll is a visible gap the carry-forward closes, and one the next backfill of that instrument fills as a side effect |
+| **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history, since history is finished days |
+| **The log** | `price_observation`, every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
 | **Poll** | One refresh attempt, recorded whether or not any observation resulted. What tells a quiet market apart from a server that was not running |
 | **Price worker** | The one process that talks to the price feed (`server/price-worker.ts`, §7.5): holds no rule about what to fetch or what a price means, and no database credential |
 | **Worker socket** | The unix socket in the shared volume through which the app asks and the worker answers (§3.1, §7.5): a request and a raw answer, nothing kept |

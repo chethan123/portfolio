@@ -16,6 +16,9 @@ import {
   holdingYield,
   parseQuery,
   parseRowKey,
+  projectGroup,
+  projectHolding,
+  projectTotal,
   rowKey,
   sortHoldings,
   summarise,
@@ -676,6 +679,118 @@ describe("groupHoldings", () => {
     );
 
     expect(groups[0]?.label).toBe("Workplace plan");
+  });
+});
+
+describe("the Holdings loader projection", () => {
+  const HOLDING_KEYS = [
+    "accountId",
+    "accountKind",
+    "accountName",
+    "accountNumberTail",
+    "annualDividend",
+    "assetClass",
+    "classification",
+    "costBasis",
+    "costBasisPerShare",
+    "institution",
+    "instrumentId",
+    "instrumentName",
+    "isPriced",
+    "isStale",
+    "ownerId",
+    "ownerName",
+    "price",
+    "quantity",
+    "quoteType",
+    "symbol",
+    "taxTreatment",
+    "unrealized",
+    "unrealizedDirection",
+    "value",
+    "yieldOnValue",
+  ];
+
+  const TOTAL_KEYS = [
+    "annualDividend",
+    "basisCoverage",
+    "costBasis",
+    "unrealized",
+    "unrealizedCoverage",
+    "unrealizedDirection",
+    "value",
+    "valueCoverage",
+    "valueIsNegative",
+  ];
+
+  it("allows exactly the reviewed holding, total, and group fields into loader data", () => {
+    const row = holding({
+      quantity: "1.00000001",
+      price: "250.0000",
+      value: "250.0000",
+      costBasisPerShare: "100.0001",
+      costBasis: "100.0001",
+      unrealized: "149.9999",
+      annualDividend: "3.2500",
+    });
+    const total = summarise([row]);
+    const group = groupHoldings([row], "owner", DEFAULT_SORT, DEFAULT_DIRECTION)[0]!;
+    // A future valuation column is present at runtime before the projection type learns it. A spread
+    // would serialize each sentinel; the allowlist must leave all three source levels unchanged.
+    const futureRow = Object.assign(row, { dayChange: "77.7700" });
+    const futureTotal = Object.assign(total, {
+      accruedIncome: "88.8800",
+      valueCoverage: Object.assign(total.valueCoverage, { coveredAmount: "66.6600" }),
+      basisCoverage: Object.assign(total.basisCoverage, { coveredAmount: "55.5500" }),
+      unrealizedCoverage: Object.assign(total.unrealizedCoverage, { coveredAmount: "44.4400" }),
+    });
+    const futureGroup = Object.assign(group, {
+      marketMovement: "99.9900",
+      holdings: [futureRow],
+      total: futureTotal,
+    });
+
+    expect(Object.keys(projectHolding(futureRow, false)).sort()).toEqual(HOLDING_KEYS);
+    expect(Object.keys(projectTotal(futureTotal, false)).sort()).toEqual(TOTAL_KEYS);
+    const projectedGroup = projectGroup(futureGroup, false);
+    expect(Object.keys(projectedGroup).sort()).toEqual([
+      "holdings",
+      "key",
+      "label",
+      "share",
+      "total",
+    ]);
+    expect(Object.keys(projectedGroup.holdings[0]!).sort()).toEqual(HOLDING_KEYS);
+    expect(Object.keys(projectedGroup.total).sort()).toEqual(TOTAL_KEYS);
+    expect(Object.keys(projectedGroup.total.valueCoverage).sort()).toEqual(["known", "total"]);
+    expect(Object.keys(projectedGroup.total.basisCoverage).sort()).toEqual(["known", "total"]);
+    expect(Object.keys(projectedGroup.total.unrealizedCoverage).sort()).toEqual(["known", "total"]);
+  });
+
+  it("omits known amounts while preserving unknowns and non-magnitude metadata", () => {
+    const row = holding({
+      quantity: "1.00000001",
+      price: null,
+      value: null,
+      costBasisPerShare: "100.0001",
+      costBasis: null,
+      unrealized: null,
+      annualDividend: "3.2500",
+    });
+    const projected = projectHolding(row, false);
+
+    expect(projected).toMatchObject({
+      quantity: undefined,
+      price: null,
+      value: null,
+      costBasisPerShare: undefined,
+      costBasis: null,
+      unrealized: null,
+      annualDividend: undefined,
+      isPriced: false,
+      unrealizedDirection: null,
+      yieldOnValue: null,
+    });
   });
 });
 

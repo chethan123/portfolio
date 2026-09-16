@@ -6,14 +6,14 @@ the changes you are most likely to make, and the traps that are specific to this
 
 Three other documents already speak to a developer, and this one deliberately does not repeat them:
 
-- [`../AGENTS.md`](../AGENTS.md) owns the **standards** — `any` never ships, what is worth testing,
+- [`../AGENTS.md`](../AGENTS.md) owns the **standards**: `any` never ships, what is worth testing,
   checking a library's current docs rather than recalling. Read it once, in full. It is short.
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) owns the **structure** and why the seams sit where they
   do. When a sentence here explains *why*, it is a link.
 - [`../README.md`](../README.md) owns the pitch, the screens, and running an instance.
 
 This file is the fourth: **how the work is done**. If your question is about a *deployed* instance
-rather than a checkout, it is not here — see the closing line.
+rather than a checkout, it is not here. See the closing line.
 
 - [Getting a working checkout](#getting-a-working-checkout)
 - [What to read first](#what-to-read-first)
@@ -30,16 +30,16 @@ rather than a checkout, it is not here — see the closing line.
 
 ## Getting a working checkout
 
-**The trap first, because you will hit it otherwise.** `npm run dev` starts Vite happily with no
-database and no error. Nothing goes wrong until the first page request, which returns 500 and renders
-an error page naming `DATABASE_URL` as missing — or `PUBLIC_ORIGIN`, which trips the identical trap
-if that is the one left unset. Configuration is parsed lazily — `getConfig()` in
-[`../server/config.ts`](../server/config.ts) reads and caches `process.env` on first use — so a boot
+**The trap first, because you will hit it otherwise.** `npm run dev` starts Vite with no database
+and no error. Nothing goes wrong until the first page request, which returns 500 and renders an error
+page naming `DATABASE_URL` as missing, or `PUBLIC_ORIGIN`, which trips the identical trap if that is
+the one left unset. Configuration is parsed lazily. `getConfig()` in
+[`../server/config.ts`](../server/config.ts) reads and caches `process.env` on first use, so a boot
 with no configuration is not a boot that fails. The dev server starting means nothing.
 
-The current [README](../README.md#working-on-it) gives the two-line version. This is the sequence
-that actually produces a working checkout. It is a deliberate overlap with the README: that reader is
-deciding whether to install anything, you are at a terminal with a clone.
+The current [README](../README.md#working-on-it) gives the two-line version. What follows is the
+sequence that actually produces a working checkout. The overlap with the README is deliberate: that
+reader is deciding whether to install anything, you are at a terminal with a clone.
 
 Node 24.12 or newer is required (`engines` in [`../package.json`](../package.json)), plus Docker
 with the Compose v2 plugin.
@@ -65,12 +65,12 @@ npm run dev                               # Vite reads .env by itself
 
 Some of that is worth knowing rather than rediscovering.
 
-**The dev server serves on `http://localhost:5173`** — Vite's default, which nothing here overrides.
+**The dev server serves on `http://localhost:5173`**, Vite's default, which nothing here overrides.
 If that port is taken, Vite says so and moves to the next free one, printing the URL it settled on.
 Read the banner before pointing anything else at 5173.
 
-**`compose.test.yaml` creates exactly one database, `portfolio_test`.** Every other database — a
-development one, a demo one, a scratch one — you create by hand, with the `psql` line above or
+**`compose.test.yaml` creates exactly one database, `portfolio_test`.** Every other one, a
+development one, a demo one, a scratch one, you create by hand, with the `psql` line above or
 `createdb` against `127.0.0.1:55432`. Skipping that is the second way to get a 500 on the first
 request, this time naming a database that does not exist.
 
@@ -86,7 +86,7 @@ in the environment; pick either and stay with it.
 
 **That Postgres is in-memory and dies with the container.** `compose.test.yaml` mounts the data
 directory on tmpfs on purpose. `docker compose -f compose.test.yaml down` loses everything in it,
-which is fine — nothing in a checkout is worth keeping. Recreate and re-migrate.
+which is fine because nothing in a checkout is worth keeping. Recreate and re-migrate.
 
 You now have an application that serves pages against an empty database. It will show you the
 first-run prompt, which is correct and not very interesting.
@@ -97,12 +97,12 @@ first-run prompt, which is correct and not very interesting.
 
 Before you open a file with the intent to change it.
 
-**[`../ARCHITECTURE.md` §4](../ARCHITECTURE.md#4-runtime-architecture)** — one process, four layers,
-and the rule that the arithmetic goes down and never up.
+**[`../ARCHITECTURE.md` §4](../ARCHITECTURE.md#4-runtime-architecture)** covers one process, four
+layers, and the rule that the arithmetic goes down and never up.
 [§4.2](../ARCHITECTURE.md#42-single-site-invariants) is the list of invariants a change has to keep,
 in three tiers of how strongly each is enforced. If you read one thing, read this. Then
 [`../AGENTS.md`](../AGENTS.md), which is short and is how the work here is judged, and
-[`../DESIGN.md`](../DESIGN.md) when a design looks wrong — usually the argument is already there.
+[`../DESIGN.md`](../DESIGN.md) when a design looks wrong. Usually the argument is already there.
 
 As you need them: [§5.6](../ARCHITECTURE.md#56-the-numeric-boundary) for how money crosses the driver
 boundary, [§6](../ARCHITECTURE.md#6-dataflows) for ingest and pricing end to end, and
@@ -126,20 +126,21 @@ node --env-file=.env ./scripts/seed-demo.ts
 ```
 
 It prints what it wrote table by table, then the totals and the cuts behind them, and finishes with
-the holdings it could not price — which is the branch the demo data exists for.
+the holdings it could not price, which is the branch the demo data exists for.
 
 **It refuses more than it accepts, on purpose.** It will not run if migrations are pending; it names
 them and tells you to apply them. It will not touch a database that holds data it did not create: the
 first successful run stamps a `demo_seed` marker table, and a database without that marker must be
 pristine or the script exits non-zero having written nothing. **There is no `--force`, and adding one
-would be a mistake** — the one thing this script must never become is a way to lose a real portfolio.
+would be a mistake**, because the one thing this script must never become is a way to lose a real
+portfolio.
 
 **It is idempotent, and it replaces rather than doubles.** The guard, the wipe of the previous
 generation and the insert all happen in one transaction. Run it twice and you have one household, not
 two.
 
 **Account ids climb on every run.** `account.id` is an identity column and the wipe is a plain
-`delete`, so a second run renumbers everything. Nothing may hardcode one — not a test, not a script,
+`delete`, so a second run renumbers everything. Nothing may hardcode one: not a test, not a script,
 not a screenshot recipe. [`../scripts/capture-screenshots.ts`](../scripts/capture-screenshots.ts)
 looks accounts up by *kind* for exactly this reason.
 
@@ -149,7 +150,7 @@ looks accounts up by *kind* for exactly this reason.
 
 Most of the suite needs Postgres on `:55432`. `fileParallelism: false` in
 [`../vitest.config.ts`](../vitest.config.ts) runs files one at a time against that single database,
-so a full run is serial — scope your runs while iterating.
+so a full run is serial. Scope your runs while iterating.
 
 ```sh
 docker compose -f compose.test.yaml up -d --wait
@@ -173,7 +174,7 @@ output. Check that the run reports at least one test *passed*. The filter is a r
 `describe` names. It does not match assertion messages. See [Vitest 4](https://v4.vitest.dev/config/testnamepattern).
 
 **If Postgres is not up,** the failure names the fix rather than making you infer it from a
-connection error — it tells you the URL it tried and the `compose.test.yaml` command that starts one,
+connection error. It tells you the URL it tried and the `compose.test.yaml` command that starts one,
 and mentions `TEST_DATABASE_URL` if you would rather point it at your own. A few files build their
 own connection, because what they test *is* the pool or the migration runner, and they carry the same
 message themselves.
@@ -183,7 +184,7 @@ message themselves.
 `tests/` holds a file per module or rule. Under it: `tests/routes/` for loaders and actions,
 `tests/journeys/` for a sequence of them end to end, `tests/invariants/` for the properties that must
 hold across modules, `tests/support/` for the helpers below, and `tests/fixtures/statements/` for
-real brokerage CSVs — which is what you want for anything touching ingest, and is the directory you
+real brokerage CSVs, which is what you want for anything touching ingest, and is the directory you
 will not find by guessing.
 
 ### How the suite is built
@@ -191,21 +192,23 @@ will not find by guessing.
 The reasoning is [ARCHITECTURE §9](../ARCHITECTURE.md#9-testing-architecture); what follows is only
 what changes how you run and write things.
 
-- **`withDatabase` is the isolation story.** It opens a transaction, runs your body, and unwinds it
-  with a private rollback sentinel. It also enters an `AsyncLocalStorage` store so that `getDb()`
-  returns *that transaction* however deep the call goes — which is why a loader called with no
+- **`withDatabase` is how a test is isolated.** It opens a transaction, runs your body, and unwinds
+  it with a private rollback sentinel. It also enters an `AsyncLocalStorage` store so that `getDb()`
+  returns *that transaction* however deep the call goes, which is why a loader called with no
   database argument does not quietly commit and leave rows for later tests to trip over.
 - **Fixtures are the seam for rows.**
   [`../tests/support/fixtures.ts`](../tests/support/fixtures.ts) has the builders, and they are the
   only test code that knows the schema. A shape they cannot express is a missing builder, not a
   licence for a raw `INSERT`.
 - **[`../tests/support/routes.ts`](../tests/support/routes.ts) is the seam for calling a route.**
-  `get`, `post` and `postFile` build the request; `args()` builds what a loader destructures and does
+  `get`, `post` and `postFile` build the request. `args()` builds what a loader destructures and does
   the one cast, because the generated `Route.LoaderArgs` carries the framework's whole shape and
-  cannot be constructed by hand — and `any` never ships, so do not invent a second cast. Routes
-  signal a redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo`
-  are how a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a
-  route's middleware chain the way the framework would — the seam for `chartRangeMiddleware`.
+  cannot be constructed by hand. `any` never ships, so do not invent a second cast. Routes signal a
+  redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo` are how
+  a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a route's
+  middleware chain the way the framework would, the seam for `chartRangeMiddleware`.
+  A Holdings correction test must model the reveal that makes its form available by sending the
+  `masked=0` cookie; `tests/routes/holdings.test.ts`'s `correct()` helper carries that precondition.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing
@@ -229,15 +232,15 @@ what changes how you run and write things.
 What [`../AGENTS.md`](../AGENTS.md) says about *what* is worth testing is the judgement call, and it
 is not repeated here. This is the house style for a test once you have decided to write it.
 
-**Open the file with a comment naming the risk it exists for**, usually citing DESIGN.md. Not what
-the file tests — why losing it would hurt.
+**Open the file with a comment naming the risk it exists for**, usually citing DESIGN.md. The
+comment says why losing the file would hurt, not what the file tests.
 
 **`describe` names a thing or a rule. `it` is a full sentence stating the rule**, with no "should":
 `it("a closed account is excluded from current holdings", ...)`.
 
 **Money and quantity are exact decimal strings at the stored scale.** `"250.0000"`, not `250`. Never
-`toBeCloseTo` — that is what would hide a driver-coercion regression, which is the class of bug the
-suite exists for. `toBeCloseTo` appears only for chart pixel coordinates, where it belongs.
+`toBeCloseTo`, because that is what would hide a driver-coercion regression, which is the class of
+bug the suite exists for. `toBeCloseTo` appears only for chart pixel coordinates, where it belongs.
 
 **Markup assertions are `toContain` fragments**, not whole strings. A whole-string assertion fails on
 every harmless attribute change.
@@ -245,7 +248,7 @@ every harmless attribute change.
 **Seed through the builders**, and if you need a shape they cannot express, add a builder rather than
 an `INSERT`.
 
-**Route logic is testable exactly as far as it is exported** —
+**Route logic is testable exactly as far as it is exported**,
 [§9.3](../ARCHITECTURE.md#93-the-standing-constraint). Tests import a `loader` or an `action` and call
 it directly, through the helpers in `tests/support/routes.ts` rather than hand-built arguments. If
 what you want to test lives inside a loader body, the fix is to move it out.
@@ -270,16 +273,16 @@ adding a route, or your editor will disagree with reality.
 `build` matters because vitest deliberately does not load the React Router plugin. A route that fails
 to bundle, or a `.server` import pulled into the client, is invisible until this step. `npm start`
 then serves what it produced with `react-router-serve`, still needing `DATABASE_URL` in the
-environment — and being a production build, it answers a configuration failure with a generic error
-page rather than the helpful one dev gives you.
+environment. Being a production build, it answers a configuration failure with a generic error page
+rather than the helpful one dev gives you.
 
-If you touched a migration, `npm run db:types` is a further gate — see the recipe below.
+If you touched a migration, `npm run db:types` is a further gate. See the recipe below.
 
 ### How a change is agreed and landed
 
 There is no `CONTRIBUTING.md` and no pull request template. What exists:
 
-- **Agreed work is a spec** in [`specs/`](specs/) — a numbered slice, with a directory of per-ticket
+- **Agreed work is a spec** in [`specs/`](specs/), a numbered slice, with a directory of per-ticket
   specs beside it. Nothing that is not agreed yet goes there ([the layout standard](README.md)).
 - **Tickets are GitHub issues.** [`agents/issue-tracker.md`](agents/issue-tracker.md) is the `gh`
   vocabulary the agent skills use against this repo, and
@@ -291,7 +294,7 @@ There is no `CONTRIBUTING.md` and no pull request template. What exists:
 - **Changes land on `main` through a pull request.** CI runs on every PR and on pushes to `main`.
 - **Commit messages carry the argument.** Read `git log` before you write your first one. The
   subject is imperative and sentence case, with no `type:` prefix, and it names the effect rather
-  than the files — "Stop the four ways a figure quietly went wrong", not "update valuation.ts". The
+  than the files: "Stop the four ways a figure quietly went wrong", not "update valuation.ts". The
   body is prose, often several paragraphs, and it is where the reasoning goes: what was wrong, what
   was tried, what was rejected. A one-line commit is the exception here, not the norm.
 
@@ -300,17 +303,17 @@ There is no `CONTRIBUTING.md` and no pull request template. What exists:
 [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml). Every job gates. The reasoning behind
 each is [§8.2](../ARCHITECTURE.md#82-ci).
 
-- **`check`** — typecheck, build, then a real Postgres: migrate, `npm test`, and
+- **`check`.** Typecheck, build, then a real Postgres: migrate, `npm test`, and
   `npm run db:types -- --verify`. That last step is what makes regenerating types after a migration
   mandatory rather than remembered.
-- **`audit`** — `npm audit signatures` and `npm audit --omit=dev --audit-level=high` both block.
+- **`audit`.** `npm audit signatures` and `npm audit --omit=dev --audit-level=high` both block.
   Dev-dependency advisories and deprecation notices are reported and do not fail the build.
-- **`smoke`** — [`../scripts/smoke-test.sh`](../scripts/smoke-test.sh) on a clean runner. The only
+- **`smoke`.** [`../scripts/smoke-test.sh`](../scripts/smoke-test.sh) on a clean runner. The only
   thing that exercises `compose.yaml`, the `Dockerfile`, the entrypoint's migrate-then-serve
   ordering, every container's privilege posture, and the `.sql` files being present in the runtime
-  image. **Never run it locally against anything you care about: it empties `./volumes/db/data` at
-  the start and again from an exit trap.**
-- **`publish`** — only on a `v*` tag, and only after all three of the above pass. Builds the image
+  image. **Never run it locally against anything you care about, because it empties
+  `./volumes/db/data` at the start and again from an exit trap.**
+- **`publish`.** Only on a `v*` tag, and only after all three of the above pass. Builds the image
   for `linux/amd64` and `linux/arm64` and pushes it to `ghcr.io/chethan123/portfolio-app`. Cutting a
   release is `git tag v1.2.3 && git push origin v1.2.3`; there is no release script and nothing to
   run by hand. The git tag's leading `v` is stripped from the image tags, so `v1.2.3` publishes
@@ -341,17 +344,17 @@ this is the same sequence with the parts that bite.
 1. `migrations/000N_name.sql`, zero-padded. Files are applied in **filename order compared as plain
    strings**, so the padding is load-bearing.
 2. Write it so it can run exactly once. The runner's ledger guarantees that, but any seed rows in it
-   carry their own `ON CONFLICT` guards anyway — a seed that depends on bookkeeping elsewhere to stay
-   singular is only accidentally idempotent.
+   carry their own `ON CONFLICT` guards anyway, because a seed that depends on bookkeeping elsewhere
+   to stay singular is only accidentally idempotent.
 3. `node --env-file=.env ./server/migrate.ts`
 4. **`npm run db:types`, and commit the regenerated `app/lib/database.generated.ts`.**
-5. `npm run typecheck` — this is where a migration that broke a query actually surfaces.
+5. `npm run typecheck`, where a migration that broke a query actually surfaces.
 
 Step 4 is not optional and is not a courtesy. `db:types` introspects a **live** database and rewrites
-that file; every Kysely query in the codebase is typed from it. Skip it and nothing fails locally —
-your queries stay typed against the *old* schema, `typecheck` passes, and the new column simply does
-not exist as far as TypeScript is concerned. CI's `db:types -- --verify` is what turns that silence
-into a red build. Note the `--`: it is a passthrough to `kysely-codegen`, not an npm flag.
+that file; every Kysely query in the codebase is typed from it. Skip it and nothing fails locally:
+your queries stay typed against the *old* schema, `typecheck` passes, and the new column does not
+exist as far as TypeScript is concerned. CI's `db:types -- --verify` is what turns that silence into
+a red build. Note the `--`, a passthrough to `kysely-codegen`, not an npm flag.
 
 `db:types` introspects whatever `DATABASE_URL` names, defaulting to `portfolio_test`. Point it at a
 database you have just migrated, or you will faithfully generate types for the wrong schema. Never
@@ -365,14 +368,14 @@ Details and the transaction semantics of a failed migration:
 Four places, and the last two are documentation that a reader will otherwise find contradicting the
 code:
 
-1. `configSchema` in [`../server/config.ts`](../server/config.ts) — with a Zod refinement whose
+1. `configSchema` in [`../server/config.ts`](../server/config.ts), with a Zod refinement whose
    message reads as advice to an operator, because that is where it ends up.
-2. [`../.env.example`](../.env.example) — commented, with the default and the reason.
+2. [`../.env.example`](../.env.example), commented, with the default and the reason.
 3. `DESIGN.md` §10.1, the authoritative table.
 4. The environment table in [`operating.md`](operating.md#environment-variables).
 
 Add a case to `tests/config.test.ts` if the variable has a shape that can be got wrong. And check
-whether it needs threading through `compose.yaml` — [§11.3](../ARCHITECTURE.md#113-live-architectural-debt)
+whether it needs threading through `compose.yaml`. [§11.3](../ARCHITECTURE.md#113-live-architectural-debt)
 records one variable that is not, and is therefore unsettable in the documented deployment.
 
 ### Add a route
@@ -382,7 +385,7 @@ Dropping a file into `app/routes/` does nothing at all until you add an `index()
 for it. This is the single most common wasted hour in this repository.
 
 1. The module under `app/routes/`, with its `loader`/`action` exported so they can be tested.
-2. The entry in `app/routes.ts`. The ordering there is editorial — it is nav order, not alphabetical.
+2. The entry in `app/routes.ts`. The ordering there is editorial. It is nav order, not alphabetical.
 3. `NAVIGATION` or `FOOTER_NAVIGATION` in [`../app/root.tsx`](../app/root.tsx), if it is a nav
    destination. Many routes are not.
 4. `npm run typecheck`, which regenerates the types behind `./+types/<route>`.
@@ -393,7 +396,7 @@ route never imports Zod and never states a domain rule
 
 ### Run a price worker alongside `npm run dev`
 
-Since the app cutover, `npm run dev` fetches nothing on its own: `runRefresh`'s default provider and
+Since the app cutover, `npm run dev` fetches nothing on its own. `runRefresh`'s default provider and
 the poller's both dial a unix socket, so with nothing listening there every tick logs one "no worker
 listening" line and every currency probe on upload comes back `unavailable`. Point both processes at
 the same path, under `/tmp` rather than the production default under `/run` a checkout has no reason
@@ -405,24 +408,24 @@ printf 'PRICE_WORKER_SOCKET=/tmp/portfolio-worker.sock\n' > .env.worker
 node --env-file=.env.worker ./server/price-worker.ts                  # a second terminal
 ```
 
-`.env.worker` carries that one line and nothing else — no `DATABASE_URL`, no password, none of what
-the superuser's `.env` [above](#getting-a-working-checkout) needs — because the worker's whole
-configuration is that single socket path. Leave it running in its own terminal beside `npm run dev`;
-`Ctrl-C` there stops it the same way it stops the dev server.
+`.env.worker` carries that one line and nothing else, because the worker's whole configuration is
+that single socket path. It has no `DATABASE_URL`, no password, none of what the superuser's `.env`
+[above](#getting-a-working-checkout) needs. Leave it running in its own terminal beside
+`npm run dev`; `Ctrl-C` there stops it the same way it stops the dev server.
 
-None of this is a hard requirement — the app degrades rather than refuses. Run `npm run dev` with no
+None of this is a hard requirement. The app degrades rather than refuses. Run `npm run dev` with no
 worker at all and a refresh has only stored prices to show: one `no worker listening at
 /tmp/portfolio-worker.sock (ENOENT)` line lands per call site (quotes, and the backfill batch too
-when there is a candidate to attempt, so up to two a refresh), a symbol probe on upload comes back
-`unavailable` for everything at once, and the instruments in that upload are created anyway — an
-unreachable provider is not allowed to hold a statement hostage. What it looks like once a worker is
+when there is a candidate to attempt, so up to two a refresh), and a symbol probe on upload comes
+back `unavailable` for everything at once. The instruments in that upload are created anyway, because
+an unreachable provider is not allowed to block a statement. What it looks like once a worker is
 actually answering is the next recipe.
 
 ### Exercise a backfill locally
 
-The batch only runs when something has a gap. The demo household has exactly one out of the box —
-the collective investment trust nobody can quote, which is a *permanent* gap and so never shows the
-batch doing anything. So make a fillable one, then watch a refresh close it.
+The batch only runs when something has a gap. The demo household has exactly one out of the box, the
+collective investment trust nobody can quote, which is a *permanent* gap and so never shows the batch
+doing anything. So make a fillable one, then watch a refresh close it.
 
 Seed and serve the demo database as in the screenshot recipe below, then:
 
@@ -449,22 +452,22 @@ Seed and serve the demo database as in the screenshot recipe below, then:
 
    `filled` with a count is the ordinary answer, and the row leaves the Settings list once its spine
    reaches its first-held date. `nothing_to_write` means the feed answered and every day it returned
-   was already stored. `no_history` is an unknown, delisted or renamed ticker — a delisted symbol
+   was already stored. `no_history` is an unknown, delisted or renamed ticker. A delisted symbol
    loses *all* its history at the feed, including the years it traded, so that one answers the same
    way forever at one request a day. `non_usd` is a foreign listing. `split_unresolved` means a split
    in the range could not be applied, so nothing was stored rather than some rows right and some
    wrong. `provider_failed` carries the provider's own text.
 
-An instrument is skipped for a day after any attempt, so a second press changes nothing — that is the
+An instrument is skipped for a day after any attempt, so a second press changes nothing. That is the
 retry clock, not a fault. To try again immediately, delete its ledger rows. Note that the trust never
-leaves the list whatever you press: nothing can fetch a price for it, which is the case the list
-exists to name.
+leaves the list whatever you press, because nothing can fetch a price for it, which is the case the
+list exists to name.
 
 ---
 
 ### Verify the split convention, and re-verify it after upgrading `yahoo-finance2`
 
-The un-adjust in `app/lib/price-provider.server.ts` stands on one fact about the feed that the
+The un-adjust in `app/lib/price-provider.server.ts` depends on one fact about the feed that the
 library does not document: that `close` is restated through later splits.
 
 **That fact has never been checked against the endpoint.** The slice was built where every Yahoo
@@ -473,12 +476,12 @@ than on a figure anyone read, and the adapter's module header says so in those w
 once is outstanding work**, and running it again after any `yahoo-finance2` upgrade is the standing
 job. Record the answer in that header either way.
 
-One call, outside the suite — a REPL or a throwaway script — for a symbol with a large, recent,
-unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example. Since the app cutover the call
-itself is made from `server/yahoo-client.ts`, in the worker's own process — `yahoo-finance2` is not
-imported anywhere under `app/lib` any more, only named in comments there (ARCHITECTURE.md §4.2's
-import-site row) — so exercise that client rather than the library directly, or a drift between the
-two would hide the answer:
+Make one call, outside the suite, from a REPL or a throwaway script, for a symbol with a large,
+recent, unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example. Since the app cutover
+the call itself is made from `server/yahoo-client.ts`, in the worker's own process, and
+`yahoo-finance2` is not imported anywhere under `app/lib` any more, only named in comments there
+(ARCHITECTURE.md §4.2's import-site row). So exercise that client rather than the library directly,
+or a drift between the two would hide the answer:
 
 ```js
 const { createYahooClient } = await import("./server/yahoo-client.ts");
@@ -499,7 +502,7 @@ Three things to record, all from that one response:
    fallback [ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md) fixes applies:
    answer `split-unresolved` for any response carrying a split inside the range, emit the rest as
    received, and say so in the header.
-3. **The raw instant on that split event** — `events.splits[0].date` before any formatting. The code
+3. **The raw instant on that split event**, `events.splits[0].date` before any formatting. The code
    files a split under its market date assuming the feed stamps it at the session open, as it stamps
    a daily bar. Stamped at UTC midnight instead it would resolve a day early, and the bar on the
    split's own day would be multiplied when it should not be. Nothing detects that; only the
@@ -510,7 +513,7 @@ Three things to record, all from that one response:
 ### Retake screenshots after changing a screen
 
 The committed images are the real application against the demo household, and they are the one thing
-here that goes stale in silence — nothing fails when a screen changes and its picture does not.
+here that goes stale in silence. Nothing fails when a screen changes and its picture does not.
 **A change to a screen is not finished until they are retaken.**
 
 `npm install` does not install a browser. Playwright's is a separate download and the first line
@@ -531,9 +534,9 @@ node --env-file=.env.demo ./scripts/capture-screenshots.ts
 ```
 
 The capture script assumes `http://127.0.0.1:5173` unless `BASE_URL` says otherwise, which is why the
-port is pinned — `--strictPort` fails loudly rather than quietly serving somewhere else. The
-empty-instance shots the guide opens with come from a second database — migrated, unseeded, served
-the same way — with `--first-run`. The script's header carries the rest of the mechanics; the
+port is pinned. `--strictPort` fails loudly rather than quietly serving somewhere else. The
+empty-instance shots the guide opens with come from a second database, migrated, unseeded and served
+the same way, with `--first-run`. The script's header carries the rest of the mechanics; the
 editorial decisions live in
 [`screenshots/README.md`](screenshots/README.md) and
 [`guide/images/README.md`](guide/images/README.md).
@@ -550,7 +553,7 @@ symptom you will see when you break it.
 `Number()` or `parseFloat` one. Arithmetic goes in SQL, or through
 [`../app/lib/money.ts`](../app/lib/money.ts), which works on `BigInt` counts of the last decimal
 place. The [README](../README.md) states this rule too, for a reader who is not going to open
-ARCHITECTURE.md; it is worth both copies because the symptom of breaking it is not an exception — it
+ARCHITECTURE.md; it is worth both copies because the symptom of breaking it is not an exception. It
 is a total that is a few cents out on some rows and right on others, and no error anywhere.
 Why: [§5.6](../ARCHITECTURE.md#56-the-numeric-boundary).
 
@@ -571,13 +574,14 @@ Yahoo payload is parsed through Zod at the edge. The validation lives in the dom
 route: a domain function returns a `ValidationError` with a message per field rather than throwing a
 500. A route that validates is a route that has taken a rule the domain owns.
 
-**One site per hazard.** Some of these are structural — the pool is constructed once, `yahoo-finance2`
-is imported once, prices are written once — and a second site there is simply the rejection. Others
-are a primitive with documented exceptions: `valuation.server.ts` owns valuation over `holding_valued`,
-and two other places are allowed out from under it on purpose — one reads the view to scope the "as
-of" line, and one computes a value in JavaScript for the upload review's diff column, because a row
-the account does not hold yet has no view row to read. Read [§4.2](../ARCHITECTURE.md#42-single-site-invariants) and its three tiers before you
-conclude a grep has found you a violation.
+**One site per hazard.** Some of these are structural: the pool is constructed once,
+`yahoo-finance2` is imported once, prices are written once. A second site there is the rejection.
+Others are a primitive with documented exceptions. `valuation.server.ts` owns valuation over
+`holding_valued`, and two other places are allowed out from under it on purpose: one reads the view
+to scope the "as of" line, and one computes a value in JavaScript for the upload review's diff
+column, because a row the account does not hold yet has no view row to read. Read
+[§4.2](../ARCHITECTURE.md#42-single-site-invariants) and its three tiers before you conclude a grep
+has found you a violation.
 
 **`any` never ships**, and derived types beat a second hand-written copy. That one belongs to
 [`../AGENTS.md`](../AGENTS.md), along with the rest of how a change is judged.
@@ -593,33 +597,33 @@ psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev
 docker compose -f compose.test.yaml exec db psql -U portfolio -d portfolio_dev
 ```
 
-`schema_migrations` is the ledger of applied filenames. No checksum is recorded, so editing an
-already-applied migration file changes nothing — the runner will never look at it again.
+`schema_migrations` is the ledger of applied filenames. The runner records no checksum, so editing an
+already-applied migration file changes nothing, because it never looks at that file again.
 
-**`.env` is read by some of these commands and not others, which is the confusing part.** There is
+**Some of these commands read `.env` and others do not, which is the confusing part.** There is
 no `dotenv` dependency; what you get is whatever the thing running your code does.
 
 - **`npm run dev` and `npm run build` read `.env`.** Both go through the React Router Vite plugin,
-  which loads every variable in it into `process.env` — bare Vite alone would not, which is why
+  which loads every variable in it into `process.env`. Bare Vite alone would not, which is why
   vitest does not read it. Put `DATABASE_URL` there and the dev server picks it up with nothing on
   the command line.
-- **Which files Vite reads.** `.env`, `.env.local` and `.env.<mode>` — `development` for `dev`,
-  `production` for `build`. It does not read arbitrary names, which is why this document keeps
+- **Which files Vite reads.** `.env`, `.env.local` and `.env.<mode>`, with `development` for `dev`
+  and `production` for `build`. It does not read arbitrary names, which is why this document keeps
   everything Vite-facing in `.env` rather than inventing a per-purpose filename that only
-  `--env-file` would find — `.env.worker`, [above](#run-a-price-worker-alongside-npm-run-dev), is
-  the one deliberate exception, and it is not really an exception to this rule: the worker never
-  runs under `npm run dev` or `npm run build`, so Vite never has occasion to read it either way. It
-  gets its own file for a different reason — its whole configuration is the one socket path, and it
-  must see neither `app`'s `DATABASE_URL` nor its password, which sharing `.env` would hand it for
-  free.
-- **`.env.worker` is read by nothing but the command that names it** —
+  `--env-file` would find. `.env.worker`, [above](#run-a-price-worker-alongside-npm-run-dev), is
+  the one deliberate exception, and it is not really an exception to this rule, because the worker
+  never runs under `npm run dev` or `npm run build`, so Vite never has occasion to read it either
+  way. It gets its own file for a different reason: its whole configuration is the one socket path,
+  and it must see neither `app`'s `DATABASE_URL` nor its password, which sharing `.env` would hand
+  it for free.
+- **Nothing reads `.env.worker` but the command that names it**,
   `node --env-file=.env.worker ./server/price-worker.ts`. Not `npm run dev`, not Vite, not
   `docker compose`; that one invocation is the only reader it has.
 - **`npm run migrate` does not**, and neither does anything else that runs a `server/*.ts` or
   `scripts/*.ts` file directly under Node. Those need `--env-file=<file>`, or the variable in the
   command's environment. Run one against a `.env` you assumed was being read and it refuses at once,
   naming `DATABASE_URL`.
-- **`docker compose` reads `.env` too**, for a third purpose — see
+- **`docker compose` reads `.env` too**, for a third purpose. See
   [`operating.md`](operating.md#environment-variables). That is the deployment's configuration, not
   your checkout's.
 
@@ -629,7 +633,7 @@ form that works everywhere beats a table of which command reads what.
 **Logs are stdout, and that is the entire pipeline.** In development they are in the terminal running
 `npm run dev`. There is no metrics endpoint, no tracing, no log shipping. Which kinds of line the
 application emits, and a stem worth grepping for each, is the list in
-[`operating.md`](operating.md#logs) — it is the same output in a checkout as in a container.
+[`operating.md`](operating.md#logs). The output is the same in a checkout as in a container.
 
 **Reset local state**, from cheapest to most thorough:
 
@@ -643,8 +647,10 @@ rm -rf .react-router build && npm run typecheck     # regenerate route types and
 An afternoon of clicking around leaves rows the seed did not write, and a database in that state
 without a `demo_seed` marker is exactly what it refuses. Drop it and recreate it instead.
 
-There is nothing to clean up after a test run: every test body is rolled back, so the suite leaves the
-database exactly as it found it, including after a failure.
+There is nothing to clean up after a test run: every test body is rolled back, and the few tests
+that have to commit (the two-connection races in `lock`, `lock-schema` and `account-lock`, and one
+`price-backfill` case) sweep their own rows, so the suite leaves the database exactly as it found
+it, including after a failure.
 
 **What is not available**, so you stop looking:
 
@@ -685,6 +691,6 @@ that way by imitation rather than by tooling.
 
 ---
 
-Questions about a *deployed* instance — configuration, TLS, backups, monitoring, upgrades — are
-[`operating.md`](operating.md). When something is already broken and you want a procedure rather than
+Questions about a *deployed* instance are [`operating.md`](operating.md): configuration, TLS,
+backups, monitoring, upgrades. When something is already broken and you want a procedure rather than
 an explanation, [`runbook.md`](runbook.md) is indexed by symptom.

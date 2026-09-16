@@ -1,9 +1,11 @@
 // Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec 0004
 // step 04). Byte-exact lookup (raw_string collate "C") — no fuzzy merge onto the wrong fund; a
-// miss prompts once, remembered forever. Written here, not at commit, so a re-upload of a fixed file doesn't ask again.
+// miss prompts once. An answer is the draft's own (upload_draft_answer) until its statement is
+// recorded, when commitUpload promotes it to vocabulary (issue #291): an abandoned draft's wrong
+// match must not resolve the next upload silently. A global row wins over a draft's answer.
 import { isAssetClass } from "./account-options.ts";
-import { getDb, type Database } from "./db.server.ts";
-import { ValidationError } from "./input.server.ts";
+import { getDb, inTransaction, type Database } from "./db.server.ts";
+import { NotFoundError, ValidationError } from "./input.server.ts";
 
 import type { ProbeSymbols } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
@@ -13,11 +15,8 @@ import type { Kysely } from "kysely";
 // Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" != "none chosen".
 export const NEW_CLASSIFICATION = "__new__";
 
-// Distinct strings with no instrument_alias row, in first-appearance order.
-export async function unresolvedStrings(
-  strings: readonly string[],
-  db: Kysely<Database> = getDb(),
-): Promise<string[]> {
+// Distinct, first-appearance order — the order the screen asks in.
+function distinctStrings(strings: readonly string[]): string[] {
   const distinct: string[] = [];
   const seen = new Set<string>();
   for (const value of strings) {
@@ -26,24 +25,47 @@ export async function unresolvedStrings(
       distinct.push(value);
     }
   }
-
-  if (distinct.length === 0) return [];
-
-  const rows = await db
-    .selectFrom("instrument_alias")
-    .select("raw_string")
-    .where("raw_string", "in", distinct)
-    .execute();
-
-  const resolved = new Set(rows.map((row) => row.raw_string));
-  return distinct.filter((value) => !resolved.has(value));
+  return distinct;
 }
 
-// Byte-exact except line endings (\r\n? -> \n): HTML form serialisation turns a lone LF/CR into
-// CRLF, so a quoted multi-line cell would fail this staleness check on every submit. Comparison only.
-export function sameRawStrings(a: string, b: string): boolean {
-  const lineEndings = (value: string): string => value.replace(/\r\n?/g, "\n");
-  return lineEndings(a) === lineEndings(b);
+// What each string means to this draft: vocabulary first, then the draft's own answers. Global
+// wins — a string another upload recorded meanwhile is that instrument everywhere, and recording
+// this draft's holding under its own answer would leave the next re-upload diffing it away.
+export async function aliasesFor(
+  strings: readonly string[],
+  draftId: string,
+  db: Kysely<Database> = getDb(),
+): Promise<Map<string, string>> {
+  const distinct = distinctStrings(strings);
+  const aliases = new Map<string, string>();
+  if (distinct.length === 0) return aliases;
+
+  const answers = await db
+    .selectFrom("upload_draft_answer")
+    .select(["raw_string", "instrument_id"])
+    .where("draft_id", "=", draftId)
+    .where("raw_string", "in", distinct)
+    .execute();
+  for (const row of answers) aliases.set(row.raw_string, row.instrument_id);
+
+  const vocabulary = await db
+    .selectFrom("instrument_alias")
+    .select(["raw_string", "instrument_id"])
+    .where("raw_string", "in", distinct)
+    .execute();
+  for (const row of vocabulary) aliases.set(row.raw_string, row.instrument_id);
+
+  return aliases;
+}
+
+// Distinct strings neither vocabulary nor this draft has answered, in first-appearance order.
+export async function unresolvedStrings(
+  strings: readonly string[],
+  draftId: string,
+  db: Kysely<Database> = getDb(),
+): Promise<string[]> {
+  const resolved = await aliasesFor(strings, draftId, db);
+  return distinctStrings(strings).filter((value) => !resolved.has(value));
 }
 
 export type UnresolvedPosition = {
@@ -53,21 +75,38 @@ export type UnresolvedPosition = {
   quantity: string;
 };
 
+export type InstrumentOption = { id: string; symbol: string | null; name: string };
+
+// Symbol then name: a picker that reads as a ticker list, the unquoted at the end. Settings →
+// Instruments draws the same picker.
+export async function listInstrumentOptions(
+  db: Kysely<Database> = getDb(),
+): Promise<InstrumentOption[]> {
+  return db
+    .selectFrom("instrument")
+    .select(["id", "symbol", "name"])
+    .orderBy("symbol")
+    .orderBy("name")
+    .execute();
+}
+
 export type ResolutionScreen = {
   unresolved: UnresolvedPosition[];
   // How many holdings the file states — the "of 5" in the intro sentence.
   totalPositions: number;
-  instruments: Array<{ id: string; symbol: string | null; name: string }>;
+  instruments: InstrumentOption[];
   classifications: Array<{ id: string; name: string; assetClass: string }>;
 };
 
 // positions come from parseStatement, already grouped by raw instrument cell — one position per distinct string.
 export async function resolutionScreen(
   positions: ReadonlyArray<ParsedPosition>,
+  draftId: string,
   db: Kysely<Database> = getDb(),
 ): Promise<ResolutionScreen> {
   const misses = await unresolvedStrings(
     positions.map((position) => position.instrument),
+    draftId,
     db,
   );
 
@@ -81,12 +120,7 @@ export async function resolutionScreen(
     };
   });
 
-  const instruments = await db
-    .selectFrom("instrument")
-    .select(["id", "symbol", "name"])
-    .orderBy("symbol")
-    .orderBy("name")
-    .execute();
+  const instruments = await listInstrumentOptions(db);
 
   const classifications = await db
     .selectFrom("classification")
@@ -151,7 +185,8 @@ export type ResolutionInput = {
 
 export type ResolvedAlias = {
   raw: string;
-  // The instrument the alias points at — the winner, when a concurrent draft got there first.
+  // What the string means to this draft from here on — vocabulary's row when another upload
+  // recorded one meanwhile.
   instrumentId: string;
 };
 
@@ -173,20 +208,14 @@ type CreatePlan = {
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
-// Kysely refuses .transaction() on a transaction; the test seam is one (prices.server.ts has the same helper).
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
-
 // Resolves every unresolved string in one submit, refusing the whole with a message per field
 // (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name
 // typed twice is created once and shared; feed requires a symbol and probes it once (non-USD
-// refuses, a provider failure just leaves it stale); concurrent drafts resolving the same string
-// don't error — the alias insert tolerates the conflict and the existing row wins.
+// refuses, a provider failure just leaves it stale). Answers land on the draft, not in
+// vocabulary — commitUpload promotes them. A string vocabulary gained meanwhile, or a double
+// submit of this draft, doesn't error: the row already there wins.
 export async function resolveAll(
+  draftId: string,
   resolutions: ReadonlyArray<ResolutionInput>,
   deps: ResolutionDeps,
   db: Kysely<Database> = getDb(),
@@ -452,8 +481,20 @@ export async function resolveAll(
     return verdict?.status === "ok" ? verdict.quoteType : null;
   };
 
-  // Classification (if new), then instrument, then alias — one transaction, so a fault leaves no half-remembered vocabulary.
+  // Classification (if new), then instrument, then the draft's answer — one transaction, so a fault leaves no half-remembered vocabulary.
   return inTransaction(db, async (trx) => {
+    // The lock serialises two submits of one draft (the second finds the first's answers) and
+    // turns a draft swept underneath the form into the expired page, not a foreign-key fault.
+    const draft = await trx
+      .selectFrom("upload_draft")
+      .select("id")
+      .where("id", "=", draftId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (draft === undefined) {
+      throw new NotFoundError("This upload has expired or was already recorded.");
+    }
+
     // doNothing + re-read covers the race validation can't: a concurrent submit landing the same name; either way the stored id answers.
     const created = new Map<string, string>();
     for (const [index, plan] of plans.entries()) {
@@ -508,20 +549,33 @@ export async function resolveAll(
         createdInstrument = true;
       }
 
-      // doNothing: a concurrent draft resolving the same string, and the existing row wins.
-      const inserted = await trx
-        .insertInto("instrument_alias")
-        .values({ raw_string: raw, instrument_id: instrumentId })
-        .onConflict((conflict) => conflict.column("raw_string").doNothing())
-        .returning("instrument_id")
+      // Vocabulary gained since the screen was drawn (another upload recorded it) outranks this
+      // answer, which is never written; doNothing covers this draft's own double submit.
+      const vocabulary = await trx
+        .selectFrom("instrument_alias")
+        .select("instrument_id")
+        .where("raw_string", "=", raw)
         .executeTakeFirst();
 
+      const inserted =
+        vocabulary !== undefined
+          ? undefined
+          : await trx
+              .insertInto("upload_draft_answer")
+              .values({ draft_id: draftId, raw_string: raw, instrument_id: instrumentId })
+              .onConflict((conflict) => conflict.columns(["draft_id", "raw_string"]).doNothing())
+              .returning("instrument_id")
+              .executeTakeFirst();
+
       if (inserted === undefined) {
-        const winner = await trx
-          .selectFrom("instrument_alias")
-          .select("instrument_id")
-          .where("raw_string", "=", raw)
-          .executeTakeFirstOrThrow();
+        const winner =
+          vocabulary ??
+          (await trx
+            .selectFrom("upload_draft_answer")
+            .select("instrument_id")
+            .where("draft_id", "=", draftId)
+            .where("raw_string", "=", raw)
+            .executeTakeFirstOrThrow());
 
         // Lost the race, nothing points at it — deleted rather than left as a duplicate forever. A new classification stays, harmless even unused.
         if (createdInstrument && winner.instrument_id !== instrumentId) {

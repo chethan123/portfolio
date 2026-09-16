@@ -7,6 +7,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  type RouterContextProvider,
   redirect,
   useLocation,
   useRevalidator,
@@ -40,6 +41,14 @@ import { getConfig } from "../server/config.ts";
 import type { Route } from "./+types/root";
 
 import "./app.css";
+import interWoff2 from "./fonts/inter-latin-var.woff2";
+
+/** The one import `app.css`'s `url()` also resolves to, so preload and stylesheet name the same hashed
+ * file. `crossOrigin` is required even same-origin: a font fetch is always CORS, and a preload whose
+ * mode differs is discarded and fetched twice. */
+export const links: Route.LinksFunction = () => [
+  { rel: "preload", as: "font", type: "font/woff2", href: interWoff2, crossOrigin: "anonymous" },
+];
 
 /** Refusing `/unlock` would refuse the one screen that lifts the refusal. A test pins the length. */
 export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
@@ -207,7 +216,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   const { masked, maskingPolicy, resolved: maskingResolved } = await maskingForRequest(
     request,
-    context,
+    context as RouterContextProvider,
   );
 
   // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again

@@ -10,6 +10,7 @@ import type { Pool, PoolClient } from "pg";
 import type { Database } from "~/lib/db.server";
 import { joinTransports } from "~/lib/lock";
 import type { BackfillOutcome } from "~/lib/prices.server";
+import type { StatementMapping } from "~/lib/statement";
 import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 
 export type SeededPerson = { id: string; name: string };
@@ -66,6 +67,8 @@ export type Fixtures = {
     asOf: string;
     source?: "upload" | "manual";
     sourceFilename?: string;
+    /** The statement's own bytes, retained as an upload leaves them — what the alias screen searches for a name. */
+    rawFile?: Uint8Array;
     /** Tie-break for two sets sharing as_of reads this before id — corrections tests need control. */
     createdAt?: Date | string;
     /** Empty is legal: how "sold everything" is recorded. */
@@ -77,6 +80,9 @@ export type Fixtures = {
     account: SeededAccount;
     filename?: string;
     bytes?: Uint8Array;
+    /** Planted directly, as rememberMapping leaves it — for a draft that must be review-ready without that step's column_mapping row. */
+    mapping?: StatementMapping;
+    hadFirstSightings?: boolean;
     /** What the 24h sweep reads — backdate a draft through this. */
     createdAt?: Date | string;
   }): Promise<SeededUploadDraft>;
@@ -182,9 +188,26 @@ export async function bootstrapPasskeyExists(
   return result.rows.length === 1;
 }
 
+/** Every name a committed race plants starts with this, so the sweeps can find them. */
+export const RACE_PREFIX = "race-";
+
 /** Removes every passkey the race planted. Run at both ends — a run killed right after the unblocking commit would strand rows for the next run otherwise. */
 export async function clearRacingPasskeys(handle: RawHandle): Promise<void> {
-  await handle.query("delete from passkey where credential_id like $1", ["race-%"]);
+  await handle.query("delete from passkey where credential_id like $1", [`${RACE_PREFIX}%`]);
+}
+
+/** Removes every row an account-lock race committed, in foreign-key order. Run at both ends, for the same reason as clearRacingPasskeys. */
+export async function clearRaces(db: Kysely<Database>): Promise<void> {
+  const pattern = `${RACE_PREFIX}%`;
+  const accounts = db.selectFrom("account").select("id").where("name", "like", pattern);
+
+  // holding and upload_draft cascade; an alias onto the seeded USD row has no instrument to cascade from.
+  await db.deleteFrom("position_set").where("account_id", "in", accounts).execute();
+  await db.deleteFrom("account").where("name", "like", pattern).execute();
+  await db.deleteFrom("instrument_alias").where("raw_string", "like", pattern).execute();
+  await db.deleteFrom("instrument").where("name", "like", pattern).execute();
+  await db.deleteFrom("classification").where("name", "like", pattern).execute();
+  await db.deleteFrom("person").where("name", "like", pattern).execute();
 }
 
 export function makeFixtures(db: Kysely<Database>): Fixtures {
@@ -272,6 +295,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     asOf,
     source = "upload",
     sourceFilename,
+    rawFile,
     createdAt,
     holdings = [],
   }) => {
@@ -282,6 +306,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
         as_of_date: asOf,
         source,
         source_filename: sourceFilename ?? null,
+        raw_file: rawFile === undefined ? null : Buffer.from(rawFile),
         ...(createdAt === undefined ? {} : { created_at: createdAt }),
       })
       .returning(["id", "as_of_date"])
@@ -309,6 +334,8 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     account,
     filename = `statement-${next()}.csv`,
     bytes = new TextEncoder().encode("Symbol,Quantity\n"),
+    mapping,
+    hadFirstSightings,
     createdAt,
   }) => {
     const row = await db
@@ -317,6 +344,8 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
         account_id: account.id,
         filename,
         raw_file: Buffer.from(bytes),
+        ...(mapping === undefined ? {} : { mapping: JSON.stringify(mapping) }),
+        ...(hadFirstSightings === undefined ? {} : { had_first_sightings: hadFirstSightings }),
         ...(createdAt === undefined ? {} : { created_at: createdAt }),
       })
       .returning("id")

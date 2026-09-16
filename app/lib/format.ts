@@ -176,3 +176,9 @@ export function joinWords(parts: string[]): string {
 
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
+
+// "VTI (Vanguard Total Stock Market ETF)", or the bare name for an instrument with no ticker —
+// one spelling for a picker, a refusal and a receipt to share.
+export function describeInstrument(instrument: { symbol: string | null; name: string }): string {
+  return instrument.symbol !== null ? `${instrument.symbol} (${instrument.name})` : instrument.name;
+}
