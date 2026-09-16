@@ -13,13 +13,13 @@ Terms are added when one is actually resolved, not preemptively.
 
 **Annual dividend**:
 What a holding is projected to pay over the coming year, from the quantity held and the instrument's
-current per-share rate. It is forward-looking and current-only, so there is no such figure for a
-past date.
+current per-share rate. The annual dividend is forward-looking and current-only, so there is no such
+figure for a past date.
 _Avoid_: dividend income, payout, projected income, distribution.
 
 **Weighted yield**:
-A group's annual dividend divided by the sum of its positive holding values. Debt does not
-reduce this denominator. It is a computed figure, never stored.
+A group's annual dividend divided by the sum of its positive holding values. Debt does not reduce
+this denominator. The yield is a computed figure, never stored.
 _Avoid_: average yield, blended yield, portfolio yield.
 
 ### How money is taxed, and where it sits
@@ -31,8 +31,8 @@ today and differ entirely in what is owed later.
 _Avoid_: account type, tax status, taxable/non-taxable.
 
 **Account type**:
-Which of five kinds an account is: brokerage, workplace plan, IRA, bank, liability. It is distinct
-from tax treatment, and the two are not interchangeable, because a workplace plan may be
+Which of five kinds an account is: brokerage, workplace plan, IRA, bank, liability. Account type is
+distinct from tax treatment, and the two are not interchangeable, because a workplace plan may be
 tax-deferred or tax-free.
 The schema calls this column `kind` (the `holding_valued` view exposes it as `account_kind`); the
 screens call it Account type.
@@ -46,12 +46,11 @@ _Avoid_: tax-advantaged, non-taxable, unsheltered.
 
 ### What an asset is
 
-**Classification**:
-The household's own label for what an instrument is, "S&P 500 fund" or "Cash". There is one per
-instrument, assigned when the instrument first enters the records and shared everywhere it is
-held. Labels are free-form and may mix axes (kind, index tracked, geography), which is fine for
-labelling; the asset class rollup is what aggregates.
-_Avoid_: category, tag, asset type, label; classification to mean the asset class.
+**Classification**: The household's own label for what an instrument is, "S&P 500 fund" or "Cash".
+Each instrument has one, assigned when the instrument first enters the records and shared everywhere
+it is held. Labels are free-form and may mix axes (kind, index tracked, geography), which is fine
+for labelling; the asset class rollup is what aggregates. _Avoid_: category, tag, asset type, label;
+classification to mean the asset class.
 
 **Asset class**:
 The fixed four-way rollup every classification maps onto: equity, bond, cash, other. It gives the
@@ -158,10 +157,10 @@ everything. _Avoid_: user, account, login, principal, role.
 
 **Locked**:
 The state in which a browser is refused every screen until a passkey is checked, whatever the gate
-has already admitted. It is a fact about one browser at one moment rather than about the household
-or the person. Signing in again does not clear it, and unlocking one browser leaves the rest
-locked. The instance locks whenever the household holds a passkey and stops when it holds none, so
-removing the last passkey is the only way to turn it off.
+has already admitted. Being locked is a fact about one browser at one moment rather than about the
+household or the person. Signing in again does not clear it, and unlocking one browser leaves the
+rest locked. The instance locks whenever the household holds a passkey and stops when it holds none,
+so removing the last passkey is the only way to turn it off.
 _Avoid_: signed out, timed out, app lock, screen lock, privacy mode.
 
 **Passkey**:
@@ -192,23 +191,62 @@ that address does. Off means the whole household, which is where every reading s
 everybody is only another way of saying it. _Avoid_: user filter, person filter, lens, view-as, my
 view, standing choice.
 
-**Reading**:
-What a screen's household-scoped queries actually narrow by, once the owner filter has been resolved
-against the roster for that request. A stale id, one naming nobody or an owner whose accounts have
-all closed, is dropped, while a selection that resolves to nobody at all keeps its raw ids rather
-than widening to the whole household. It is distinct from the owner filter itself, which is the
-address's own state and is never resolved against anything. The reading is what a query is allowed
-to believe that state means, and it is what makes the filter belong to "the reading in progress"
-the Owner filter entry above names.
-_Avoid_: the filter (for this, since that is the raw selection), the selection, narrowed owners.
+**Reading**: What a screen's household-scoped queries actually narrow by, once the owner filter has
+been resolved against the roster for that request. A stale id, one naming nobody or an owner whose
+accounts have all closed, is dropped, while a selection that resolves to nobody at all keeps its raw
+ids rather than widening to the whole household. The reading is distinct from the owner filter
+itself, which is the address's own state and is never resolved against anything. A reading is what a
+query is allowed to believe that state means, and it is what makes the filter belong to "the reading
+in progress" the Owner filter entry above names. _Avoid_: the filter (for this, since that is the
+raw selection), the selection, narrowed owners.
+
+### How a statement's names are learned
+
+**First sighting**:
+A name in a statement's instrument column that neither an alias nor that upload's own answers
+resolve. It is asked about once per upload, matched byte for byte, so a respelling of a fund already
+held is a first sighting too.
+_Avoid_: unknown symbol, unresolved ticker, new security, unrecognised instrument.
+
+**Answer**:
+The resolution one upload gave a first sighting: an instrument already listed, or one created there
+and then. It belongs to that upload and is read by it alone until the statement is recorded, when it
+becomes an alias. An upload that is abandoned takes its answers with it.
+_Avoid_: pending alias, draft alias, provisional alias, mapping.
+
+**Alias**:
+A name exactly as a recorded statement wrote it, mapped to the instrument it means. It is the
+household's vocabulary: every upload from every institution reads it before asking anything. It is
+written only when a statement is recorded, and repointed or forgotten under Settings → Instruments,
+never rewriting a holding already recorded.
+_Avoid_: symbol map, lookup, synonym, ticker alias, mapping.
+
+### What a statement is measured against
+
+**Baseline**:
+The set of positions a statement's diff is compared to: the account's latest position set at or
+before the statement's own date, or nothing if none was recorded that early. Not always "current
+holdings" — a statement dated behind a later one has a baseline older than what the account
+presently reports. Every confirmation Review asks for is computed against one specific baseline
+(`baselineSetId`), and a commit refuses rather than acting on a baseline that moved underneath it.
+_Avoid_: current holdings (only true when the statement is the newest one), predecessor (the
+receipt's own word for the same idea, once a set is already recorded).
+
+**Filed behind**:
+What a statement is when the account's current position set is already dated after it. Recording
+one still rewrites history between its own date and the next statement recorded after it — and the
+net worth chart along with it — but changes nothing the account reports today, so it needs its own
+acknowledgement rather than a removal tick computed against the wrong baseline.
+_Avoid_: backdated (true of the date; says nothing about whether anything currently reported is
+affected), stale (that is the confirmation going out of date, a different fact).
 
 ### How an account is told apart
 
 **Account number**:
-The optional free-form identifier recorded on an account as its institution states it, captured
-from a statement's own column or typed in Settings. It is a guard and a label, never a selector.
-Nothing auto-picks an account from it, and an upload naming a different number than the recorded
-one is refused rather than landed in the wrong place.
+The optional free-form identifier recorded on an account as its institution states it, captured from
+a statement's own column or typed in Settings. The number is a guard and a label, never a selector.
+Nothing auto-picks an account from it, and an upload naming a different number than the recorded one
+is refused rather than landed in the wrong place.
 _Avoid_: account ID, external ID, mask (for the stored value).
 
 **Number tail**:

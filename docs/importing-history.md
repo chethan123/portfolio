@@ -1,8 +1,8 @@
 # Importing history from Empower (Personal Capital)
 
 How to move the history a household has been keeping in Empower, the tracker formerly called
-Personal Capital, into this application. It is written for whoever self-hosts the instance. Most of
-it happens in a terminal against the database, which is why it lives here rather than in
+Personal Capital, into this application. This page is written for whoever self-hosts the instance.
+Most of it happens in a terminal against the database, which is why it lives here rather than in
 [`guide/`](guide/), and it is a job done once, not a screen anyone uses twice.
 
 The work is not one import. Empower holds several kinds of history, this application stores several
@@ -55,8 +55,8 @@ What each thing Empower holds can become here:
 ([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). Whenever an instrument's
 position history reaches back behind its price history, the refreshes after your statement lands
 fetch that instrument's daily closes from the feed and store every trading day the spine does not
-already hold. That is a handful of instruments per refresh. Nobody asks for it and there is nothing
-to run.
+already hold. That comes to a handful of instruments per refresh. Nobody asks for it and there is
+nothing to run.
 
 That leaves one window worth knowing about before a backdated statement lands:
 
@@ -109,7 +109,7 @@ Three cautions:
 - **The responses are sensitive.** They carry account numbers, institution names and balances. Save
   them outside any git checkout, and delete them at the end (the last step below).
 - **Prefer copying individual responses over "save all as HAR".** A HAR file also records your
-  request headers, and with them the session cookie. That is a credential, not just data.
+  request headers, and with them the session cookie. The cookie is a credential, not just data.
 
 If you would rather script the capture, community clients for this API exist and handle the login
 and two-factor steps. The same three cautions apply, doubled. Verify what a script fetched against
@@ -201,10 +201,10 @@ how much of it you do, so the notes here are only what matters at volume:
   from the file where the file carries one, and asks otherwise.
 - **Each upload is a complete photograph** of the account on that date. A partial file records
   everything absent from it as sold.
-- **Pick a cadence and keep it.** Positions are constant between photographs by construction, so
-  the line between two statements moves on prices alone. That is real, but only part of the truth
-  if money moved between them. Monthly statements make that gap a month; quarterly is often all a
-  401k offers and is fine.
+- **Pick a cadence and keep it.** Positions are constant between photographs by construction, so the
+  line between two statements moves on prices alone. The change is real, but only part of the
+  truth if money moved between the two dates. Monthly statements make that gap a month; quarterly is often
+  all a 401k offers and is fine.
 - **Correct a mistake by re-uploading.** There is no screen for deleting an upload; a corrected
   upload for the same date wins, and the superseded set lingers unread. Step 5's gap query still
   counts a superseded set. If one gets in the way, the schema is built for removing it: find its id
@@ -212,8 +212,8 @@ how much of it you do, so the notes here are only what matters at volume:
   is the earlier, by `created_at` then by `id`), and `delete from position_set where id = …` takes
   its holdings with it.
 
-When the most recent statements are in, open Holdings beside the captured `getHoldings` response
-and check the two agree account by account. That is what the capture is for. Then upload the rest,
+When the most recent statements are in, open Holdings beside the captured `getHoldings` response and
+check the two agree account by account. That check is what the capture is for. Then upload the rest,
 oldest or newest first as you like.
 
 ## Step 5: check the price spine

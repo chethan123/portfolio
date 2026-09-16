@@ -8,14 +8,15 @@ import {
   ValidationError,
   formFields,
 } from "~/lib/input.server";
+import { describeInstrument } from "~/lib/format";
 import {
   NEW_CLASSIFICATION,
   resolutionFieldsAt,
   resolutionScreen,
   resolveAll,
-  sameRawStrings,
 } from "~/lib/instrument-resolution.server";
 import { socketProbe } from "~/lib/provider-socket.server";
+import { sameRawStrings } from "~/lib/raw-string";
 import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
@@ -23,9 +24,10 @@ import type { Route } from "./+types/instruments";
 
 /**
  * Step three — resolve the file's first sightings (ingest brief §5): misses
- * against the alias table, pointed at an existing instrument or created —
- * both paths write the alias so the next export passes silently. The
- * flow's one early write; reached only with at least one miss.
+ * against the alias table, pointed at an existing instrument or created.
+ * Both paths write the draft's answer; the commit promotes it to vocabulary,
+ * so the next export passes silently only once this one is recorded.
+ * Reached only with at least one miss.
  */
 export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
@@ -42,7 +44,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
     if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
-    const screen = await resolutionScreen(result.parsed.positions);
+    const screen = await resolutionScreen(result.parsed.positions, draft.id);
 
     // A concurrent draft's submit resolving everything is the same skip as above.
     if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review${stale}`);
@@ -66,14 +68,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const draft = await requireDraft(params.draftId);
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
 
     // A double submit finds everything already resolved and moves on, as the loader would.
-    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
     const { unresolved } = result;
 
@@ -88,11 +91,12 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     // `raw` is the draft's own parsed string, never the posted copy — the alias stores the file's own bytes.
     await resolveAll(
+      draft.id,
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
       { probe: socketProbe },
     );
 
-    return redirect(`/upload/${draft.id}/review`);
+    return redirect(`/upload/${draft.id}/review${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
@@ -131,8 +135,9 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
           {screen.unresolved.length === 1 ? "has" : "have"} not been seen before.
         </p>
         <p>
-          Resolving writes the name down as vocabulary — the statement itself is still not
-          recorded until the last step.
+          An instrument created here exists at once. The answers themselves travel with this
+          upload and become vocabulary when the statement is recorded at the last step, so an
+          upload abandoned before then teaches the next one no names.
         </p>
 
         {staleReviewMessage ? (
@@ -197,9 +202,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       <option value="">Choose…</option>
                       {screen.instruments.map((instrument) => (
                         <option key={instrument.id} value={instrument.id}>
-                          {instrument.symbol !== null
-                            ? `${instrument.symbol} — ${instrument.name}`
-                            : instrument.name}
+                          {describeInstrument(instrument)}
                         </option>
                       ))}
                     </select>

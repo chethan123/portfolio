@@ -7,7 +7,7 @@
 import { sql } from "kysely";
 
 import { addDays } from "./chart-range.ts";
-import { getDb, getPool, type Database } from "./db.server.ts";
+import { getDb, getPool, inTransaction, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
 import { ProviderUnreachable } from "./price-provider.server.ts";
 import type {
@@ -446,14 +446,6 @@ function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> 
 
 /** Match form only — the stored symbol stays as typed (§4.3). */
 export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
-
-/** Kysely refuses `.transaction()` on a transaction, and the test seam is one. */
-function inTransaction<T>(
-  db: Kysely<Database>,
-  body: (trx: Kysely<Database>) => Promise<T>,
-): Promise<T> {
-  return db.isTransaction ? body(db) : db.transaction().execute(body);
-}
 
 /**
  * Fetch every feed instrument's price and store it. One transaction — not for atomicity against

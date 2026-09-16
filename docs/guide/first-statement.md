@@ -38,15 +38,18 @@ This step appears only for new instrument names. Otherwise the step strip shows 
 takes you straight to review. Known instrument names use saved aliases. Resolve each new name by linking an existing instrument
 or creating one with a classification and price source. A known non-USD quote is refused.
 
-These instrument and alias choices are saved before the statement is committed. Once every name
-is resolved, continue to review.
+An instrument you create here exists at once. The name-to-instrument answers travel with this
+upload and are saved as aliases when the statement is recorded at the last step, so an upload you
+walk away from teaches the next one nothing. Once every name is resolved, continue to review.
 
 ## Step 4: Review, then record
 
 ![Step four: the diff, with one position added, one updated and one removed](images/upload-4-review.png)
 
-Review additions, changed quantities or bases, and removals against the account's current holdings.
-A first statement has no earlier holdings to compare.
+Review additions, changed quantities or bases, and removals against what the account held on the
+statement's own date — usually its current holdings, but not when the statement is dated behind a
+later one. A first statement, or a statement dated before anything else recorded, has no earlier
+holdings to compare.
 
 ### Read the removals
 
@@ -64,7 +67,12 @@ server's time zone.
 
 Select **Record this statement** to append the snapshot and open the account. Before committing,
 you can return to Columns to fix a mapping. A dated upload may change historical values; an older
-statement does not displace a newer current snapshot.
+statement does not displace a newer current snapshot, but recording one dated behind the account's
+current statement needs its own acknowledgement — separate from a removal tick — because it
+rewrites history between its date and the next statement without changing what the account reports
+today. If the figures on screen changed underneath before you record — another upload landed, or
+the date was edited after the page was drawn — committing is refused and review redraws itself
+against what is actually true, rather than acting on what you last saw.
 
 ## Leaving an upload half-finished
 

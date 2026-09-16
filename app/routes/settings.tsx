@@ -4,6 +4,7 @@ import { NavLink, Outlet } from "react-router";
 const TABS = [
   { to: "/settings/people", label: "People" },
   { to: "/settings/accounts", label: "Accounts" },
+  { to: "/settings/instruments", label: "Instruments" },
   { to: "/settings/tax", label: "Tax" },
   { to: "/settings/prices", label: "Prices" },
   { to: "/settings/display", label: "Display" },

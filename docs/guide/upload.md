@@ -158,11 +158,13 @@ Bonds, Cash or Other.
 
 There is no skip. A string left unanswered would be a holding silently missing from the statement.
 
-**The answer is remembered permanently**, so that spelling passes straight through on every later
-export.
+**The answer is remembered once the statement is recorded**, so that spelling passes straight
+through on every later export. An upload that is never recorded teaches the next one nothing, and the same name is asked
+about again. A wrong answer that was recorded is repointed or forgotten under
+[Settings → Instruments](settings.md#instruments).
 
-Resolving saves the instrument name even if you abandon the draft. It does not add a position;
-positions are recorded at commit.
+An instrument you create here exists at once, even if you abandon the draft. Resolving does not
+add a position; positions and names are recorded at the last step.
 
 **Non-USD is refused, never converted.** Creating an instrument that quotes in another currency is
 refused naming the currency; the instance holds dollars only.
@@ -171,18 +173,23 @@ refused naming the currency; the instance holds dollars only.
 
 ![Step four: what the statement changes, grouped into added, updated and removed](images/upload-4-review.png)
 
-The review compares the resolved file against current holdings, listing additions, updates, and
-every removal. Missing rows mean sold. More than half removed requires acknowledgement.
+The review compares the resolved file against the account's own history as of the statement's date
+— its own date if it states one, otherwise the date typed at commit — which is not always what the
+account currently holds. Missing rows mean sold. More than half removed requires acknowledgement.
+A statement dated behind the account's current one is filed behind: recording it still rewrites
+history between its date and the next statement recorded after it, but changes nothing the account
+reports today, and committing it needs its own acknowledgement, separate from a removal tick.
 
 Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
 cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
-change history without becoming current. If another tab changes the file's mapping after Review,
-commit is refused with **This upload changed in another tab; review it again.** The refreshed review
-shows the new interpretation and clears any removal acknowledgement.
-
-When the file does not carry its own date, changing **Statement date** requires **Review this date**
-before the statement can be recorded. Selecting **Record this statement** immediately after editing
-the date also returns to a fresh review; the next press records only the date now shown.
+change history without becoming current. Commit is bound to the review you saw. A changed file or
+mapping, a different meaning for an instrument name, an edited date, or another write to the account
+can make that review unusable. An older open form may also need a fresh review after an app update.
+Nothing is recorded in that case. Read the redrawn date and diff, select any confirmations that now
+apply, and record again. If a figure is wrong, return to Columns or check the instrument name under
+Settings → Instruments. A price refresh alone does not invalidate Review. See
+[When something is refused](when-something-is-refused.md#a-statement-must-be-reviewed-again-before-it-records)
+for the recovery steps.
 
 Only account positions wait until commit. Drafts, mappings, and resolved instrument names are
 saved earlier and can survive an abandoned upload.

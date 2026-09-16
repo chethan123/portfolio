@@ -1,7 +1,9 @@
 // Corrects one position in place on Holdings (DESIGN.md §5.4) — balances.server.ts for accounts
 // holding more than one thing. Same rules: appends never edits (an update would restate every
 // plotted date back to the statement); carries the whole account forward; changes numbers, never
-// membership (§4.3). One statement; the CTE guards the instrument is still on the account.
+// membership (§4.3). Runs under withAccountLock (§7.2): the set it copies forward and the insert
+// are one transaction, so two corrections to different rows both survive. One statement; the
+// CTE guards the instrument is still on the account.
 import { sql } from "kysely";
 import { z } from "zod";
 
@@ -13,7 +15,7 @@ import {
   perShareAmount,
   signedQuantity,
 } from "./input.server.ts";
-import { getAccount } from "./accounts.server.ts";
+import { withAccountLock, type Account } from "./accounts.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, toUnits } from "./money.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
@@ -56,8 +58,8 @@ export type RevisedPosition = {
   asOf: IsoDate;
 };
 
-// Resolved via latest_position_set (§8.2), read twice per correction (write checks whether it
-// may apply, loader reads the date it'll carry). Null for no such instrument, or no statement at all.
+// Resolved via latest_position_set (§8.2), read twice per correction (loader reads the date it'll
+// carry; the write reads it under the account lock). Null for no such instrument, or no statement at all.
 export async function currentPosition(
   accountId: string,
   instrumentId: string,
@@ -146,7 +148,18 @@ export async function revisePosition(
   raw: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<RevisedPosition> {
-  const account = await getAccount(accountId, db);
+  return withAccountLock(accountId, db, (account, trx) =>
+    revisePositionUnderLock(account, instrumentId, raw, trx),
+  );
+}
+
+async function revisePositionUnderLock(
+  account: Account,
+  instrumentId: string,
+  raw: unknown,
+  db: Kysely<Database>,
+): Promise<RevisedPosition> {
+  const accountId = account.id;
 
   // Before field validation: a closed account isn't fixable by correcting the form.
   if (account.isClosed) {
@@ -216,7 +229,7 @@ export async function revisePosition(
   const asOf = effectiveDate(before.asOf);
 
   // One statement, every guard in it: `source` is empty unless the current set still carries
-  // this instrument; `greatest` re-runs effectiveDate against the locked set, so the correction can't land behind it.
+  // this instrument; `greatest` re-runs effectiveDate against that set, so the correction can't land behind it.
   const written = await sql<{ position_set_id: string }>`
     with source as (
       select ps.id, ps.as_of_date
@@ -251,7 +264,7 @@ export async function revisePosition(
 
   const landed = written.rows[0];
   if (landed === undefined) {
-    // source was empty by the time the statement ran — the same race before===null catches, lost after. Reported, not retried.
+    // No app writer empties `source` under the account lock; a set deleted by hand (docs/importing-history.md) still can. The CTE is what keeps set and rows one statement.
     throw ValidationError.form(
       `${account.name} changed while this form was open, so nothing was recorded. ` +
         "Reload the page and make the correction against what it holds now.",
