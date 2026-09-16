@@ -314,7 +314,18 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {diff.filedBehind !== null ? (
           <div className="danger-zone">
             <label className="choice">
+              {/* Keyed on the baseline, not just `defaultChecked`: React only assigns
+                  `element.defaultChecked` on a re-render, never `element.checked`
+                  (react-dom-client.development.js:1675-1678), and HTML's dirty-checkedness flag
+                  stops the content attribute affecting a box once a person has clicked it. A
+                  `<Form>` refusal reuses this component instance, so without a key change here a
+                  ticked box would keep looking ticked after the baseline moved voided it. No test
+                  covers this: `renderRoute` (tests/support/render.tsx) calls
+                  `renderToStaticMarkup` fresh each time, with no persistent fiber tree to
+                  reconcile against, so a render-only test cannot see a `key` remount either way —
+                  the safest honest check left is the browser itself. */}
               <input
+                key={diff.baselineSetId ?? ""}
                 type="checkbox"
                 name="confirmFiledBehind"
                 value="true"
@@ -336,7 +347,11 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
+              {/* Same reason as confirmFiledBehind's box above: keyed on the baseline so a
+                  baseline change remounts the box instead of leaving a person's own click stuck
+                  behind HTML's dirty-checkedness flag. */}
               <input
+                key={diff.baselineSetId ?? ""}
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"

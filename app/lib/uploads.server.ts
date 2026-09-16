@@ -944,7 +944,7 @@ async function commitUploadUnderLock(
       const measuredAgainst =
         diff.baselineAsOf !== null
           ? `what ${draft.accountName} held on ${diff.baselineAsOf}`
-          : `an account with nothing recorded before this statement's date`;
+          : `an account with nothing recorded on or before this statement's date`;
       reasons.push(
         "This statement was measured against figures that are no longer current: it is now " +
           `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +

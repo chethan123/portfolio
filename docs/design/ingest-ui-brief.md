@@ -727,8 +727,8 @@ is always demanded is a tick nobody reads.
 
 **Neither confirmation survives the baseline moving under it.** A tick given, then superseded by a
 concurrent writer or an edited date, renders unticked again against whatever is now on screen —
-never carried forward to figures it was not given for. The commit refuses that resubmit too, so the
-household never loses the round trip: recording lands on the second POST, not a third.
+never carried forward to figures it was not given for. The commit refuses that resubmit too:
+recording lands on the POST that follows the render showing these figures, whichever POST that is.
 
 ### 6.5 Commit, and the receipt
 
