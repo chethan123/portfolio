@@ -10,10 +10,10 @@ import {
   latestRecordableDate,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
-import { DraftNotReadyError, commitUpload, diffForDraft } from "~/lib/uploads.server";
+import { DraftNotReadyError, RefusedUpload, commitUpload, diffForDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
-import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
+import type { DiffAdded, DiffRemoved, DiffUpdated, UploadDiff } from "~/lib/uploads.server";
 import type { Route } from "./+types/review";
 
 /**
@@ -73,7 +73,10 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      // Carries the diff the refusal was decided against (§2.5) — a re-run loader would show the
+      // undated one again, and the household would tick a box against figures already rejected.
+      const diff = error instanceof RefusedUpload ? error.diff : null;
+      return { errors: fieldErrors, formError: formError ?? null, values, diff };
     }
     if (error instanceof DraftNotReadyError) {
       return redirect(`/upload/${params.draftId}/${error.step}`);
@@ -120,10 +123,18 @@ function GroupHeading({ label }: { label: string }) {
 }
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
-  const { diff, today, earliestAsOf, latestAsOf } = loaderData;
+  const { today, earliestAsOf, latestAsOf } = loaderData;
+  // The refusal's own diff when there was one (§2.5) — the loader's is undated for an asked date
+  // and would otherwise show the household figures the commit already rejected.
+  const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
   const errors = actionData?.errors;
   const values = actionData?.values;
+
+  // A tick given against a baseline that has since moved describes figures no longer on screen
+  // (§2.5) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
+  const baselineMoved =
+    values !== undefined && (values.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
 
   // A first statement reads "14 ADDED" alone — three zero counts would dress an ordinary upload as strange.
   const summary = diff.firstStatement
@@ -146,12 +157,26 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
         {diff.firstStatement ? (
           <p>
-            This is the first statement recorded for {diff.accountName}, so every position in
-            it is added — there is nothing yet to have updated or removed.
+            {diff.filedBehind !== null ? (
+              <>
+                Nothing was recorded for {diff.accountName} on or before{" "}
+                <span className="u-data">{diff.filedBehind.asOf}</span>,
+              </>
+            ) : (
+              <>This is the first statement recorded for {diff.accountName},</>
+            )}{" "}
+            so every position in it is added — there is nothing yet to have updated or removed.
           </p>
         ) : (
           <p>
-            Compared against what {diff.accountName} holds now.
+            {diff.asOf.date !== null ? (
+              <>
+                Compared against what {diff.accountName} held on{" "}
+                <span className="u-data">{diff.asOf.date}</span>.
+              </>
+            ) : (
+              <>Compared against what {diff.accountName} holds now.</>
+            )}
             {/* Unchanged rows absent from the table — listing rows that do nothing buries the ones that do. */}
             {diff.unchangedCount > 0 ? (
               <>
@@ -267,6 +292,30 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       <Form method="post">
         {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
         <input type="hidden" name="accountId" value={diff.accountId} />
+        {/* The confirmation's binding (§2.3) — "" is null's wire form, so a first statement's
+            missing baseline round-trips as the empty string on every side of the comparison. */}
+        <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />
+
+        {diff.filedBehind !== null ? (
+          <div className="danger-zone">
+            <label className="choice">
+              <input
+                type="checkbox"
+                name="confirmFiledBehind"
+                value="true"
+                defaultChecked={!baselineMoved && values?.confirmFiledBehind === "true"}
+              />
+              <strong>
+                This statement is dated <span className="u-data">{diff.filedBehind.asOf}</span>,
+                behind the <span className="u-data">{diff.filedBehind.currentAsOf}</span> figures{" "}
+                {diff.accountName} currently reports. Recording it changes this account's history
+                between {diff.filedBehind.asOf} and the next statement recorded after it, and with
+                it the net worth chart over those dates, but it does not change what the account
+                holds now.
+              </strong>
+            </label>
+          </div>
+        ) : null}
 
         {/* Danger-zone weight, same as closing an account — half or less draws no confirmation. */}
         {diff.majorityRemoved ? (
@@ -276,7 +325,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"
-                defaultChecked={values?.confirmRemovals === "true"}
+                defaultChecked={!baselineMoved && values?.confirmRemovals === "true"}
               />
               <strong>
                 {diff.removesEverything ? (

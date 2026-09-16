@@ -128,10 +128,21 @@ describe("the receipts", () => {
         asOf: "2026-02-28",
         filename: "February.csv",
         holdingCount: 2,
+        isCurrent: true,
+        currentAsOf: "2026-02-28",
       });
 
-      // A set this account really owns, but not the one it's reading — a URL-trusted receipt would announce January while the page prints February.
-      expect((await at(`?uploaded=${january.id}`)).receipt).toBeNull();
+      // A set this account really owns, but not the one it's reading, now gets a receipt of its
+      // own (§2.4) rather than silence — naming what the account actually reports instead of
+      // pretending January's own figures ("now holds 1 position") are still true.
+      const stale = await at(`?uploaded=${january.id}`);
+      expect(stale.receipt).toMatchObject({
+        setId: january.id,
+        asOf: "2026-01-31",
+        filename: "January.csv",
+        isCurrent: false,
+        currentAsOf: "2026-02-28",
+      });
       expect((await at("?uploaded=999999999")).receipt).toBeNull();
       expect((await at("?uploaded=%20or%201=1")).receipt).toBeNull();
     }),

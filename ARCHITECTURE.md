@@ -1144,21 +1144,18 @@ flowchart TD
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
     C -->|yes| R2["refuse: stale or forged form"]
-    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, classify"]
-    D --> E{"file names two<br/>different accounts?"}
+    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, resolve the<br/>date, classify against ITS<br/>dated baseline (#181)"]
+    D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
+    D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
+    D1 -->|no| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
-    F -->|no| G{"file dated itself?"}
-    G -->|no| G1{"posted asOf a real,<br/>non-future date?"}
-    G1 -->|no| R5["refuse: the statement date"]
-    G -->|yes| H
-    G1 -->|yes| H
-    H{"quantity × basis, or<br/>quantity × price,<br/>overflows numeric(20,4)?"}
+    F -->|no| H{"quantity × basis, price or<br/>dividend rate overflows<br/>numeric(20,4)?"}
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
-    H -->|no| I{"majority removed and<br/>not confirmed?"}
-    I -->|yes| R7["refuse, stating the ratio"]
-    I -->|no| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
+    H -->|no| J{"posted baselineSetId ≠ the<br/>diff's; filed behind and<br/>unconfirmed; or majority removed<br/>and unconfirmed?"}
+    J -->|any| R7["refuse, naming every applicable<br/>reason — a stale-baseline sentence<br/>dropped whenever filed-behind<br/>fires too (§2.3)"]
+    J -->|none| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
     T0 --> T1["DELETE the draft"]
     T1 --> T2{"0 rows deleted?"}
     T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT, promotion included"]
@@ -1174,14 +1171,25 @@ flowchart TD
     class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9 refuse
 ```
 
-Four of those deserve emphasis:
+Five of those deserve emphasis:
 
-- **The as-of guard is easy to miss** and sits in the middle of the run. When the file dates itself,
-  that date is used; when it does not, the date the reader typed is validated here, not in
-  `parseStatement`, which never saw it.
+- **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the two-account and
+  account-number guards rather than between them. When the file dates itself, that date is used;
+  when it does not, the date the reader typed is validated here, not in `parseStatement`, which
+  never saw it. Resolving it first is what lets every guard after read the dated baseline the
+  commit will actually act on, and it is the one refusal in this diagram that is not a
+  `RefusedUpload`: no diff exists yet for a bad date to attach to.
+- **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
+  classifies against the latest set at or before the resolved date, not always "now"; `J` collects
+  every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
+  the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
+  majority removal — and throws once, naming every applicable one. A stale baseline and a
+  filed-behind statement fire together on the ordinary first submit of a backdated, undated file,
+  so the stale-baseline sentence is dropped in that case rather than blaming the reader for a
+  round trip the design chose (see §7.2's baseline-moving row).
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
-  together. Checking both multiplications before storing turns a site-wide outage into one sentence
+  together. Checking every multiplication before storing turns a site-wide outage into one sentence
   about one row.
 - **Everything under the account lock, promotion then delete-first inside it.** The first draft
   read only learns which account to lock; the draft is read again once the row is held, so a
@@ -1419,8 +1427,8 @@ netWorthSessionSeries(owners, session)
 netWorthChange(owners, since) / firstRecordedDate(owners)
 
 // Account-scoped: already narrower than an owner, so they take no filter.
-accountTotal(id) / accountHoldings(id) / accountSeries(id, dates)
-accountSessionSeries(id, session) / accountFirstRecordedDate(id)
+accountTotal(id) / accountHoldings(id) / accountHoldingsAt(id, '2026-02-14')
+accountSeries(id, dates) / accountSessionSeries(id, session) / accountFirstRecordedDate(id)
 
 // Neither: facts about the feed and about the hand-typed prefix.
 latestObservedSession()        // which session 1D plots, off the observation log
@@ -1518,6 +1526,10 @@ separately rounded new value less the rounded value it replaced (spec 0016, meas
                  own reads through
                  chart-series.server.ts
 ```
+
+`accountHoldingsAt` sits beside `accountHoldings` in the same module but is not a dashboard reader:
+its one caller is the upload flow's `assembleDiff` (`uploads.server.ts`), which classifies a
+statement against the account's holdings on its own date rather than today's (#181).
 
 **No dashboard writes its own join.** Filtering, grouping and subtotalling happen as pure functions
 over the array the query layer already returned, because the grouping key is already on every row:
@@ -1635,6 +1647,7 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
 | Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
 | A string recorded, repointed or forgotten between the review's diff and the commit | The commit re-reads vocabulary for the file's strings inside its transaction, `for share`, and refuses on any difference or absence; the throw takes the promotion with it. The promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` |
+| A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
 | Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts:141-159`, taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |

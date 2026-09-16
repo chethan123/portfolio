@@ -46,8 +46,10 @@ walk away from teaches the next one nothing. Once every name is resolved, contin
 
 ![Step four: the diff, with one position added, one updated and one removed](images/upload-4-review.png)
 
-Review additions, changed quantities or bases, and removals against the account's current holdings.
-A first statement has no earlier holdings to compare.
+Review additions, changed quantities or bases, and removals against what the account held on the
+statement's own date — usually its current holdings, but not when the statement is dated behind a
+later one. A first statement, or a statement dated before anything else recorded, has no earlier
+holdings to compare.
 
 ### Read the removals
 
@@ -64,7 +66,12 @@ refused; tomorrow accommodates households ahead of the server's time zone.
 
 Select **Record this statement** to append the snapshot and open the account. Before committing,
 you can return to Columns to fix a mapping. A dated upload may change historical values; an older
-statement does not displace a newer current snapshot.
+statement does not displace a newer current snapshot, but recording one dated behind the account's
+current statement needs its own acknowledgement — separate from a removal tick — because it
+rewrites history between its date and the next statement without changing what the account reports
+today. If the figures on screen changed underneath before you record — another upload landed, or
+the date was edited after the page was drawn — committing is refused and review redraws itself
+against what is actually true, rather than acting on what you last saw.
 
 ## Leaving an upload half-finished
 

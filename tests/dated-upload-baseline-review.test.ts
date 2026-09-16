@@ -2,11 +2,15 @@
 // statement (audit finding QA-02), and a liability account's majority-removal tick gets demanded
 // for a removal a backdated upload will never actually make. Real Postgres — the risk is what
 // `assembleDiff` reads against, not CSV parsing (already covered by commit-upload.test.ts).
+// Rewritten per PLAN.md §2.6 to the four-part assertion: a refusal naming both dates, a second
+// submit that lands once bound to the refusal's own baseline, the receipt agreeing with what the
+// refusal carried, and the statement itself landing as history rather than as nothing.
 import { afterAll, describe, expect, it } from "vitest";
 
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { setBalance } from "~/lib/balances.server";
-import { commitUpload, diffForDraft, rememberMapping } from "~/lib/uploads.server";
-import { accountHoldings } from "~/lib/valuation.server";
+import { RefusedUpload, commitUpload, rememberMapping } from "~/lib/uploads.server";
+import { accountHoldings, holdingsAt } from "~/lib/valuation.server";
 
 import { loader as accountPage } from "../app/routes/account.tsx";
 
@@ -69,7 +73,7 @@ async function stage(
 
 describe("Review's diff for a statement dated between two existing ones", () => {
   it(
-    "reads its baseline from the statement immediately before the upload's own date, not the account's current one",
+    "refuses committing against the wrong baseline, then records the statement between the two it chronologically belongs between",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -102,39 +106,79 @@ describe("Review's diff for a statement dated between two existing ones", () => 
         "Symbol,Quantity,Basis,AsOf\nALP,120,,2026-07-31\n",
         { columns: { asOf: "AsOf" } },
       );
-      const diff = await diffForDraft(draftId, db);
+
+      // 1. The first submit is refused, and the message names both dates.
+      let refusal: RefusedUpload;
+      try {
+        await commitUpload(draftId, { accountId: account.id }, db);
+        throw new Error("Expected the first submit to be refused, and it was not.");
+      } catch (error) {
+        if (!(error instanceof RefusedUpload)) throw error;
+        refusal = error;
+      }
+      expect(refusal.fieldErrors.form).toMatch(/2026-07-31/);
+      expect(refusal.fieldErrors.form).toMatch(/2026-09-09/);
 
       // Chronologically this statement replaces 2026-06-30, which held both funds at 100 and 50 —
-      // so ALP's "before" should read 100 and BET should read as a removal. Today the diff reads
-      // against 2026-09-09 instead: ALP's "before" is already 150, and BET, already absent there,
-      // never appears in the diff at all.
-      expect(diff.currentCount).toBe(2);
-      expect(diff.updated.find((row) => row.instrumentId === alpha.id)?.quantityBefore).toBe(
-        "100.00000000",
+      // so ALP's "before" reads 100 and BET reads as a removal, which is what the refused diff
+      // must already show: reading against 2026-09-09 instead would have ALP's "before" at 150,
+      // and BET, already absent there, never appear at all.
+      expect(refusal.diff.currentCount).toBe(2);
+      expect(
+        refusal.diff.updated.find((row) => row.instrumentId === alpha.id)?.quantityBefore,
+      ).toBe("100.00000000");
+      expect(refusal.diff.removed.some((row) => row.instrumentId === beta.id)).toBe(true);
+
+      // 2. A second submit, carrying the refusal's own baseline and its confirmation, lands.
+      const committed = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          baselineSetId: refusal.diff.baselineSetId ?? "",
+          confirmFiledBehind: "true",
+        },
+        db,
       );
-      expect(diff.removed.some((row) => row.instrumentId === beta.id)).toBe(true);
+
+      // 3. receipt.counts equals the counts of the diff the refusal carried.
+      const page = await accountPage(
+        args(get(`/accounts/${account.id}?uploaded=${committed.setId}`), { accountId: account.id }),
+      );
+      expect(page.receipt?.counts).toEqual({
+        added: refusal.diff.added.length,
+        updated: refusal.diff.updated.length,
+        unchanged: refusal.diff.unchangedCount,
+        removed: refusal.diff.removed.length,
+      });
+
+      // 4. accountHoldings is unchanged (2026-09-09 is still current), and holdingsAt this
+      // statement's own date shows what it actually recorded, proving it became history.
+      const after = await accountHoldings(account.id, db);
+      expect(after.map((holding) => holding.quantity)).toEqual(["150.00000000"]);
+
+      const atStatement = await holdingsAt(ALL_OWNERS, "2026-07-31", db);
+      expect(atStatement.map((holding) => holding.quantity)).toEqual(["120.00000000"]);
     }),
   );
 });
 
 describe("a majority-removal tick for a removal a backdated upload will never make", () => {
   it(
-    "is not asked for nothing: committing must actually remove what Review said it would, or say why not",
+    "asks for no such tick against an empty baseline, refuses on the filed-behind date alone, and records the statement as history",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
       const account = await seedAccount({ kind: "liability", name: "Chase Auto Loan" });
 
       // The typed balance is the account's whole statement: one USD holding, negative (owed).
       await setBalance(account.id, { amount: "14,500.00", asOf: "2026-09-15" }, db);
-      const [typed] = await accountHoldings(account.id, db);
-      if (typed === undefined) throw new Error("setBalance did not write a holding to read back.");
 
       // An uploaded loan statement names the balance under its own row, not the seeded USD
       // instrument setBalance uses (DESIGN.md §14.8: an upload resolves instruments on its own).
       const principal = await seedInstrument({ symbol: null, name: "Principal Balance" });
       await seedInstrumentAlias({ instrument: principal, rawString: "Principal Balance" });
 
-      // A loan statement lists what's owed as a positive figure; owedAsPositive negates it.
+      // A loan statement lists what's owed as a positive figure; owedAsPositive negates it. Dated
+      // before the account's only statement, so nothing was recorded on or before it at all.
       const draftId = await stage(
         ctx,
         account,
@@ -142,27 +186,56 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
         { owedAsPositive: true },
       );
 
+      // 1. The first submit is refused on the filed-behind date alone — nothing recorded on or
+      // before 2026-07-31 means an empty baseline, so there is no majority to ask about.
+      let refusal: RefusedUpload;
+      try {
+        await commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db);
+        throw new Error("Expected the first submit to be refused, and it was not.");
+      } catch (error) {
+        if (!(error instanceof RefusedUpload)) throw error;
+        refusal = error;
+      }
+      expect(refusal.fieldErrors.form).toMatch(/2026-07-31/);
+      expect(refusal.fieldErrors.form).toMatch(/2026-09-15/);
+      expect(refusal.diff.firstStatement).toBe(true);
+      expect(refusal.diff.majorityRemoved).toBe(false);
+
+      // 2. A second submit, carrying the refusal's own (empty) baseline and its confirmation,
+      // lands with no confirmRemovals — there is nothing at this baseline to confirm removing.
       const committed = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-07-31", confirmRemovals: "true" },
+        {
+          accountId: account.id,
+          asOf: "2026-07-31",
+          baselineSetId: refusal.diff.baselineSetId ?? "",
+          confirmFiledBehind: "true",
+        },
         db,
       );
 
-      const after = await accountHoldings(account.id, db);
-      const removalActuallyHappened = !after.some(
-        (holding) => holding.instrumentId === typed.instrumentId,
-      );
-
+      // 3. receipt.counts and firstStatement agree with the diff the refusal carried.
       const page = await accountPage(
         args(get(`/accounts/${account.id}?uploaded=${committed.setId}`), { accountId: account.id }),
       );
-      const householdWasTold = page.receipt !== null;
+      expect(page.receipt?.firstStatement).toBe(true);
+      expect(page.receipt?.counts).toEqual({
+        added: refusal.diff.added.length,
+        updated: refusal.diff.updated.length,
+        unchanged: refusal.diff.unchangedCount,
+        removed: refusal.diff.removed.length,
+      });
 
-      // Review demanded confirming the loss of the typed balance — the file replaces the
-      // account's only holding. Because the statement is dated behind that balance, the removal
-      // never happens. Either it should happen, or the household should have been told it would
-      // not. Today neither is true.
-      expect(removalActuallyHappened || householdWasTold).toBe(true);
+      // 4. The typed balance is still what the account reports today — this statement changes
+      // nothing current — and holdingsAt its own date shows what it actually recorded.
+      const after = await accountHoldings(account.id, db);
+      expect(after).toHaveLength(1);
+      expect(after[0]?.quantity).toBe("-14500.00000000");
+
+      const atStatement = await holdingsAt(ALL_OWNERS, "2026-07-31", db);
+      expect(atStatement).toHaveLength(1);
+      expect(atStatement[0]?.instrumentId).toBe(principal.id);
+      expect(atStatement[0]?.quantity).toBe("-15000.00000000");
     }),
   );
 });

@@ -89,8 +89,9 @@ concluding a grep found a violation):
   process, not this one; `app/lib/prices.server.ts` is the only price writer.
 - `app/lib/valuation.server.ts` is the only valuation reader of `holding_valued` — every screen
   reads holdings through its readers (`currentHoldings(owners)`, `netWorth(owners)`,
-  `holdingsAt(owners, d)`, `netWorthAt(owners, d)`, `accountHoldings(id)`, `accountTotals(owners)`).
-  A screen writing its own join over `holding` has left the design. The household-scoped readers
+  `holdingsAt(owners, d)`, `netWorthAt(owners, d)`, `accountHoldings(id)`,
+  `accountHoldingsAt(id, d)`, `accountTotals(owners)`). A screen writing its own join over
+  `holding` has left the design. The household-scoped readers
   take an `OwnerFilter` first, required and never defaulted, so a new screen cannot read holdings
   without saying whose (ADR-0008); the account-scoped ones are already narrower and take none.
 - `app/lib/accounts.server.ts`'s `withAccountLock` is the only door onto an account's history:

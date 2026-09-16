@@ -48,16 +48,20 @@ export type LastRecorded = {
 
 // Resolved via latest_position_set (§8.2) — never a second order-by here.
 // Returns null when the account has no statement of any kind yet.
+// `asOf` is latest_position_set's own second parameter, unused by every caller until #181's
+// dated baseline: undated is the account's current set; dated is the latest one at or before it.
+// Kept last, after `db`, so the 17 existing callers passing `db` second need no change.
 export async function lastRecorded(
   accountId: string,
   db: Kysely<Database> = getDb(),
+  asOf: IsoDate | null = null,
 ): Promise<LastRecorded | null> {
   if (!/^\d+$/.test(accountId)) return null;
 
   const result = await sql<{ id: string; as_of_date: string; source: string }>`
     select id, as_of_date, source
     from position_set
-    where id = latest_position_set(${accountId}::bigint)
+    where id = latest_position_set(${accountId}::bigint, ${asOf}::date)
   `.execute(db);
 
   const row = result.rows[0];

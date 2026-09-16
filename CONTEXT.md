@@ -221,6 +221,25 @@ written only when a statement is recorded, and repointed or forgotten under Sett
 never rewriting a holding already recorded.
 _Avoid_: symbol map, lookup, synonym, ticker alias, mapping.
 
+### What a statement is measured against
+
+**Baseline**:
+The set of positions a statement's diff is compared to: the account's latest position set at or
+before the statement's own date, or nothing if none was recorded that early. Not always "current
+holdings" — a statement dated behind a later one has a baseline older than what the account
+presently reports. Every confirmation Review asks for is computed against one specific baseline
+(`baselineSetId`), and a commit refuses rather than acting on a baseline that moved underneath it.
+_Avoid_: current holdings (only true when the statement is the newest one), predecessor (the
+receipt's own word for the same idea, once a set is already recorded).
+
+**Filed behind**:
+What a statement is when the account's current position set is already dated after it. Recording
+one still rewrites history between its own date and the next statement recorded after it — and the
+net worth chart along with it — but changes nothing the account reports today, so it needs its own
+acknowledgement rather than a removal tick computed against the wrong baseline.
+_Avoid_: backdated (true of the date; says nothing about whether anything currently reported is
+affected), stale (that is the confirmation going out of date, a different fact).
+
 ### How an account is told apart
 
 **Account number**:

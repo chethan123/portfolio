@@ -95,6 +95,9 @@ type Planted = {
   x: SeededInstrument;
   y: SeededInstrument;
   z: SeededInstrument;
+  // The seeded set's own id — every commitUpload call here is dated after it, so it is the
+  // baseline every one of them must post to avoid an unrelated stale-baseline refusal (§2.3).
+  baselineSetId: string;
 };
 
 /** A committed account holding X and Y, with Z known but not held. Each instrument is aliased to its own name, so a file naming it needs no resolving step; every name is under RACE_PREFIX for the sweep. */
@@ -116,7 +119,7 @@ async function plant(database: Kysely<Database>, tag: string): Promise<Planted> 
   const y = await instrument("Y");
   const z = await instrument("Z");
   const account = await fixtures.seedAccount({ name: name("account"), owner });
-  await fixtures.seedPositionSet({
+  const seeded = await fixtures.seedPositionSet({
     account,
     asOf: "2026-09-01",
     holdings: [
@@ -125,7 +128,7 @@ async function plant(database: Kysely<Database>, tag: string): Promise<Planted> 
     ],
   });
 
-  return { account, x, y, z };
+  return { account, x, y, z, baselineSetId: seeded.id };
 }
 
 const MAPPING: StatementMapping = {
@@ -227,7 +230,7 @@ describe("the account lock", () => {
     "carries an upload forward in a correction that was waiting on its commit",
     async () => {
       const database = await testDatabase();
-      const { account, x, y } = await plant(database, "upload-then-correction");
+      const { account, x, y, baselineSetId } = await plant(database, "upload-then-correction");
       const draftId = await stagedUpload(database, account, [
         [x.name, "100"],
         [y.name, "200"],
@@ -235,7 +238,7 @@ describe("the account lock", () => {
 
       await behindTheLock(
         database,
-        (trx) => commitUpload(draftId, { accountId: account.id, asOf: today() }, trx),
+        (trx) => commitUpload(draftId, { accountId: account.id, asOf: today(), baselineSetId }, trx),
         (trx) => revisePosition(account.id, x.id, { quantity: "111", costBasisPerShare: "" }, trx),
       );
 
@@ -249,10 +252,10 @@ describe("the account lock", () => {
   );
 
   it(
-    "reads the statement it lands on when an upload was waiting on another, refusing a majority removal it could not see before",
+    "reads the statement it lands on when an upload was waiting on another, refusing a stale baseline it could not see before",
     async () => {
       const database = await testDatabase();
-      const { account, x, y, z } = await plant(database, "upload-then-upload");
+      const { account, x, y, z, baselineSetId } = await plant(database, "upload-then-upload");
       const first = await stagedUpload(database, account, [
         [x.name, "10"],
         [y.name, "20"],
@@ -260,16 +263,18 @@ describe("the account lock", () => {
       ]);
       const second = await stagedUpload(database, account, [[x.name, "10"]]);
 
+      // `second` is drawn before the race against the plant's own set — it cannot know the id of
+      // the set `first` is about to land while it waits, so its stale posted baseline is the
+      // refusal (§2.3 reason 1), not the majority-removal tick a same-baseline diff would ask for.
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
-          (trx) => commitUpload(first, { accountId: account.id, asOf: today() }, trx),
+          (trx) => commitUpload(first, { accountId: account.id, asOf: today(), baselineSetId }, trx),
           (trx) => commitUpload(second, { accountId: account.id, asOf: today() }, trx),
         ),
       );
 
-      // Against the set it began on the file removed nothing; against the one it lands on, two of three.
-      expect(refusal.fieldErrors.form).toMatch(/removes 2 of the 3 positions/);
+      expect(refusal.fieldErrors.form).toMatch(/recorded history changed after this review was drawn/);
       expect(await latestQuantities(database, account.id)).toEqual({
         [x.id]: "10.00000000",
         [y.id]: "20.00000000",
@@ -297,7 +302,7 @@ describe("the account lock", () => {
       await fixtures.seedInstrumentAlias({ instrument: fund, rawString: fund.name });
       await fixtures.seedInstrumentAlias({ instrument: usd, rawString: name("CASH") });
       const account = await fixtures.seedAccount({ name: name("account"), owner, kind: "bank" });
-      await fixtures.seedPositionSet({
+      const baseline = await fixtures.seedPositionSet({
         account,
         asOf: "2026-09-01",
         source: "manual",
@@ -311,7 +316,12 @@ describe("the account lock", () => {
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
-          (trx) => commitUpload(draftId, { accountId: account.id, asOf: today() }, trx),
+          (trx) =>
+            commitUpload(
+              draftId,
+              { accountId: account.id, asOf: today(), baselineSetId: baseline.id },
+              trx,
+            ),
           (trx) => setBalance(account.id, { amount: "300", asOf: today() }, trx),
         ),
       );

@@ -1,12 +1,15 @@
 // Reproduces #181: an upload dated behind the account's current statement lands without anyone
 // noticing. Review's diff, the commit, and the account page each read a different "now" — no
-// single unit test sees all three disagree at once, which is why this is a journey.
+// single unit test sees all three disagree at once, which is why this is a journey. Rewritten per
+// PLAN.md §2.6: the fix refuses the first submit rather than silently no-opping or saying nothing,
+// so the four-part assertion below is what "fixed" actually means, not the `landed || told`
+// disjunction the original repro settled for.
 import { afterAll, describe, expect, it } from "vitest";
 
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { revisePosition } from "~/lib/positions.server";
-import { QUANTITY_SCALE, toUnits } from "~/lib/money";
-import { commitUpload, diffForDraft, rememberMapping } from "~/lib/uploads.server";
-import { accountHoldings } from "~/lib/valuation.server";
+import { RefusedUpload, commitUpload, rememberMapping } from "~/lib/uploads.server";
+import { accountHoldings, holdingsAt } from "~/lib/valuation.server";
 
 import { loader as accountPage } from "../../app/routes/account.tsx";
 
@@ -55,7 +58,7 @@ async function stage(
 
 describe("an upload dated behind the account's current statement", () => {
   it(
-    "does not silently no-op what Review promised, nor say nothing changed",
+    "refuses the first submit naming both dates, then records the statement as history once confirmed, agreeing with the receipt",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -87,42 +90,59 @@ describe("an upload dated behind the account's current statement", () => {
       // A second statement, also dated 2026-08-31 — now behind the correction above. This is the
       // exact shape #181 reports: an upload whose as_of_date lands behind the current set.
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRPXA,100,\n");
-      const diff = await diffForDraft(draftId, db);
 
-      // Whatever Review is about to promise the household, in its own words.
-      const promisedRemoved = diff.removed.map((row) => row.instrumentId);
-      const promisedUpdates = new Map(
-        diff.updated.map((row) => [row.instrumentId, row.quantityAfter]),
-      );
+      // 1. The first submit is refused, and the message names both dates — the statement's own
+      // and what the account's correction made current.
+      let refusal: RefusedUpload;
+      try {
+        await commitUpload(draftId, { accountId: account.id, asOf: "2026-08-31" }, db);
+        throw new Error("Expected the first submit to be refused, and it was not.");
+      } catch (error) {
+        if (!(error instanceof RefusedUpload)) throw error;
+        refusal = error;
+      }
+      expect(refusal.fieldErrors.form).toMatch(/2026-08-31/);
+      expect(refusal.fieldErrors.form).toMatch(new RegExp(corrected.asOf));
 
-      // 1 of 2 never crosses the majority-removal gate, so this commits with no confirmation.
+      // 2. A second submit, carrying the refusal's own baselineSetId and its confirmation, lands.
       const committed = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-08-31" },
+        {
+          accountId: account.id,
+          asOf: "2026-08-31",
+          baselineSetId: refusal.diff.baselineSetId ?? "",
+          confirmFiledBehind: "true",
+        },
         db,
       );
 
-      const after = await accountHoldings(account.id, db);
-      const afterByInstrument = new Map(after.map((holding) => [holding.instrumentId, holding.quantity]));
-
-      const removalsLanded = promisedRemoved.every((id) => !afterByInstrument.has(id));
-      const updatesLanded = [...promisedUpdates].every(([id, quantity]) => {
-        const actual = afterByInstrument.get(id);
-        return (
-          actual !== undefined && toUnits(actual, QUANTITY_SCALE) === toUnits(quantity, QUANTITY_SCALE)
-        );
-      });
-
+      // 3. receipt.counts equals the counts of the diff the refusal carried — the three-way
+      // agreement between Review, the commit and the receipt this ticket exists to establish.
       const page = await accountPage(
         args(get(`/accounts/${account.id}?uploaded=${committed.setId}`), { accountId: account.id }),
       );
-      const householdWasTold = page.receipt !== null;
+      expect(page.receipt?.counts).toEqual({
+        added: refusal.diff.added.length,
+        updated: refusal.diff.updated.length,
+        unchanged: refusal.diff.unchangedCount,
+        removed: refusal.diff.removed.length,
+      });
 
-      // Either what Review promised actually happened, or the household was told this statement
-      // landed behind what the account already reports. Today neither is true: the account still
-      // holds RPXA at 150 and RPXB at 200 — the correction, untouched — and the page renders nothing.
-      expect(removalsLanded || householdWasTold).toBe(true);
-      expect(updatesLanded || householdWasTold).toBe(true);
+      // 4. accountHoldings is unchanged — the correction is still what the account reports today,
+      // because the backdated statement sits behind it — and holdingsAt the statement's own date
+      // shows the statement, proving it became history rather than nothing.
+      const after = await accountHoldings(account.id, db);
+      expect(after.map((holding) => holding.quantity).sort()).toEqual([
+        "150.00000000",
+        "200.00000000",
+      ]);
+
+      const atStatement = await holdingsAt(ALL_OWNERS, "2026-08-31", db);
+      const byInstrument = new Map(
+        atStatement.map((holding) => [holding.instrumentId, holding.quantity]),
+      );
+      expect(byInstrument.get(rpxa.id)).toBe("100.00000000");
+      expect(byInstrument.has(rpxb.id)).toBe(false);
     }),
   );
 });
