@@ -39,7 +39,7 @@ The same total again, one row per account, largest first. This is the panel that
 statement the money turns up in.
 
 **An account that pays nothing is still a row**, reading $0.00, like a savings account or a loan.
-That is the missing-rate rule showing its effect: the app is not claiming those accounts pay
+That row is the missing-rate rule showing its effect: the app is not claiming those accounts pay
 nothing, only that it has no rate on file for them.
 
 ## The rings, and when a percentage is missing
@@ -75,8 +75,8 @@ they do not get the same screen. Start at [upload.md](upload.md).
 ![Annual dividend by tax treatment on a phone, the ring above its table](images/income-mobile.png)
 
 Same figures, same two panels, but each one stacks: the ring first, full width, its table below
-rather than beside it. That is the same reflow [Analysis](analysis.md#on-a-phone) uses for its own
-rings, since this screen draws them.
+rather than beside it. That reflow is the same one [Analysis](analysis.md#on-a-phone) uses for its
+own rings, since this screen draws them.
 
 ---
 

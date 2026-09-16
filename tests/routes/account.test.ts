@@ -1,6 +1,6 @@
 // Account drill-down's guards (DESIGN.md §13) — what the route does with the URL, not the already-tested modules
 // beneath it: the id (404 for no-such-account, non-id, or closed) and the receipt params (?uploaded=/?recorded=
-// name which set or date was written; the confirmation is read back from the database, never trusted from the URL).
+// name which set was written; the confirmation is read back from the database, never trusted from the URL).
 import { afterAll, describe, expect, it } from "vitest";
 
 import Account, { action, loader, middleware } from "../../app/routes/account.tsx";
@@ -116,7 +116,7 @@ describe("the date control's boundaries", () => {
 
 describe("the receipts", () => {
   it(
-    "confirms an upload only for the set the account is actually reading",
+    "confirms stored current and historical uploads, but not invented ones",
     withDatabase(async (ctx) => {
       const { account, january, february } = await seedTwoStatements(ctx);
       const at = (search: string) =>
@@ -128,28 +128,96 @@ describe("the receipts", () => {
         asOf: "2026-02-28",
         filename: "February.csv",
         holdingCount: 2,
+        isCurrent: true,
+        currentAsOf: "2026-02-28",
       });
 
-      // A set this account really owns, but not the one it's reading — a URL-trusted receipt would announce January while the page prints February.
-      expect((await at(`?uploaded=${january.id}`)).receipt).toBeNull();
+      // A set this account really owns, but not the one it's reading, now gets a receipt of its
+      // own (docs/specs/0005-report-remediation.md §5) rather than silence — naming what the
+      // account actually reports instead of pretending January's own figures ("now holds 1
+      // position") are still true.
+      const stale = await at(`?uploaded=${january.id}`);
+      expect(stale.receipt).toMatchObject({
+        setId: january.id,
+        asOf: "2026-01-31",
+        filename: "January.csv",
+        isCurrent: false,
+        currentAsOf: "2026-02-28",
+      });
       expect((await at("?uploaded=999999999")).receipt).toBeNull();
       expect((await at("?uploaded=%20or%201=1")).receipt).toBeNull();
+      expect((await at("?uploaded=9223372036854775808")).receipt).toBeNull();
+
+      // A zero-padded id names the same set (`isCurrent` must compare the fetched row's own id,
+      // not the raw URL parameter that only had to match /^\d+$/).
+      const padded = await at(`?uploaded=${february.id.padStart(february.id.length + 3, "0")}`);
+      expect(padded.receipt).toMatchObject({ setId: february.id, isCurrent: true });
     }),
   );
 
   it(
-    "confirms a recorded balance only against the date the account is reading",
+    "prints the current-set closing line only for the set the account is actually reading",
     withDatabase(async (ctx) => {
-      const { account, february } = await seedTwoStatements(ctx);
+      const { account, january, february } = await seedTwoStatements(ctx);
+      const path = (search: string) => `/accounts/${account.id}${search}`;
+      const at = (search: string) => loader(args(get(path(search)), { accountId: account.id }));
+
+      const currentMarkup = renderRoute(
+        Account,
+        path(`?uploaded=${february.id}`),
+        await at(`?uploaded=${february.id}`),
+      );
+      expect(currentMarkup).toContain("now holds");
+      expect(currentMarkup).not.toContain("Filed behind");
+
+      const behindMarkup = renderRoute(
+        Account,
+        path(`?uploaded=${january.id}`),
+        await at(`?uploaded=${january.id}`),
+      );
+      expect(behindMarkup).toContain("Filed behind what");
+      expect(behindMarkup).not.toContain("now holds");
+    }),
+  );
+
+  it(
+    "confirms a balance by its stored manual set, never another write path or URL text",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank" });
+      const usd = await ctx.usdInstrument();
+      const manual = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-02-28",
+        source: "manual",
+        holdings: [{ instrument: usd, quantity: "100.00000000" }],
+      });
+      const upload = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        source: "upload",
+        holdings: [{ instrument: usd, quantity: "90.00000000" }],
+      });
+      const otherAccount = await ctx.seedAccount({ kind: "bank" });
+      const otherManual = await ctx.seedPositionSet({
+        account: otherAccount,
+        asOf: "2026-02-28",
+        source: "manual",
+        holdings: [{ instrument: usd, quantity: "75.00000000" }],
+      });
       const at = (search: string) =>
         loader(args(get(`/accounts/${account.id}${search}`), { accountId: account.id }));
 
-      expect((await at(`?recorded=${february.asOf}`)).justRecorded).toBe(true);
-
-      // January is a real date for this account, just not the current one — nothing was recorded for it just now.
-      expect((await at("?recorded=2026-01-31")).justRecorded).toBe(false);
-      expect((await at("?recorded=2026-07-04")).justRecorded).toBe(false);
-      expect((await at("?recorded=whenever")).justRecorded).toBe(false);
+      expect((await at(`?recorded=${manual.id}`)).recordedReceipt).toMatchObject({
+        setId: manual.id,
+        asOf: "2026-02-28",
+        filedBehind: false,
+      });
+      expect((await at(`?recorded=${upload.id}`)).recordedReceipt).toBeNull();
+      expect((await at(`?recorded=${otherManual.id}`)).recordedReceipt).toBeNull();
+      expect((await at(`?uploaded=${manual.id}`)).receipt).toBeNull();
+      expect((await at("?recorded=2026-02-28")).recordedReceipt).toBeNull();
+      expect((await at("?recorded=whenever")).recordedReceipt).toBeNull();
+      expect((await at("?recorded=9223372036854775808")).recordedReceipt).toBeNull();
     }),
   );
 });
@@ -228,6 +296,7 @@ async function seedAccountDayZero(
   await ctx.seedPositionSet({
     account,
     asOf,
+    source: "manual",
     holdings: [{ instrument: usd, quantity: "12500.00000000" }],
   });
 
@@ -404,21 +473,24 @@ describe("the range links and the rest of the query", () => {
     "keeps the balance receipt too, and carries it through the custom form's hidden fields",
     withDatabase(async (ctx) => {
       // Read once — five separate daysAgo(400) calls could straddle UTC midnight into an unreproducible flake.
-      const recorded = daysAgo(400);
-      const account = await seedAccountDayZero(ctx, recorded);
+      const asOf = daysAgo(400);
+      const account = await seedAccountDayZero(ctx, asOf);
       const at = (path: string) => loader(args(get(path), { accountId: account.id }));
 
-      const path = `/accounts/${account.id}?recorded=${recorded}`;
+      const initial = await at(`/accounts/${account.id}`);
+      const setId = initial.recorded?.id;
+      expect(setId).toBeDefined();
+      const path = `/accounts/${account.id}?recorded=${setId}`;
       const data = await at(path);
-      expect(data.justRecorded).toBe(true);
+      expect(data.recordedReceipt).toMatchObject({ setId, asOf, filedBehind: false });
 
       const markup = renderRoute(Account, path, data);
       const href = presetHref(markup, "1m");
-      expect(href).toBe(`/accounts/${account.id}?recorded=${recorded}&range=1m`);
-      expect((await at(href)).justRecorded).toBe(true);
+      expect(href).toBe(`/accounts/${account.id}?recorded=${setId}&range=1m`);
+      expect((await at(href)).recordedReceipt).toMatchObject({ setId });
 
       // A GET form submits only its own fields — Custom must re-emit this as a hidden field or drop it.
-      expect(markup).toContain(`type="hidden" name="recorded" value="${recorded}"`);
+      expect(markup).toContain(`type="hidden" name="recorded" value="${setId}"`);
     }),
   );
 
@@ -554,7 +626,7 @@ describe("the receipt a balance write redirects to", () => {
 
       expect(to).toContain("range=1m");
       expect(to).toContain("owner=7");
-      expect(to).toContain("recorded=");
+      expect(new URL(to, "http://portfolio.local").searchParams.get("recorded")).toMatch(/^\d+$/);
     }),
   );
 

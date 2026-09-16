@@ -1,12 +1,16 @@
 // A balance typed by hand, got wrong, and corrected — the seam between set-balance.test.ts (the write) and
 // routes/account.test.ts (the receipt) that neither can see: each passes its own test while disagreeing across the
-// seam (e.g. redirecting with the date submitted rather than stored). Only a round trip catches that, so nothing
+// seam (e.g. redirecting without the inserted row's identity). Only a round trip catches that, so nothing
 // here is seeded past the household — every page is reached by following its real redirect.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { action as recordBalance, loader as accountPage } from "../../app/routes/account.tsx";
+import Account, {
+  action as recordBalance,
+  loader as accountPage,
+} from "../../app/routes/account.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { renderRoute } from "../support/render.tsx";
 import { args, get, outcomeOf, post, redirectTo } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
@@ -16,13 +20,13 @@ afterAll(closeTestDatabase);
 /** The day the statement was true on. In the past, because a future one is refused. */
 const AUGUST = "2026-08-16";
 
-/** `/accounts/7?recorded=2026-08-16` → both halves, as the account page will read them. */
-function receiptFrom(location: string): { accountId: string; asOf: string } {
-  const match = /^\/accounts\/(\d+)\?recorded=(\d{4}-\d{2}-\d{2})$/.exec(location);
+/** `/accounts/7?recorded=42` → both ids, as the account page will read them. */
+function receiptFrom(location: string): { accountId: string; setId: string } {
+  const match = /^\/accounts\/(\d+)\?recorded=(\d+)$/.exec(location);
   if (match?.[1] === undefined || match[2] === undefined) {
     throw new Error(`Expected a recorded-balance receipt URL, got ${location}`);
   }
-  return { accountId: match[1], asOf: match[2] };
+  return { accountId: match[1], setId: match[2] };
 }
 
 /** A household with one open savings account and nothing recorded against it. */
@@ -55,15 +59,16 @@ describe("a balance recorded by hand", () => {
       );
       const receipt = receiptFrom(landing);
       expect(receipt.accountId).toBe(account.id);
-      // Redirect carries the date as *stored* (recordedDate trims), not as posted — a raw-field redirect would match nothing on the page below.
-      expect(receipt.asOf).toBe(AUGUST);
 
       const page = await accountPage(
         args(get(landing), { accountId: receipt.accountId }),
       );
 
-      // Confirmation holds only because the URL's date matches the set this account now reads, via latest_position_set — not remembered by the action.
-      expect(page.justRecorded).toBe(true);
+      expect(page.recordedReceipt).toMatchObject({
+        setId: receipt.setId,
+        asOf: AUGUST,
+        filedBehind: false,
+      });
       expect(page.recorded).toMatchObject({ asOf: AUGUST, source: "manual" });
 
       // Two scales, two columns: account's own line at numeric(20,4), USD row beneath at numeric(20,8). Strings throughout.
@@ -72,12 +77,17 @@ describe("a balance recorded by hand", () => {
         ["USD", "1100.00000000"],
       ]);
 
-      // A plausible date this account never carried — the param says only which day was written, nothing about what's in it.
-      const invented = await accountPage(
-        args(get(`/accounts/${account.id}?recorded=2026-08-15`), { accountId: account.id }),
+      const markup = renderRoute(Account, landing, page);
+      expect(markup).toContain(
+        '<p class="form-note" role="status">Recorded. Ally Online Savings now reads',
       );
 
-      expect(invented.justRecorded).toBe(false);
+      // The parameter names only a row; it cannot invent what was recorded.
+      const invented = await accountPage(
+        args(get(`/accounts/${account.id}?recorded=999999999`), { accountId: account.id }),
+      );
+
+      expect(invented.recordedReceipt).toBeNull();
       // Figures beneath stay the stored ones — the absence is honest, not a blank page.
       expect(invented.total.amount).toBe("1100.0000");
     }),
@@ -97,7 +107,7 @@ describe("a balance recorded by hand", () => {
         );
 
       // Same as-of date deliberately — this is a correction, not a second day.
-      await submit("1,100.00");
+      const firstLanding = await submit("1,100.00");
       const landing = await submit("1,010.00");
 
       const page = await accountPage(
@@ -106,9 +116,62 @@ describe("a balance recorded by hand", () => {
 
       // latest_position_set breaks the tie on created_at then id, so the later submission wins.
       expect(page.total.amount).toBe("1010.0000");
-      expect(page.justRecorded).toBe(true);
+      expect(page.recordedReceipt).toMatchObject({
+        setId: receiptFrom(landing).setId,
+        asOf: AUGUST,
+        filedBehind: false,
+      });
+
+      const superseded = await accountPage(
+        args(get(firstLanding), { accountId: receiptFrom(firstLanding).accountId }),
+      );
+      expect(superseded.total.amount).toBe("1010.0000");
+      expect(superseded.recordedReceipt).toMatchObject({
+        setId: receiptFrom(firstLanding).setId,
+        asOf: AUGUST,
+        filedBehind: true,
+        currentAsOf: AUGUST,
+      });
 
       // Immutable spine (DESIGN.md §5.2): the correction appended, both submissions survive.
+      expect(await positionSetCount(ctx, account.id)).toBe(2);
+    }),
+  );
+
+  it(
+    "confirms a backdated balance without changing the newer balance on screen",
+    withDatabase(async (ctx) => {
+      const account = await aHouseholdWithASavingsAccount(ctx);
+      const submit = (amount: string, asOf: string) =>
+        redirectTo(() =>
+          recordBalance(
+            args(post(`/accounts/${account.id}`, { amount, asOf }), { accountId: account.id }),
+          ),
+        );
+
+      await submit("1,100.00", AUGUST);
+      const landing = await submit("900.00", "2026-08-15");
+      const receipt = receiptFrom(landing);
+      const page = await accountPage(args(get(landing), { accountId: receipt.accountId }));
+
+      expect(page.recorded).toMatchObject({ asOf: AUGUST, source: "manual" });
+      expect(page.total.amount).toBe("1100.0000");
+      expect(page.recordedReceipt).toMatchObject({
+        setId: receipt.setId,
+        asOf: "2026-08-15",
+        filedBehind: true,
+        currentAsOf: AUGUST,
+      });
+
+      const markup = renderRoute(Account, landing, page);
+      expect(markup).toContain('<p class="form-note" role="status">');
+      expect(markup).toContain(
+        'Recorded a balance for <b class="u-data">2026-08-15</b>',
+      );
+      expect(markup).toContain(
+        "Current figures are unchanged because Ally Online Savings has a newer record for",
+      );
+      expect(markup).toContain(`<b class="u-data">${AUGUST}</b>.`);
       expect(await positionSetCount(ctx, account.id)).toBe(2);
     }),
   );

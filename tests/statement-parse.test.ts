@@ -120,6 +120,30 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.asOfDate).toBe("2026-07-31");
   });
 
+  it("refuses the two blank ticker rows worth $58,692.68 in the 401k export", () => {
+    const { rows } = readCsv(fixture("401k.csv"));
+    const parsed = parseStatement(
+      rows,
+      mapping({
+        columns: {
+          instrument: "Ticker",
+          name: "Investment",
+          quantity: "Units",
+          asOf: "As Of",
+        },
+      }),
+    );
+
+    expect(parsed.problems).toHaveLength(2);
+    expect(parsed.problems).toEqual([
+      expect.objectContaining({ row: 1, column: "Ticker", code: "blank-instrument" }),
+      expect.objectContaining({ row: 2, column: "Ticker", code: "blank-instrument" }),
+    ]);
+    expect(parsed.positions).toHaveLength(1);
+    expect(parsed.positions[0]?.instrument).toBe("VBTIX");
+    expect(parsed.skipped).toEqual([]);
+  });
+
   it("combines the lot-level export's three rows for one fund, and says so", () => {
     const { rows } = readCsv(fixture("lot-level.csv"));
     const parsed = parseStatement(

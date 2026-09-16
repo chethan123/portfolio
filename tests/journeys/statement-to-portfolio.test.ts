@@ -266,6 +266,9 @@ describe("the same brokerage's next statement", () => {
             post(`/upload/${draftId}/review`, {
               accountId: account.id,
               asOf: "2026-02-28",
+              // The hidden field the real form carries from the render above (#181) — January's
+              // set is what the diff was drawn against.
+              baselineSetId: review.diff.baselineSetId ?? "",
             }),
             { draftId },
           ),

@@ -1,7 +1,7 @@
 # Authentication is a forward-auth gate at the instance's own front door
 
-The household wanted passwordless, per-person access to an instance whose threat is other devices
-on its own LAN. It is not exposed to the public internet, and TLS with the public hostname is
+The household wanted passwordless, per-person access to an instance whose threat is other devices on
+its own LAN. The instance is not exposed to the public internet, and TLS with the public hostname is
 terminated by a house-wide proxy in front of this stack. We decided to authenticate with Google at
 this stack's own Caddy: a pinned oauth2-proxy sidecar answers `forward_auth` for every request
 except `/healthz`, admission is a flat gitignored file of family email addresses, and the app's own

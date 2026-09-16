@@ -10,14 +10,10 @@ import {
   latestRecordableDate,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
-import {
-  DraftNotReadyError,
-  commitUpload,
-  diffForDraft,
-} from "~/lib/uploads.server";
+import { DraftNotReadyError, RefusedUpload, commitUpload, diffForDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
-import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
+import type { DiffAdded, DiffRemoved, DiffUpdated, UploadDiff } from "~/lib/uploads.server";
 import type { Route } from "./+types/review";
 
 /**
@@ -109,7 +105,13 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      // Carries the diff the refusal was decided against (#181) — a re-run loader would show the
+      // undated one again, and the household would tick a box against figures already rejected.
+      const diff = error instanceof RefusedUpload ? error.diff : null;
+      // The domain's own comparison (uploads.server.ts), not restated here (CLAUDE.md) — false
+      // when there was no refusal to carry it, since nothing then moved under this render.
+      const baselineMoved = error instanceof RefusedUpload ? error.baselineMoved : false;
+      return { errors: fieldErrors, formError: formError ?? null, values, diff, baselineMoved };
     }
     if (error instanceof DraftNotReadyError) {
       if (
@@ -162,7 +164,10 @@ function GroupHeading({ label }: { label: string }) {
 }
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
-  const { diff, today, earliestAsOf, latestAsOf } = loaderData;
+  const { today, earliestAsOf, latestAsOf } = loaderData;
+  // The refusal's own diff when there was one (#181) — the loader's is undated for an asked date
+  // and would otherwise show the household figures the commit already rejected.
+  const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
   if (diff === null) {
     const { blocked } = loaderData;
@@ -210,6 +215,23 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
   const errors = actionData?.errors;
   const values = actionData?.values;
 
+  // A tick given against a baseline that has since moved describes figures no longer on screen
+  // (#181) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
+  // The comparison itself is the domain's (uploads.server.ts), read off the refusal rather than
+  // restated here.
+  const baselineMoved = actionData?.baselineMoved ?? false;
+
+  // "this account holds" is only true of today's holdings — wrong once filed behind means these
+  // counts are the baseline's own (uploads.server.ts's matching guard).
+  const removalScope =
+    diff.filedBehind !== null ? (
+      <>
+        recorded on <span className="u-data">{diff.baselineAsOf}</span>
+      </>
+    ) : (
+      "this account holds"
+    );
+
   // A first statement reads "14 ADDED" alone — three zero counts would dress an ordinary upload as strange.
   const summary = diff.firstStatement
     ? `${diff.added.length} ADDED`
@@ -231,12 +253,26 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
         {diff.firstStatement ? (
           <p>
-            This is the first statement recorded for {diff.accountName}, so every position in
-            it is added — there is nothing yet to have updated or removed.
+            {diff.filedBehind !== null ? (
+              <>
+                Nothing was recorded for {diff.accountName} on or before{" "}
+                <span className="u-data">{diff.filedBehind.asOf}</span>,
+              </>
+            ) : (
+              <>This is the first statement recorded for {diff.accountName},</>
+            )}{" "}
+            so every position in it is added — there is nothing yet to have updated or removed.
           </p>
         ) : (
           <p>
-            Compared against what {diff.accountName} holds now.
+            {diff.asOf.date !== null ? (
+              <>
+                Compared against what {diff.accountName} held on{" "}
+                <span className="u-data">{diff.asOf.date}</span>.
+              </>
+            ) : (
+              <>Compared against what {diff.accountName} holds now.</>
+            )}
             {/* Unchanged rows absent from the table — listing rows that do nothing buries the ones that do. */}
             {diff.unchangedCount > 0 ? (
               <>
@@ -352,28 +388,67 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       <Form method="post">
         {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
         <input type="hidden" name="accountId" value={diff.accountId} />
+        {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
+            missing baseline round-trips as the empty string on every side of the comparison. */}
+        <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />
+
+        {diff.filedBehind !== null ? (
+          <div className="danger-zone">
+            <label className="choice">
+              {/* Keyed on the baseline, not just `defaultChecked`: React only assigns
+                  `element.defaultChecked` on a re-render, never `element.checked`
+                  (react-dom-client.development.js:1675-1678), and HTML's dirty-checkedness flag
+                  stops the content attribute affecting a box once a person has clicked it. A
+                  `<Form>` refusal reuses this component instance, so without a key change here a
+                  ticked box would keep looking ticked after the baseline moved voided it. No test
+                  covers this: `renderRoute` (tests/support/render.tsx) calls
+                  `renderToStaticMarkup` fresh each time, with no persistent fiber tree to
+                  reconcile against, so a render-only test cannot see a `key` remount either way —
+                  the safest honest check left is the browser itself. */}
+              <input
+                key={diff.baselineSetId ?? ""}
+                type="checkbox"
+                name="confirmFiledBehind"
+                value="true"
+                defaultChecked={!baselineMoved && values?.confirmFiledBehind === "true"}
+              />
+              <strong>
+                This statement is dated <span className="u-data">{diff.filedBehind.asOf}</span>,
+                behind the <span className="u-data">{diff.filedBehind.currentAsOf}</span> figures{" "}
+                {diff.accountName} currently reports. Recording it changes this account's history
+                between {diff.filedBehind.asOf} and the next statement recorded after it, and with
+                it the net worth chart over those dates, but it does not change what the account
+                holds now.
+              </strong>
+            </label>
+          </div>
+        ) : null}
 
         {/* Danger-zone weight, same as closing an account — half or less draws no confirmation. */}
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
+              {/* Same reason as confirmFiledBehind's box above: keyed on the baseline so a
+                  baseline change remounts the box instead of leaving a person's own click stuck
+                  behind HTML's dirty-checkedness flag. */}
               <input
+                key={diff.baselineSetId ?? ""}
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"
-                defaultChecked={values?.confirmRemovals === "true"}
+                defaultChecked={!baselineMoved && values?.confirmRemovals === "true"}
               />
               <strong>
                 {diff.removesEverything ? (
                   <>
-                    This file removes every position this account holds — all{" "}
+                    This file removes every position {removalScope} — all{" "}
                     <span className="u-data">{diff.currentCount}</span>.
                   </>
                 ) : (
                   <>
                     This file removes <span className="u-data">{diff.removed.length}</span> of
-                    the <span className="u-data">{diff.currentCount}</span> positions this
-                    account holds.
+                    the <span className="u-data">{diff.currentCount}</span> positions{" "}
+                    {removalScope}.
                   </>
                 )}
               </strong>

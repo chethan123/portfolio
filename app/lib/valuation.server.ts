@@ -4,6 +4,7 @@
 import { sql } from "kysely";
 
 import { numberTail } from "./account-label.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
@@ -225,13 +226,6 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
   };
 }
 
-// Magnitude, not digit count (leading zeros). BigInt (§5.6): past 2^53 a float rounds.
-const MAX_BIGINT = 9223372036854775807n;
-
-function couldBeId(id: string): boolean {
-  return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
-}
-
 // Unusable ids drop out; nothing usable yields false, never an empty `in ()` and never no filter.
 function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
   const usable = ids.filter(couldBeId);
@@ -333,6 +327,17 @@ export async function accountHoldings(
   db: Kysely<Database> = getDb(),
 ): Promise<ValuedHolding[]> {
   return readHoldings(db, valuedNow(), isAccount("holding_valued.account_id", accountId));
+}
+
+// accountHoldings, for a past date — the dated half of the pair (#181's baseline). Quantity, cost
+// basis and instrument identity are what a caller should read off this; price and staleness are
+// the historical close, not today's quote, so a diff pricing a removed row must use `quote` instead.
+export async function accountHoldingsAt(
+  accountId: string,
+  date: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedAt(date), isAccount("holding_valued.account_id", accountId));
 }
 
 // One round trip: a lateral evaluates holding_valued_at once per date, not netWorthAt in a loop.
