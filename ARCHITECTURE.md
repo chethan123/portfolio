@@ -523,11 +523,13 @@ correction inputs mount.
 
 The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
 publishes its synchronous write locally and sends one payload-free invalidation through the
-module's single `BroadcastChannel`; focus and visibility are the fallback. Receiving tabs reread
-the cookie and adopt Hide immediately. They do not adopt Show until their own intentional Show can
-revalidate a masked Holdings projection. Enhanced actions carry an explicit form marker and never
-repeat the client cookie write in a delayed response; an unmarked request remains the no-JavaScript
-server writer even where Fetch Metadata headers are absent. Display Settings uses the same split,
+module's single `BroadcastChannel`; focus, visibility, and the next store snapshot are the fallback.
+A live tab receiving the invalidation rereads the cookie and adopts Hide immediately; an
+unsubscribed or unsignalled tab adopts it at one of those fallback points. Tabs do not adopt Show
+until their own intentional Show can revalidate a masked Holdings projection. Enhanced actions
+carry an explicit form marker and never repeat the client cookie write in a delayed response; an
+unmarked request remains the no-JavaScript server writer even where Fetch Metadata headers are
+absent. Display Settings uses the same split,
 plus an origin-local random intent token so success clears the override only if no later toggle won.
 Unavailable token storage preserves the cookie. Neither the channel nor the token contains private
 data.

@@ -199,8 +199,11 @@ function stopBrowserMaskingWatchers(): void {
 
 function browserMaskingSnapshot(): string | undefined {
   if (typeof document === "undefined") return undefined;
-  if (browserMaskingSnapshotValue === UNREAD_MASKING_SNAPSHOT) {
-    browserMaskingSnapshotValue = readBrowserMaskingCookie();
+  const current = readBrowserMaskingCookie();
+  if (browserMaskingSnapshotValue === UNREAD_MASKING_SNAPSHOT || current === MASKED) {
+    // A tab can temporarily have no subscribers (the bare unlock shell). Adopt Hide during the
+    // next render instead of letting a cached Show survive until subscription effects restart.
+    browserMaskingSnapshotValue = current;
   }
   return browserMaskingSnapshotValue;
 }

@@ -51,10 +51,8 @@ then corrects itself, which is the one failure this feature cannot have.
 The toggle has to work at the speed of a hand, not of a network. On a bad connection a server
 round-trip makes the hide button take seconds at the exact moment it is needed, and an optimistic
 flip whose write then fails would put the amounts back into view. So the client writes the cookie
-itself. The form `POST` remains the no-JavaScript path and writes the identical value only when the
-client did not mark the submission as enhanced. Repeating the client write in an enhanced response
-would let an older Show response overwrite a newer Hide from another tab. A missing marker takes
-the no-JavaScript path; the distinction does not depend on optional Fetch Metadata headers.
+itself, and the form `POST` behind the same control remains as the no-JavaScript path and writes the
+identical value. One cookie has two writers.
 
 `HttpOnly` is therefore off, which is correct rather than merely convenient. The cookie carries a
 display preference, not a credential, and it has to be readable by the script that owns the toggle.
@@ -72,13 +70,21 @@ writers this paragraph opened with. Client script sets it directly, where the ch
 only ever written by the server. What changed here is only that the gate's is no longer the only
 cookie here that carries more than a preference.]
 
+[The two-writer description now has a timing qualification. Client script marks its enhanced
+submission after writing the cookie, and that response does not repeat the write: an older Show
+response could otherwise overwrite a newer Hide from another tab. An unmarked form remains the
+no-JavaScript server writer, including where optional Fetch Metadata headers are absent.]
+
 The browser reads that cookie through an external-store subscription. A direct write publishes to
 all readers in its tab and sends a payload-free invalidation over one module-wide
 `BroadcastChannel`; another tab rereads the cookie rather than trusting state in the message. Focus
-and visibility changes repeat that read for browsers without a delivered channel event. Hide is
-adopted immediately. Show is not: a tab whose masked loader omitted exact Holdings values stays at
-its dot gate until Show in that tab intentionally revalidates. An older exact loader response cannot
-reopen correction inputs because the newer Hide cookie remains authoritative.
+and visibility changes repeat that read when no channel event was delivered. A receiving live tab
+adopts Hide immediately; an unsubscribed or unsignalled tab adopts it on focus, visibility change,
+or its next snapshot. Show is not adopted externally: a tab whose masked loader omitted exact
+Holdings values stays at its dot gate until Show in that tab intentionally revalidates. An older
+exact loader response cannot reopen correction inputs because the newer Hide cookie remains
+authoritative. Every external-store snapshot also adopts a current Hide, so a cached Show cannot
+survive an interval with no mounted subscribers, such as the bare unlock shell.
 
 Display Settings is a second cookie writer. Its enhanced action returns success without
 `Set-Cookie`; only then may the component reset the browser override. A random ordering token in

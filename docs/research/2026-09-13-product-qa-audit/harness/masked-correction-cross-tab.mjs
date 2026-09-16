@@ -13,6 +13,8 @@ const base = process.env.PORTFOLIO_URL ?? "http://127.0.0.1:3100";
 const databaseUrl = process.env.DATABASE_URL;
 const accountName = process.env.MASKING_RACE_ACCOUNT ?? "Fidelity Individual";
 const symbol = process.env.MASKING_RACE_SYMBOL ?? "VTI";
+const lifecyclePasskey = "qa-cross-tab-lifecycle";
+const lifecycleGrant = "qa-cross-tab-lifecycle-grant-0000000000000001";
 
 if (databaseUrl === undefined) throw new Error("DATABASE_URL is required.");
 
@@ -240,6 +242,76 @@ try {
   await settingsRace.close();
   await pool.query("update app_setting set masking_policy = 'masked'");
 
+  // `/unlock` is a real shell state with no Amount or MaskingToggle subscribers. Preserve this
+  // tab's client module across the route transition, Hide elsewhere, then remount the exact
+  // Overview data behind a root loader that now says masked.
+  await pool.query("delete from passkey where credential_id = $1", [lifecyclePasskey]);
+  await pool.query(
+    `insert into passkey
+       (credential_id, public_key, counter, transports, backup_eligible, label, bootstrap)
+     values ($1, $2, 0, null, false, 'QA lifecycle', false)`,
+    [lifecyclePasskey, Buffer.from([1])],
+  );
+  await pool.query(
+    `insert into unlock_grant (id, passkey_id, expires_at)
+     values ($1, $2, now() + interval '1 hour')`,
+    [lifecycleGrant, lifecyclePasskey],
+  );
+
+  const lifecycle = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await lifecycle.addCookies([
+    { name: "masked", value: "0", url: base },
+    {
+      name: "__Host-unlock_grant",
+      value: lifecycleGrant,
+      domain: new URL(base).hostname,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+  const remounting = await lifecycle.newPage();
+  const lifecycleControl = await lifecycle.newPage();
+  await remounting.goto(base, { waitUntil: "networkidle" });
+  await lifecycleControl.goto(base, { waitUntil: "networkidle" });
+  const exactBeforeUnmount = await remounting.locator(".account-amount").first().textContent();
+  assert.ok(exactBeforeUnmount?.includes("$"));
+  assert.ok(!exactBeforeUnmount?.includes("••••••"));
+
+  await pool.query("delete from unlock_grant where id = $1", [lifecycleGrant]);
+  await remounting.evaluate(() => {
+    history.pushState({}, "", "/unlock");
+    dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+  });
+  await remounting.getByRole("heading", { name: "Locked", exact: true }).waitFor();
+  assert.equal(await remounting.locator(".masking-toggle").count(), 0);
+
+  await pool.query(
+    `insert into unlock_grant (id, passkey_id, expires_at)
+     values ($1, $2, now() + interval '1 hour')`,
+    [lifecycleGrant, lifecyclePasskey],
+  );
+  await lifecycleControl.getByRole("button", { name: "Hide amounts", exact: true }).first().click();
+  await lifecycleControl.getByRole("button", { name: "Show amounts", exact: true }).first().waitFor();
+  assert.equal(await maskingCookie(lifecycle), "1");
+
+  await remounting.evaluate((exact) => {
+    window.__maskingExactObserved = false;
+    new MutationObserver(() => {
+      if (document.body.innerText.includes(exact)) window.__maskingExactObserved = true;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  }, exactBeforeUnmount);
+  await remounting.goBack({ waitUntil: "networkidle" });
+  await remounting.locator(".account-amount").first().waitFor();
+  const amountAfterRemount = await remounting.locator(".account-amount").first().textContent();
+  const exactPaintedAfterRemount = await remounting.evaluate(
+    () => window.__maskingExactObserved,
+  );
+  const labelAfterRemount = await buttonLabel(remounting);
+  await lifecycle.close();
+  await pool.query("delete from passkey where credential_id = $1", [lifecyclePasskey]);
+
   console.log(
     `Cross-tab Hide: remaining inputs ${remainingInputs}; editor control ${JSON.stringify(editorLabel)}.`,
   );
@@ -254,6 +326,9 @@ try {
   );
   console.log(
     `Delayed Display response: Set-Cookie ${settingsSetCookie}; final masked cookie ${JSON.stringify(settingsFinalCookie)}; reloaded inputs ${settingsReopenedInputs}.`,
+  );
+  console.log(
+    `Subscriber remount: exact before ${JSON.stringify(exactBeforeUnmount)}; after ${JSON.stringify(amountAfterRemount)}; exact mutation ${exactPaintedAfterRemount}; control ${JSON.stringify(labelAfterRemount)}.`,
   );
 
   assert.equal(remainingInputs, 0, "Hide in one tab must remove exact inputs from every open tab.");
@@ -283,9 +358,18 @@ try {
     0,
     "Reloading after an older Display save must remain masked.",
   );
+  assert.ok(
+    amountAfterRemount?.includes("••••••"),
+    "A remounted Amount must adopt a Hide that arrived while the tab had no subscribers.",
+  );
+  assert.equal(exactPaintedAfterRemount, false, "The remount must not paint the cached exact value.");
+  assert.equal(labelAfterRemount, "Show amounts");
   console.log("PASS: cross-tab Hide wins immediately and remains ahead of both older cookie writers.");
 } finally {
   await pool.query("update app_setting set masking_policy = 'masked'").catch(() => undefined);
+  await pool
+    .query("delete from passkey where credential_id = $1", [lifecyclePasskey])
+    .catch(() => undefined);
   await pool.end();
   await browser.close();
 }
