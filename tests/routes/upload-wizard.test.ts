@@ -201,14 +201,15 @@ describe("a review over a draft that is not ready for one", () => {
     "renders a source-specific block for a legacy mapping that now exposes an invalid row",
     withDatabase(async (ctx) => {
       const account = await ctx.seedAccount({ kind: "brokerage" });
+      const validCsv =
+        "Instrument,Quantity,Cost Basis,As Of,Account\n" +
+        "VTI,282.144455,165.4961,2026-09-13,Z12-345678\n" +
+        "VTI,139.153103,108.2561,2026-09-13,Z12-345678\n";
+      const invalidCsv = validCsv.replace("\nVTI,139.153103", "\n,139.153103");
       const draft = await ctx.seedUploadDraft({
         account,
         filename: "blank-instrument.csv",
-        bytes: encode(
-          "Instrument,Quantity,Cost Basis,As Of,Account\n" +
-            "VTI,282.144455,165.4961,2026-09-13,Z12-345678\n" +
-            ",139.153103,108.2561,2026-09-13,Z12-345678\n",
-        ),
+        bytes: encode(validCsv),
       });
       const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
       await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
@@ -229,12 +230,29 @@ describe("a review over a draft that is not ready for one", () => {
         .where("id", "=", draft.id)
         .execute();
 
+      const stalePage = await reviewPage(draft.id);
+      if (stalePage.diff === null) throw new Error("The valid draft was blocked.");
+      await ctx.db
+        .updateTable("upload_draft")
+        .set({ raw_file: Buffer.from(invalidCsv) })
+        .where("id", "=", draft.id)
+        .execute();
+
       const page = await reviewPage(draft.id);
       if (page.diff !== null) throw new Error("The invalid draft rendered a removal diff.");
       expect(page.blocked.accountId).toBe(account.id);
       expect(page.blocked).not.toHaveProperty("bytes");
       expect(page.blocked).not.toHaveProperty("mapping");
-      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, { masked: true });
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
+        masked: true,
+        actionData: {
+          errors: {},
+          formError: "Obsolete refusal",
+          values: {},
+          diff: stalePage.diff,
+          baselineMoved: false,
+        },
+      });
 
       expect(markup).toContain("This statement cannot be reviewed yet");
       expect(markup).toContain("Line 3");
@@ -246,6 +264,7 @@ describe("a review over a draft that is not ready for one", () => {
       expect(markup).not.toContain("108.2561");
       expect(markup).not.toContain("REMOVED");
       expect(markup).not.toContain("Record this statement");
+      expect(markup).not.toContain("Obsolete refusal");
       expect(markup).toContain("change the column mapping");
       expect(markup).toContain("instrument is missing from the source row");
       expect(markup).toContain("edit the CSV outside Portfolio and upload the corrected file");

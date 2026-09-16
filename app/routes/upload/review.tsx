@@ -165,11 +165,10 @@ function GroupHeading({ label }: { label: string }) {
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
   const { today, earliestAsOf, latestAsOf } = loaderData;
-  // The refusal's own diff when there was one (#181) — the loader's is undated for an asked date
-  // and would otherwise show the household figures the commit already rejected.
-  const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
-  if (diff === null) {
+  // Fresh loader state wins over carried action data: if a saved draft has become invalid, an
+  // earlier refused diff must not put its removal comparison and Record button back on screen.
+  if (loaderData.diff === null) {
     const { blocked } = loaderData;
 
     return (
@@ -211,6 +210,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </section>
     );
   }
+
+  // The refusal's own diff when there was one (#181) — the loader's is undated for an asked date
+  // and would otherwise show the household figures the commit already rejected.
+  const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
   const errors = actionData?.errors;
   const values = actionData?.values;
