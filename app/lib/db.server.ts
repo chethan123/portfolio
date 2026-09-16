@@ -57,6 +57,14 @@ export function getDb(): Kysely<Database> {
   return instance;
 }
 
+// Kysely refuses .transaction() on a transaction, and the test seam is one (ARCHITECTURE.md §7.2).
+export function inTransaction<T>(
+  db: Kysely<Database>,
+  body: (trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  return db.isTransaction ? body(db) : db.transaction().execute(body);
+}
+
 // What /healthz reports.
 export type HealthReport = {
   database: boolean;

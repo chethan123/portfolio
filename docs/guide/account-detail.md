@@ -93,9 +93,10 @@ Type a **plain positive amount**. The app applies the direction from the kind of
   never type the minus sign, and typing one is refused.
 
 Use a point for decimals. Commas or spaces may separate thousands only in groups of three, so
-`1,234.56` and `1 234.56` are accepted while `1,5` and `1 5` are refused as ambiguous. Dollar signs
-are fine. With scripting on, the form also echoes exactly how it reads the number while you type.
-Cents are the limit. A third decimal place is refused rather than rounded.
+`1,234.56` and `1 000` are accepted while `1,5`, `1,00,0`, and `1 5` are refused as ambiguous. A
+leading plus sign and a trailing point are allowed: `+5` and `5.` both read as `5`. Dollar signs are
+fine. With scripting on, the form also echoes exactly how it reads the number while you type. Cents
+are the limit. A third decimal place is refused rather than rounded.
 
 The box opens **empty** rather than pre-filled. The figure it is replacing is stated beside it
 instead, so re-recording a stale number is never one click.
@@ -109,7 +110,8 @@ households ahead of the server's time zone. The form also states the current sna
 
 Record balance appends a snapshot on the date you choose. A later submission for the same date
 supersedes the earlier one. A backdated balance can change values from that date until the next
-snapshot; an older record does not replace a newer current balance. Undo by recording another entry.
+snapshot; an older record does not replace a newer current balance. The receipt names both dates when
+that happens. Undo by recording another entry.
 
 ## On a phone
 

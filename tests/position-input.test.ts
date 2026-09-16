@@ -60,6 +60,7 @@ describe("signedQuantity", () => {
     ["1,234.5", "1234.5"],
     ["$1,234.5", "1234.5"],
     ["12 345.67", "12345.67"],
+    ["1 000", "1000"],
     ["12 345.67", "12345.67"],
     ["−12 345.67", "-12345.67"],
     [".5", "0.5"],
@@ -78,7 +79,7 @@ describe("signedQuantity", () => {
     expect(parseInput(quantity, { quantity: "5." }).quantity).toBe("5");
   });
 
-  it.each(["1,5", "12,34", "123,45.67", "1 5", "1,234 567"])(
+  it.each(["1,5", "1,00,0", "12,34", "123,45.67", "1 5", "1,234 567"])(
     "refuses ambiguous grouping in %o",
     (typed) => {
       expect(refusal(quantity, { quantity: typed }, "quantity")).toMatch(
@@ -143,11 +144,13 @@ describe("perShareAmount", () => {
     ["1,092.4150", "1092.4150"],
     ["1 092.4150", "1092.4150"],
     ["  92.41  ", "92.41"],
+    ["5.", "5"],
+    ["+5", "5"],
   ])("reads %j as %j", (typed, stored) => {
     expect(parseInput(basis, { costBasisPerShare: typed }).costBasisPerShare).toBe(stored);
   });
 
-  it.each(["1,5", "12,34", "123,45.67", "1 5", "1,234 567"])(
+  it.each(["1,5", "1,00,0", "12,34", "123,45.67", "1 5", "1,234 567"])(
     "refuses ambiguous grouping in %o",
     (typed) => {
       expect(refusal(basis, { costBasisPerShare: typed }, "costBasisPerShare")).toMatch(

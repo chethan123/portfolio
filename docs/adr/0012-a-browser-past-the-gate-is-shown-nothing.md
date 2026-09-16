@@ -8,11 +8,11 @@ that. ADR-0007 named this exact adversary, a cache "is readable by whoever holds
 phone", and answered it for *stored* data by refusing to store any. This ADR answers it for the
 live session.
 
-The app now refuses in root middleware. That is a `middleware` export from `app/root.tsx`, the one
-place a rule can run ahead of every route in this framework. The middleware turns a browser holding
-no valid grant away before it calls `next()`, so no loader runs and the figures are never fetched.
-This is deliberately not the shape of the chart-range middleware, the only other one here, which
-awaits `next()` and decorates the response it gets back. Unlocking is a WebAuthn assertion with
+The app now refuses in root middleware, a `middleware` export from `app/root.tsx`, the one place a
+rule can run ahead of every route in this framework. The middleware turns a browser holding no valid
+grant away before it calls `next()`, so no loader runs and the figures are never fetched. This is
+deliberately not the shape of the chart-range middleware, the only other one here, which awaits
+`next()` and decorates the response it gets back. Unlocking is a WebAuthn assertion with
 `userVerification: "required"` against a passkey the household has enrolled; the grant it mints is a
 row in Postgres with a rolling idle expiry, addressed by an unguessable random id in a
 `SameSite=Lax` cookie. Enrolling a passkey and removing one each require a *fresh* assertion rather
@@ -83,8 +83,8 @@ revocation, which is the password that slice removed.
 **Withhold the amounts and let the rest render.** Rejected because it puts the boundary in every
 loader. That is masking's shape, and masking already leaks it. `app/routes/upload/columns.tsx`
 renders raw statement cells with no masking at all, and `tests/masking-boundary.test.ts` misses it
-because it guards the four formatters rather than raw strings. A refusal spread over every loader
-is a refusal that will be forgotten somewhere.
+because it guards the four formatters rather than raw strings. A refusal spread over every loader is
+a refusal that will be forgotten somewhere.
 
 **Per-device opt-in, the way a bank app does it.** Rejected because a bank app's account is
 per-person and this instance's is not. A browser that never opted in would be a browser with no
@@ -93,11 +93,11 @@ second, unlocked way in.
 
 ## Consequences
 
-- **The app holds per-request state again**, for the first time since the password gate was
-  deleted. It is a session cookie in the mechanical sense, so the documents that say this app issues
-  none become false and ticket 07 corrects them. It is not a session in the sense those documents
-  meant, which was an identity the app authenticates and carries. A grant says one browser was
-  unlocked and when, nothing else.
+- **The app holds per-request state again**, for the first time since the password gate was deleted.
+  The grant cookie is a session cookie in the mechanical sense, so the documents that say this app
+  issues none become false and ticket 07 corrects them. It is not a session in the sense those
+  documents meant, which was an identity the app authenticates and carries. A grant says one browser
+  was unlocked and when, nothing else.
 - **The unlock screen is the first screen that requires JavaScript.** `navigator.credentials.get()`
   has no progressive-enhancement path, so with scripting off the instance is locked. This is
   a deliberate exception to the pattern every other control in the app follows.
@@ -110,8 +110,8 @@ second, unlocked way in.
   a Compose-level variable the gate consumes, and DESIGN.md §10.1 says plainly that the app never
   reads the gate's settings. The relying-party id has to come from somewhere stable, so the app
   gains another variable shared with the sidecar, and the environment table that records the split
-  gains a row. It is not the first such variable: `compose.yaml` already passes `TZ` to both, and
-  the app validates and uses that one too.
+  gains a row. `PUBLIC_ORIGIN` is not the first variable shared this way: `compose.yaml` already
+  passes `TZ` to both, and the app validates and uses that one too.
 - **The grant cookie is `Secure` and `__Host-` prefixed**, where masking's is neither. Masking's
   cookie is deliberately unprefixed and insecure because it carries a preference and an instance
   genuinely reached over plain http must still get it; this one carries the id of an unlock row, and

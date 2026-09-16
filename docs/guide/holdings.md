@@ -111,15 +111,15 @@ A dash is not a zero. A dash means the figure is not known: no price recorded, o
 recorded.
 
 **Annual dividend is the exception, and it never shows a dash.** A holding with no dividend rate on
-file reads `$0`, including one nobody can price, which shows a blank Value and `$0` in the same
-row. There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both
-are counted as nothing and the projection omits missing rates, including income and loan costs. It
-is incomplete rather than a guaranteed minimum for net income. A holding worth nothing has an
-amount and no percentage, since there is nothing to be a percentage of.
+file reads `$0`, including one nobody can price, which shows a blank Value and `$0` in the same row.
+There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both are
+counted as nothing and the projection omits missing rates, including income and loan costs. The
+projection is incomplete rather than a guaranteed minimum for net income. A holding worth nothing
+has an amount and no percentage, since there is nothing to be a percentage of.
 
-Something owed can show a negative figure. A loan whose note carries a rate reads as money going
-out rather than coming in, with the rate it is charged at underneath. That is the same two lines as
-any other row, with the other sign.
+Something owed can show a negative figure. A loan whose note carries a rate reads as money going out
+rather than coming in, with the rate it is charged at underneath. The row shows the same two lines
+as any other, with the other sign.
 
 This column added up, for the whole portfolio and split by tax treatment and by account, is the
 [Income](income.md) screen.
@@ -176,9 +176,9 @@ Two things to know before you type:
 - **Price, Value and Unrealized keep showing the stored figures** while the row is open. They are
   what you are checking your correction against.
 
-Use a point for decimals. Commas or spaces may separate thousands only in groups of three; the
-editor refuses ambiguous forms such as `1,5`. With scripting on, it also echoes exactly how it reads
-each number while you type.
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three. The
+editor accepts `1 000`, `5.`, and `+5`, and refuses ambiguous forms such as `1,5` and `1,00,0`.
+With scripting on, it also echoes exactly how it reads each number while you type.
 
 ### What saving actually does
 

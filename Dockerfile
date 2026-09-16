@@ -24,7 +24,7 @@ COPY react-router.config.ts vite.config.ts tsconfig.json ./
 COPY app ./app
 COPY server ./server
 # Vite copies `public/` verbatim into build/client; the PWA manifest, service
-# worker, icon and font have no other way in. Leaving it out 404'd all four.
+# worker and icon have no other way in. Leaving it out 404'd them all.
 COPY public ./public
 
 RUN npm run build

@@ -1,22 +1,25 @@
-// Resolving first sightings, and the writes that remember them forever (spec 0004 step 04). Real
-// Postgres — byte-exact collate "C" lookup, unique classification name, concurrent-draft alias
-// conflict. Probe is always a stub (no test touches the network); stubs count calls since
-// "probed once per created feed instrument" is a rule, not an implementation detail.
+// Resolving first sightings, and the writes that remember them (spec 0004 step 04; issue #291
+// scopes them to the draft until its statement is recorded). Real Postgres — byte-exact collate
+// "C" lookup, unique classification name, vocabulary gained mid-draft, a draft's own double
+// submit. Probe is always a stub (no test touches the network); stubs count calls since "probed
+// once per created feed instrument" is a rule, not an implementation detail.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ValidationError } from "~/lib/input.server";
+import { NotFoundError, ValidationError } from "~/lib/input.server";
 import {
   NEW_CLASSIFICATION,
+  aliasesFor,
   resolutionFieldsAt,
   resolveAll,
   resolutionScreen,
-  sameRawStrings,
   unresolvedStrings,
   type ResolutionFields,
 } from "~/lib/instrument-resolution.server";
+import { sameRawStrings } from "~/lib/raw-string";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
+import type { TestContext } from "./support/database.ts";
 import type { ProbeSymbols } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
@@ -59,6 +62,11 @@ const createFields = (overrides: Partial<ResolutionFields> = {}): ResolutionFiel
   ...overrides,
 });
 
+/** The draft an answer belongs to — every resolution is one draft's own until its statement is recorded. */
+async function aDraft(ctx: Pick<TestContext, "seedAccount" | "seedUploadDraft">): Promise<string> {
+  return (await ctx.seedUploadDraft({ account: await ctx.seedAccount() })).id;
+}
+
 /** The refusal a call produced, or a failure if it did not refuse. */
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
@@ -72,12 +80,15 @@ async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> 
 
 describe("resolveAll — pointing at an existing instrument", () => {
   it(
-    "writes the alias and nothing else, and the next lookup is silent",
-    withDatabase(async ({ db, seedInstrument }) => {
+    "writes the draft's answer and nothing else, and this draft's next lookup is silent",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
       const before = await db.selectFrom("instrument").select("id").execute();
 
       const resolved = await resolveAll(
+        draftId,
         [
           {
             raw: "VANGUARD TOTAL STK MKT ETF",
@@ -92,33 +103,110 @@ describe("resolveAll — pointing at an existing instrument", () => {
         { raw: "VANGUARD TOTAL STK MKT ETF", instrumentId: vti.id },
       ]);
 
-      const alias = await db
-        .selectFrom("instrument_alias")
+      const answer = await db
+        .selectFrom("upload_draft_answer")
         .selectAll()
         .where("raw_string", "=", "VANGUARD TOTAL STK MKT ETF")
         .executeTakeFirstOrThrow();
-      expect(alias.instrument_id).toBe(vti.id);
+      expect(answer).toMatchObject({ draft_id: draftId, instrument_id: vti.id });
+
+      // Vocabulary waits for the commit.
+      const vocabulary = await db
+        .selectFrom("instrument_alias")
+        .select("raw_string")
+        .where("raw_string", "=", "VANGUARD TOTAL STK MKT ETF")
+        .execute();
+      expect(vocabulary).toHaveLength(0);
 
       const after = await db.selectFrom("instrument").select("id").execute();
       expect(after).toHaveLength(before.length);
       await expect(
-        unresolvedStrings(["VANGUARD TOTAL STK MKT ETF"], db),
+        unresolvedStrings(["VANGUARD TOTAL STK MKT ETF"], draftId, db),
       ).resolves.toEqual([]);
     }),
   );
 
   it(
+    "keeps the answer to the draft that gave it: the same string is a first sighting for another",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
+      const vti = await seedInstrument({ symbol: "VTI" });
+
+      // The audit's QAALIAS: matched to VTI in a draft that is then abandoned.
+      await resolveAll(
+        draftId,
+        [{ raw: "QAALIAS", fields: { kind: "existing", instrumentId: vti.id } }],
+        { probe: forbiddenProbe },
+        db,
+      );
+
+      const another = await aDraft(ctx);
+      await expect(unresolvedStrings(["QAALIAS"], another, db)).resolves.toEqual(["QAALIAS"]);
+      await expect(aliasesFor(["QAALIAS"], another, db)).resolves.toEqual(new Map());
+    }),
+  );
+
+  it(
+    "reads vocabulary over the draft's own answer for the same string",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias } = ctx;
+      const draftId = await aDraft(ctx);
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const vxus = await seedInstrument({ symbol: "VXUS" });
+
+      await resolveAll(
+        draftId,
+        [{ raw: "TOTAL MARKET", fields: { kind: "existing", instrumentId: vxus.id } }],
+        { probe: forbiddenProbe },
+        db,
+      );
+      // Another upload recorded the string meanwhile — everyone reads its row, this draft included.
+      await seedInstrumentAlias({ instrument: vti, rawString: "TOTAL MARKET" });
+
+      await expect(aliasesFor(["TOTAL MARKET"], draftId, db)).resolves.toEqual(
+        new Map([["TOTAL MARKET", vti.id]]),
+      );
+    }),
+  );
+
+  it(
+    "answers the expired page, writing nothing, when the draft was swept under the form",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await db.deleteFrom("upload_draft").where("id", "=", draftId).execute();
+
+      await expect(
+        resolveAll(
+          draftId,
+          [{ raw: "VTI", fields: { kind: "existing", instrumentId: vti.id } }],
+          { probe: forbiddenProbe },
+          db,
+        ),
+      ).rejects.toThrow(NotFoundError);
+
+      const answers = await db.selectFrom("upload_draft_answer").select("draft_id").execute();
+      expect(answers).toHaveLength(0);
+    }),
+  );
+
+  it(
     "resolves byte-exact: an alias written with a trailing space leaves the bare spelling unresolved",
-    withDatabase(async ({ db, seedInstrument }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
       const vti = await seedInstrument({ symbol: "VTI" });
 
       await resolveAll(
+        draftId,
         [{ raw: "VTI ", fields: { kind: "existing", instrumentId: vti.id } }],
         { probe: forbiddenProbe },
         db,
       );
 
-      await expect(unresolvedStrings(["VTI ", "VTI", "vti "], db)).resolves.toEqual([
+      await expect(unresolvedStrings(["VTI ", "VTI", "vti "], draftId, db)).resolves.toEqual([
         "VTI",
         "vti ",
       ]);
@@ -129,9 +217,11 @@ describe("resolveAll — pointing at an existing instrument", () => {
 describe("resolveAll — creating an instrument", () => {
   it(
     "stores what the provider calls the instrument",
-    withDatabase(async ({ db }) => {
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
       const { probe } = okProbe("ETF");
-      await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
+      await resolveAll(draftId, [{ raw: "VXUS", fields: createFields() }], { probe }, db);
 
       const created = await db
         .selectFrom("instrument")
@@ -145,9 +235,11 @@ describe("resolveAll — creating an instrument", () => {
 
   it(
     "stores null when the provider named no type, rather than guessing one",
-    withDatabase(async ({ db }) => {
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
       const { probe } = okProbe(null);
-      await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
+      await resolveAll(draftId, [{ raw: "VXUS", fields: createFields() }], { probe }, db);
 
       const created = await db
         .selectFrom("instrument")
@@ -160,11 +252,14 @@ describe("resolveAll — creating an instrument", () => {
   );
 
   it(
-    "writes the classification first when new, then the instrument, then the alias",
-    withDatabase(async ({ db }) => {
+    "writes the classification first when new, then the instrument, then the draft's answer",
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
       const { probe, calls } = okProbe();
 
       const resolved = await resolveAll(
+        draftId,
         [{ raw: "VXUS", fields: createFields() }],
         { probe },
         db,
@@ -187,12 +282,13 @@ describe("resolveAll — creating an instrument", () => {
       expect(instrument.classification_id).toBe(classification.id);
       expect(instrument.quote_type).toBe("EQUITY");
 
-      const alias = await db
-        .selectFrom("instrument_alias")
+      const answer = await db
+        .selectFrom("upload_draft_answer")
         .selectAll()
+        .where("draft_id", "=", draftId)
         .where("raw_string", "=", "VXUS")
         .executeTakeFirstOrThrow();
-      expect(alias.instrument_id).toBe(instrument.id);
+      expect(answer.instrument_id).toBe(instrument.id);
       expect(resolved).toEqual([{ raw: "VXUS", instrumentId: instrument.id }]);
 
       expect(calls).toEqual([["VXUS"]]);
@@ -201,10 +297,13 @@ describe("resolveAll — creating an instrument", () => {
 
   it(
     "creates a classification typed twice in one submit once, shared, never refused against itself",
-    withDatabase(async ({ db }) => {
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
       const { probe } = okProbe();
 
       await resolveAll(
+        draftId,
         [
           { raw: "VXUS", fields: createFields() },
           {
@@ -235,11 +334,14 @@ describe("resolveAll — creating an instrument", () => {
 
   it(
     "refuses a feed instrument with no symbol — there is nothing to quote without one",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             {
               raw: "MYSTERY FUND",
@@ -261,10 +363,13 @@ describe("resolveAll — creating an instrument", () => {
 
   it(
     "allows manual with no symbol — the collective investment trust case",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
 
       await resolveAll(
+        draftId,
         [
           {
             raw: "VANG TARGET RET 2045",
@@ -290,22 +395,26 @@ describe("resolveAll — creating an instrument", () => {
       expect(instrument.symbol).toBeNull();
       expect(instrument.price_source).toBe("manual");
 
-      const alias = await db
-        .selectFrom("instrument_alias")
+      const answer = await db
+        .selectFrom("upload_draft_answer")
         .select("instrument_id")
+        .where("draft_id", "=", draftId)
         .where("raw_string", "=", "VANG TARGET RET 2045")
         .executeTakeFirstOrThrow();
-      expect(alias.instrument_id).toBe(instrument.id);
+      expect(answer.instrument_id).toBe(instrument.id);
     }),
   );
 
   it(
     "refuses a new classification name that already exists, naming it",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       await seedClassification({ name: "Growth", assetClass: "equity" });
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             {
               raw: "VXUS",
@@ -321,12 +430,12 @@ describe("resolveAll — creating an instrument", () => {
         /"Growth" is already a classification/,
       );
 
-      const aliases = await db
-        .selectFrom("instrument_alias")
+      const answers = await db
+        .selectFrom("upload_draft_answer")
         .select("raw_string")
         .where("raw_string", "=", "VXUS")
         .execute();
-      expect(aliases).toHaveLength(0);
+      expect(answers).toHaveLength(0);
     }),
   );
 });
@@ -334,12 +443,15 @@ describe("resolveAll — creating an instrument", () => {
 describe("resolveAll — the USD probe", () => {
   it(
     "refuses a non-USD quote naming the symbol and the currency, writing nothing for that string",
-    withDatabase(async ({ db, seedInstrument }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
       const usd = await seedInstrument({ symbol: "USDX", name: "Cash-like" });
       const instrumentsBefore = await db.selectFrom("instrument").select("id").execute();
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             { raw: "FCASH", fields: { kind: "existing", instrumentId: usd.id } },
             {
@@ -359,12 +471,12 @@ describe("resolveAll — the USD probe", () => {
       // Atomic across the submission — FCASH's alias waits too.
       const instrumentsAfter = await db.selectFrom("instrument").select("id").execute();
       expect(instrumentsAfter).toHaveLength(instrumentsBefore.length);
-      const aliases = await db
-        .selectFrom("instrument_alias")
+      const answers = await db
+        .selectFrom("upload_draft_answer")
         .select("raw_string")
         .where("raw_string", "in", ["VWRL", "FCASH"])
         .execute();
-      expect(aliases).toHaveLength(0);
+      expect(answers).toHaveLength(0);
       const classifications = await db
         .selectFrom("classification")
         .select("id")
@@ -376,8 +488,11 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "creates anyway when the provider cannot answer — the next refresh marks it stale",
-    withDatabase(async ({ db }) => {
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
       await resolveAll(
+        draftId,
         [{ raw: "VXUS", fields: createFields() }],
         { probe: unavailableProbe },
         db,
@@ -390,13 +505,15 @@ describe("resolveAll — the USD probe", () => {
         .executeTakeFirstOrThrow();
       expect(instrument.price_source).toBe("feed");
 
-      await expect(unresolvedStrings(["VXUS"], db)).resolves.toEqual([]);
+      await expect(unresolvedStrings(["VXUS"], draftId, db)).resolves.toEqual([]);
     }),
   );
 
   it(
     "writes each created instrument the quote type its own symbol was answered with",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
       const probe: ProbeSymbols = async () =>
         new Map([
@@ -414,6 +531,7 @@ describe("resolveAll — the USD probe", () => {
         });
 
       const resolved = await resolveAll(
+        draftId,
         [
           { raw: "VTI", fields: answerFor("VTI") },
           { raw: "MSFT", fields: answerFor("MSFT") },
@@ -442,13 +560,16 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "refuses a lower-case symbol the probe answered non-USD for",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             {
               raw: "vwrl",
@@ -472,7 +593,9 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "refuses only the feed plan when a manual plan names the same refused ticker",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
@@ -489,6 +612,7 @@ describe("resolveAll — the USD probe", () => {
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             { raw: "VWRL FEED", fields: answerFor("feed") },
             { raw: "VWRL MANUAL", fields: answerFor("manual") },
@@ -504,10 +628,13 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "never probes a manual instrument, even one carrying a symbol",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
 
       await resolveAll(
+        draftId,
         [
           {
             raw: "VWRL",
@@ -529,7 +656,9 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const classification = await seedClassification();
       const calls: string[][] = [];
       const probe: ProbeSymbols = async (symbols) => {
@@ -552,6 +681,7 @@ describe("resolveAll — the USD probe", () => {
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             { raw: "VTI A", fields: answerFor("VTI", "A") },
             { raw: "VTI B", fields: answerFor("VTI", "B") },
@@ -579,12 +709,15 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "creates the instrument when the probe answered nothing about its symbol",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       // Not hypothetical — a symbol failing the worker's pattern check is dropped before the call.
       const classification = await seedClassification();
       const silentProbe: ProbeSymbols = async () => new Map();
 
       const resolved = await resolveAll(
+        draftId,
         [
           {
             raw: "VTI",
@@ -615,7 +748,9 @@ describe("resolveAll — the USD probe", () => {
 
   it(
     "resolves a manual-only submission with a probe stub that was never called",
-    withDatabase(async ({ db, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       // Zero-symbol ask over the socket is a round trip the worker refuses anyway.
       const classification = await seedClassification();
       const calls: string[][] = [];
@@ -625,6 +760,7 @@ describe("resolveAll — the USD probe", () => {
       };
 
       await resolveAll(
+        draftId,
         [
           {
             raw: "VANG TARGET RET 2045",
@@ -650,11 +786,14 @@ describe("resolveAll — the USD probe", () => {
 describe("resolveAll — the whole submission", () => {
   it(
     "refuses a submit that leaves one string unanswered — there is no skip",
-    withDatabase(async ({ db, seedInstrument }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument } = ctx;
+      const draftId = await aDraft(ctx);
       const vti = await seedInstrument({ symbol: "VTI" });
 
       const refusal = await refusalOf(() =>
         resolveAll(
+          draftId,
           [
             { raw: "VTI", fields: { kind: "existing", instrumentId: vti.id } },
             { raw: "CASH & CASH INVESTMENTS", fields: {} },
@@ -667,23 +806,26 @@ describe("resolveAll — the whole submission", () => {
       expect(refusal.fieldErrors["kind-1"]).toMatch(/silently missing/);
 
       // Answered string is not written either — refusal is atomic across the submission.
-      const aliases = await db
-        .selectFrom("instrument_alias")
+      const answers = await db
+        .selectFrom("upload_draft_answer")
         .select("raw_string")
         .where("raw_string", "=", "VTI")
         .execute();
-      expect(aliases).toHaveLength(0);
+      expect(answers).toHaveLength(0);
     }),
   );
 
   it(
-    "tolerates a concurrently-planted alias: the existing row wins and no duplicate is left",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+    "defers to vocabulary gained meanwhile: its row answers, nothing lands on the draft, no duplicate is left",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias } = ctx;
+      const draftId = await aDraft(ctx);
       const cash = await seedInstrument({ symbol: "USDY", name: "Cash" });
       await seedInstrumentAlias({ instrument: cash, rawString: "CASH & CASH INVESTMENTS" });
       const before = await db.selectFrom("instrument").select("id").execute();
 
       const resolved = await resolveAll(
+        draftId,
         [
           {
             raw: "CASH & CASH INVESTMENTS",
@@ -710,18 +852,72 @@ describe("resolveAll — the whole submission", () => {
         .where("raw_string", "=", "CASH & CASH INVESTMENTS")
         .executeTakeFirstOrThrow();
       expect(alias.instrument_id).toBe(cash.id);
+      const answers = await db
+        .selectFrom("upload_draft_answer")
+        .select("raw_string")
+        .where("draft_id", "=", draftId)
+        .execute();
+      expect(answers).toHaveLength(0);
       const after = await db.selectFrom("instrument").select("id").execute();
       expect(after).toHaveLength(before.length);
     }),
   );
 
   it(
-    "makes the next upload silent: everything resolved here stops being unresolved",
-    withDatabase(async ({ db, seedInstrument, seedClassification }) => {
+    "lets a draft's own second submit find its first answer, deleting the instrument it just created",
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
+      const { probe } = okProbe();
+
+      const first = await resolveAll(draftId, [{ raw: "VXUS", fields: createFields() }], { probe }, db);
+      const before = await db.selectFrom("instrument").select("id").execute();
+      const blend = await db
+        .selectFrom("classification")
+        .select("id")
+        .where("name", "=", "International blend")
+        .executeTakeFirstOrThrow();
+
+      // Same draft, same string, a fresh "create" — a double click, or a stale tab.
+      const second = await resolveAll(
+        draftId,
+        [
+          {
+            raw: "VXUS",
+            fields: createFields({
+              name: "Typed again",
+              classificationId: blend.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe },
+        db,
+      );
+
+      expect(second).toEqual(first);
+      const after = await db.selectFrom("instrument").select("id").execute();
+      expect(after).toHaveLength(before.length);
+      const answers = await db
+        .selectFrom("upload_draft_answer")
+        .select("instrument_id")
+        .where("draft_id", "=", draftId)
+        .execute();
+      expect(answers).toEqual([{ instrument_id: first[0]?.instrumentId }]);
+    }),
+  );
+
+  it(
+    "leaves nothing unresolved for this draft, while another draft still meets every string",
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const vti = await seedInstrument({ symbol: "VTI" });
       const classification = await seedClassification();
 
       await resolveAll(
+        draftId,
         [
           { raw: "VANGUARD TOTAL STK MKT ETF", fields: { kind: "existing", instrumentId: vti.id } },
           {
@@ -741,9 +937,19 @@ describe("resolveAll — the whole submission", () => {
       await expect(
         unresolvedStrings(
           ["VANGUARD TOTAL STK MKT ETF", "VANG TARGET RET 2045", "SOMETHING ELSE"],
+          draftId,
           db,
         ),
       ).resolves.toEqual(["SOMETHING ELSE"]);
+
+      // The next upload is silent only once this one is recorded (commit-upload.test.ts).
+      await expect(
+        unresolvedStrings(
+          ["VANGUARD TOTAL STK MKT ETF", "VANG TARGET RET 2045", "SOMETHING ELSE"],
+          await aDraft(ctx),
+          db,
+        ),
+      ).resolves.toEqual(["VANGUARD TOTAL STK MKT ETF", "VANG TARGET RET 2045", "SOMETHING ELSE"]);
     }),
   );
 });
@@ -751,7 +957,9 @@ describe("resolveAll — the whole submission", () => {
 describe("resolutionScreen", () => {
   it(
     "lists only the first sightings, with the row's name and quantity beside each",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedClassification }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias, seedClassification } = ctx;
+      const draftId = await aDraft(ctx);
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
       await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
       const growth = await seedClassification({ name: "Screen Growth", assetClass: "equity" });
@@ -783,6 +991,7 @@ describe("resolutionScreen", () => {
             accountNumber: null,
           },
         ],
+        draftId,
         db,
       );
 
@@ -852,15 +1061,17 @@ describe("sameRawStrings", () => {
 });
 
 /** Moved here from column-mapping.test.ts, which imported it from this module — the lookup is
- * resolution's, not the mapping's. */
+ * resolution's, not the mapping's. Vocabulary rows, seeded as a recorded upload leaves them. */
 describe("unresolvedStrings", () => {
   it(
     "matches byte-exactly, so a case or padding difference is a miss",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias } = ctx;
+      const draftId = await aDraft(ctx);
       const instrument = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument, rawString: "VTI" });
 
-      await expect(unresolvedStrings(["VTI", "vti", "VTI ", " VTI"], db)).resolves.toEqual([
+      await expect(unresolvedStrings(["VTI", "vti", "VTI ", " VTI"], draftId, db)).resolves.toEqual([
         "vti",
         "VTI ",
         " VTI",
@@ -870,22 +1081,26 @@ describe("unresolvedStrings", () => {
 
   it(
     "answers nothing for a file whose every string is already vocabulary",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias } = ctx;
+      const draftId = await aDraft(ctx);
       const instrument = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument, rawString: "VTI" });
       await seedInstrumentAlias({ instrument, rawString: "Vanguard Total Stock Market ETF" });
 
       await expect(
-        unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], db),
+        unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], draftId, db),
       ).resolves.toEqual([]);
-      await expect(unresolvedStrings([], db)).resolves.toEqual([]);
+      await expect(unresolvedStrings([], draftId, db)).resolves.toEqual([]);
     }),
   );
 
   it(
     "keeps first-appearance order and collapses repeats, the order the screen asks in",
-    withDatabase(async ({ db }) => {
-      await expect(unresolvedStrings(["BND", "VTI", "BND", "AAPL", "VTI"], db)).resolves.toEqual([
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
+      await expect(unresolvedStrings(["BND", "VTI", "BND", "AAPL", "VTI"], draftId, db)).resolves.toEqual([
         "BND",
         "VTI",
         "AAPL",
@@ -895,13 +1110,15 @@ describe("unresolvedStrings", () => {
 
   it(
     "reads an alias written for one institution's statement when another's names the same string",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+    withDatabase(async (ctx) => {
+      const { db, seedInstrument, seedInstrumentAlias } = ctx;
+      const draftId = await aDraft(ctx);
       // Replaces a brittle information_schema assertion about the schema file, not what
       // the schema does.
       const usd = await seedInstrument({ symbol: "USD", name: "US Dollar" });
       await seedInstrumentAlias({ instrument: usd, rawString: "CASH" });
 
-      await expect(unresolvedStrings(["CASH"], db)).resolves.toEqual([]);
+      await expect(unresolvedStrings(["CASH"], draftId, db)).resolves.toEqual([]);
     }),
   );
 });

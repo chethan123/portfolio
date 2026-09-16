@@ -8,7 +8,7 @@ export type DecimalInput =
 export type DecimalInputOptions = Readonly<{ allowTrailingPercent?: boolean }>;
 
 export const DECIMAL_FORMAT_HINT =
-  "Use a point for decimals. Commas or spaces group thousands in threes: 1,234.56 is read as 1234.56.";
+  "Use a point for decimals. Commas or spaces group thousands in threes: 1,234.56 is read as 1234.56. A leading + and a trailing point are allowed: +5 and 5. both read as 5.";
 
 const GROUP_SEPARATOR = /[, \u00a0\u2009]/;
 const GROUPED_INTEGER = /^\d{1,3}([, \u00a0\u2009])\d{3}(?:\1\d{3})*$/;

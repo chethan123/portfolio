@@ -38,6 +38,7 @@ describe("percentRate", () => {
     // bareDecimal's generosity, shared with money fields: unambiguous shorthand is completed, not refused
     expect(parsed(".5")).toBe("0.5");
     expect(parsed("20.")).toBe("20");
+    expect(parsed("+5")).toBe("5");
   });
 
   it("keeps every place the column stores, and refuses the place after it", () => {
@@ -45,7 +46,7 @@ describe("percentRate", () => {
     expect(refusal("23.8123456")).toMatch(/decimal places/);
   });
 
-  it.each(["1,5", "12,34", "1 5"])("refuses ambiguous grouping in %o", (typed) => {
+  it.each(["1,5", "1,00,0", "12,34", "1 5"])("refuses ambiguous grouping in %o", (typed) => {
     expect(refusal(typed)).toMatch(/ambiguous or invalid.*group thousands in threes/i);
   });
 

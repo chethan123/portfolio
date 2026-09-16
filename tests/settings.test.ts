@@ -63,9 +63,10 @@ describe("the capital gains rate", () => {
     "leaves the stored rate alone when it refuses",
     withDatabase(async ({ db }) => {
       await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "500" }, db));
-      const ambiguous = await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "1,5" }, db));
-
-      expect(ambiguous.capitalGainsRate).toMatch(/ambiguous or invalid/);
+      for (const capitalGainsRate of ["1,5", "1,00,0"]) {
+        const ambiguous = await refusalOf(saveCapitalGainsRate({ capitalGainsRate }, db));
+        expect(ambiguous.capitalGainsRate).toMatch(/ambiguous or invalid/);
+      }
       expect(await readCapitalGainsRate(db)).toBe("23.800000");
     }),
   );

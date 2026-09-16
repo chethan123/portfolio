@@ -52,6 +52,9 @@ describe("moneyMagnitude", () => {
     ["  14500.00  ", "14500.00"],
     ["$ 14 500.00", "14500.00"],
     ["+14500.00", "14500.00"],
+    ["1 000", "1000"],
+    ["5.", "5"],
+    ["+5", "5"],
     // A copy out of a rendered statement brings a non-breaking space with it.
     ["$14 500.00", "14500.00"],
     ["14 500.00", "14500.00"],
@@ -59,7 +62,16 @@ describe("moneyMagnitude", () => {
     expect(parseInput(amount, { amount: typed }).amount).toBe(stored);
   });
 
-  it.each(["1,5", "12,34", "123,45.67", "1 5", "12 34", "123 45.67", "1,234 567"])(
+  it.each([
+    "1,5",
+    "1,00,0",
+    "12,34",
+    "123,45.67",
+    "1 5",
+    "12 34",
+    "123 45.67",
+    "1,234 567",
+  ])(
     "refuses ambiguous grouping in %o",
     (typed) => {
       expect(refusal(amount, { amount: typed }, "amount")).toMatch(

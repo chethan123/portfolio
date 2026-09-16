@@ -164,8 +164,9 @@ describe("passkey_bootstrap_idx", () => {
       bodyFailed = true;
       throw error;
     } finally {
-      // Only place in the suite that commits outside withDatabase — keeps database.ts's promise to leave
-      // the database as found. Suppressed only when the body already failed, so it never masks the real diagnostic.
+      // Commits outside withDatabase, as the two-connection races in lock.test.ts and account-lock.test.ts
+      // do — clearing at both ends keeps database.ts's promise to leave the database as found. Suppressed
+      // only when the body already failed, so it never masks the real diagnostic.
       let cleanupError: unknown;
       try {
         await clearRacingPasskeys(pool);
