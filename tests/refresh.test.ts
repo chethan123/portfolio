@@ -11,15 +11,17 @@ import { withDb } from "~/lib/db.server";
 import { outcomeOf, runRefresh } from "~/lib/refresh.server";
 import { createPool } from "../server/db.ts";
 
-import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
+import {
+  TEST_DATABASE_URL,
+  UNREACHABLE_DATABASE_URL,
+  closeTestDatabase,
+  withDatabase,
+} from "./support/database.ts";
 
 import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
 
 // getConfig() memoises its first read — set before any test runs
 process.env.DATABASE_URL = TEST_DATABASE_URL;
-
-// refused immediately — how "the database went away" arrives here
-const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
 // withRefreshLock's own key, which must never change — taken from a second real session, so the
 // test holds the lock exactly as a second tab or racing tick would

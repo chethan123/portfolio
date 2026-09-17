@@ -131,9 +131,16 @@ export function chunked(request: Request): { request: Request; sent: () => numbe
   return { request: new Request(request.url, init), sent: () => sent };
 }
 
-/** {request, params} only — no route here reads context. Cast at the call site; generated Route.LoaderArgs isn't reachable here. */
-export function args(request: Request, params: Record<string, string> = {}) {
-  return { request, params } as never;
+/**
+ * One provider per request. Reuse one args object when parallel root/child loaders must share context;
+ * two calls model two requests and cannot prove a shared decision.
+ */
+export function args(
+  request: Request,
+  params: Record<string, string> = {},
+  context = new RouterContextProvider(),
+) {
+  return { request, params, context } as never;
 }
 
 /** Runs a route fn; routes signal redirects/404s by throwing a Response, so both outcomes land here rather than in a try. */

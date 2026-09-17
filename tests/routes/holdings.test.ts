@@ -5,6 +5,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import Holdings, { action, loader } from "../../app/routes/holdings.tsx";
+import { MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { ALL_OWNERS } from "~/lib/owner-filter";
 import { currentPosition } from "~/lib/positions.server";
 
@@ -15,6 +16,13 @@ import { args, get, outcomeOf, ownerParam, post, redirectTo, responseOf } from "
 import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
+
+const SHOW_AMOUNTS = `${MASKING_COOKIE}=${UNMASKED}`;
+
+/** A correction form exists only after an intentional reveal, so every ordinary correction carries that precondition. */
+function correct(path: string, fields: Record<string, string>): Request {
+  return post(path, fields, SHOW_AMOUNTS);
+}
 
 /** One priced position, which is the smallest thing this screen can draw. */
 async function seedOnePosition(
@@ -146,7 +154,7 @@ describe("reading the table as an owner", () => {
     "narrows to one owner, and to two, exactly as the old Owner select did",
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx);
-      const at = (search: string) => loader(args(get(`/holdings${search}`)));
+      const at = (search: string) => loader(args(get(`/holdings${search}`, SHOW_AMOUNTS)));
 
       const hers = await at(`?owner=${alice.id}`);
       expect(hers.rows?.map((row) => row.instrumentName)).toEqual([
@@ -254,7 +262,11 @@ describe("reading the table as an owner", () => {
       const key = `${hers.id}.${row?.instrumentId ?? ""}`;
 
       const destination = await redirectTo(() =>
-        action(args(post(`/holdings?owner=${alice.id}&edit=${key}`, { quantity: "120" }))),
+        action(
+          args(
+            correct(`/holdings?owner=${alice.id}&edit=${key}`, { quantity: "120" }),
+          ),
+        ),
       );
 
       // No hidden field carries it — the form posts back to the address that opened it.
@@ -525,7 +537,7 @@ describe("correcting one row", () => {
       await ctx.seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
 
       const outcome = await outcomeOf(() =>
-        action(args(post(`/holdings?edit=${rowKey}`, { quantity: "150", costBasisPerShare: "" }))),
+        action(args(correct(`/holdings?edit=${rowKey}`, { quantity: "150", costBasisPerShare: "" }))),
       );
 
       // Rendered beside the form with what was typed kept, not a redirect claiming it landed.
@@ -567,7 +579,7 @@ describe("correcting one row", () => {
       const destination = await redirectTo(() =>
         action(
           args(
-            post(
+            correct(
               `/holdings?owner=${owner.id}&sort=bogus&dir=sideways&nonsense=1&edit=${rowKey}`,
               { quantity: "150", costBasisPerShare: "180" },
             ),
@@ -578,7 +590,7 @@ describe("correcting one row", () => {
       expect(destination).toBe(`/holdings?owner=${owner.id}&saved=${rowKey}`);
 
       // Following it proves both halves: the write landed, and the confirmation quotes currentHoldings(ALL_OWNERS), not the posted parameter.
-      const confirmed = await loader(args(get(destination)));
+      const confirmed = await loader(args(get(destination, SHOW_AMOUNTS)));
       expect(confirmed.written).toMatchObject({
         key: rowKey,
         instrumentName: "Vanguard Total Stock Market",
