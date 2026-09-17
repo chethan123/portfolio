@@ -9,13 +9,31 @@ import {
 
 type Props = Omit<ComponentProps<"input">, "onChange"> & {
   compact?: boolean;
+  hasServerError?: boolean;
   noteId: string;
   rule: DecimalInputRule;
   shape: "money" | "quantity" | "percentage";
 };
 
+export const PUNCTUATION_ECHO = "Punctuation reads as";
+
+export function clientRefusalIsLive({
+  hydrated,
+  invalid,
+  hasServerError,
+  matchesServerValue,
+}: Readonly<{
+  hydrated: boolean;
+  invalid: boolean;
+  hasServerError: boolean;
+  matchesServerValue: boolean;
+}>): boolean {
+  return hydrated && invalid && !(hasServerError && matchesServerValue);
+}
+
 export function InterpretedNumberInput({
   compact = false,
+  hasServerError = false,
   noteId,
   rule,
   shape,
@@ -30,9 +48,16 @@ export function InterpretedNumberInput({
     hydrated && parsed.kind === "decimal" && parsed.value !== ""
       ? parsed.value
       : null;
-  const invalid = hydrated && typed.trim() !== "" && parsed.kind === "invalid";
+  const invalidReason = parsed.kind === "invalid" ? parsed.reason : null;
+  const invalid = typed.trim() !== "" && invalidReason !== null;
+  const announceInvalid = clientRefusalIsLive({
+    hydrated,
+    invalid,
+    hasServerError,
+    matchesServerValue: typed === initial,
+  });
 
-  // The server render carries only the fixed grammar; after hydration the exact echo follows the box.
+  // Server render carries only fixed grammar; hydration adds punctuation normalization or a refusal.
   useEffect(() => setHydrated(true), []);
 
   return (
@@ -47,16 +72,17 @@ export function InterpretedNumberInput({
       <span id={noteId} className="field-note">
         {compact ? null : DECIMAL_FORMAT_HINT}
         <span aria-live="polite">
-          {invalid ? (
+          {announceInvalid && invalidReason !== null ? (
             <>
               {compact ? null : " "}
-              {rule.message(parsed.reason)}
+              {rule.message(invalidReason)}
             </>
           ) : null}
         </span>
         {invalid || interpreted === null ? null : (
           <>
-            {compact ? null : " "}Number format reads as{" "}
+            {compact ? null : " "}
+            {PUNCTUATION_ECHO}{" "}
             <b className="u-data">
               {shape === "money" ? "$" : null}
               {shape === "percentage" ? (

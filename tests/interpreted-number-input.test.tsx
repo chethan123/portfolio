@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { InterpretedNumberInput } from "~/components/interpreted-number-input";
+import {
+  InterpretedNumberInput,
+  PUNCTUATION_ECHO,
+  clientRefusalIsLive,
+} from "~/components/interpreted-number-input";
 import {
   moneyMagnitudeRule,
   parseDecimalInput,
@@ -39,6 +43,38 @@ const render = (value: string, shape: "money" | "quantity" | "percentage", maske
   renderRoute(() => <Preview value={value} shape={shape} />, "/", {}, { masked });
 
 describe("the interpreted-number note", () => {
+  it("does not present contextual correction candidates as accepted", () => {
+    expect(parseDecimalInput("1.234", signedQuantityRule("A quantity").options)).toEqual({
+      kind: "decimal",
+      value: "1.234",
+    });
+    expect(parseDecimalInput("-5", signedQuantityRule("A quantity").options)).toEqual({
+      kind: "decimal",
+      value: "-5",
+    });
+    expect(PUNCTUATION_ECHO).toBe("Punctuation reads as");
+    expect(PUNCTUATION_ECHO).not.toMatch(/accepted|valid|will (save|record)/i);
+  });
+
+  it("does not repeat an initial server refusal after hydration", () => {
+    expect(
+      clientRefusalIsLive({
+        hydrated: true,
+        invalid: true,
+        hasServerError: true,
+        matchesServerValue: true,
+      }),
+    ).toBe(false);
+    expect(
+      clientRefusalIsLive({
+        hydrated: true,
+        invalid: true,
+        hasServerError: true,
+        matchesServerValue: false,
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     ["balance sign", "-5", moneyMagnitudeRule("A balance"), "sign"],
     ["balance size", "1234567890123", moneyMagnitudeRule("A balance"), "size"],
@@ -61,8 +97,8 @@ describe("the interpreted-number note", () => {
 
     expect(money).toContain("1,234.56 is read as 1234.56");
     expect(quantity).toContain("1,234.56 is read as 1234.56");
-    expect(money).not.toContain("Number format reads as");
-    expect(quantity).not.toContain("Number format reads as");
+    expect(money).not.toContain("Punctuation reads as");
+    expect(quantity).not.toContain("Punctuation reads as");
   });
 
   it("does not claim an initial malformed value was interpreted before hydration", () => {
@@ -70,7 +106,7 @@ describe("the interpreted-number note", () => {
 
     expect(markup).toContain("1,234.56 is read as 1234.56");
     expect(markup).not.toContain("This number format is ambiguous or invalid.");
-    expect(markup).not.toContain("Number format reads as");
+    expect(markup).not.toContain("Punctuation reads as");
   });
 
   it("emits no extra amount or ratio in masked server markup before the live preview exists", () => {
@@ -81,6 +117,6 @@ describe("the interpreted-number note", () => {
     expect(rate.match(/23\.800000/g)).toHaveLength(1);
     expect(money).not.toContain("Amount hidden");
     expect(money).not.toContain("••••••");
-    expect(rate).not.toContain("Number format reads as");
+    expect(rate).not.toContain("Punctuation reads as");
   });
 });

@@ -82,6 +82,7 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
                   : "capital-gains-rate-format capital-gains-rate-note"
               }
               autoComplete="off"
+              hasServerError={error !== undefined}
               noteId="capital-gains-rate-format"
               rule={percentRateRule("A capital gains rate")}
               shape="percentage"

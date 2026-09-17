@@ -95,8 +95,8 @@ Type a **plain positive amount**. The app applies the direction from the kind of
 Use a point for decimals. Commas or spaces may separate thousands only in groups of three, so
 `1,234.56` and `1 000` are accepted while `1,5`, `1,00,0`, and `1 5` are refused as ambiguous. A
 leading plus sign and a trailing point are allowed: `+5` and `5.` both read as `5`. Dollar signs are
-fine. With scripting on, the form also echoes exactly how it reads the number while you type. Cents
-are the limit. A third decimal place is refused rather than rounded.
+fine. With scripting on, the form also echoes how it normalizes the number's punctuation while you
+type. Cents are the limit. A third decimal place is refused rather than rounded.
 
 The box opens **empty** rather than pre-filled. The figure it is replacing is stated beside it
 instead, so re-recording a stale number is never one click.

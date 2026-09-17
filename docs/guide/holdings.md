@@ -185,7 +185,9 @@ Two things to know before you type:
 
 Use a point for decimals. Commas or spaces may separate thousands only in groups of three. The
 editor accepts `1 000`, `5.`, and `+5`, and refuses ambiguous forms such as `1,5` and `1,00,0`.
-With scripting on, it also echoes exactly how it reads each number while you type.
+With scripting on, it also echoes how it normalizes each number's punctuation while you type. The
+echo does not promise that Save will accept the correction: account-specific rules still prevent a
+cash balance finer than cents, a change between held and owed, or a value too large to store.
 
 ### What saving actually does
 

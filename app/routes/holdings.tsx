@@ -846,6 +846,7 @@ function Row({
               autoComplete="off"
               autoFocus
               compact
+              hasServerError={errors?.quantity !== undefined}
               noteId="revise-quantity-format"
               rule={signedQuantityRule("A quantity")}
               shape="quantity"
@@ -881,6 +882,7 @@ function Row({
               }
               autoComplete="off"
               compact
+              hasServerError={errors?.costBasisPerShare !== undefined}
               noteId="revise-cost-basis-format"
               rule={perShareAmountRule("A cost basis")}
               shape="money"

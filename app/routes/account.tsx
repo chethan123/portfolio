@@ -579,6 +579,7 @@ function SetBalance({
                 : "set-balance-amount-format"
             }
             autoComplete="off"
+            hasServerError={errors?.amount !== undefined}
             noteId="set-balance-amount-format"
             rule={moneyMagnitudeRule("A balance")}
             shape="money"
