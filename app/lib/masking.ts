@@ -68,7 +68,7 @@ export function readMaskingCookie(request: Request): string | undefined {
   return readCookie(request, MASKING_COOKIE);
 }
 
-/** The rail and phone controls share one fetcher key, so every amount sees the pending choice. */
+/** The rail and phone controls share one submission and one lifetime-reconciliation signal. */
 export const MASKING_FETCHER_KEY = "masking";
 
 /** Carries the state being flipped *to*. */
@@ -227,6 +227,13 @@ function subscribeToBrowserMasking(onChange: () => void): () => void {
   };
 }
 
+/** The browser's subscribable masking state; lifecycle stays inside this module. */
+export const browserMaskingStore = {
+  subscribe: subscribeToBrowserMasking,
+  getSnapshot: browserMaskingSnapshot,
+  getServerSnapshot: serverMaskingSnapshot,
+} as const;
+
 /** Cookie writes have no browser event; tell this tab and the browser's other tabs to reread it. */
 export function publishBrowserMaskingChange(): void {
   if (typeof window === "undefined") return;
@@ -240,6 +247,19 @@ export type BrowserMaskingWrite = {
   intent: string | undefined;
 };
 
+/**
+ * Assign while `intent` still owns the choice, then publish the resulting cookie. Cookie writes
+ * are not atomic across tabs: a detected overlap writes a session Hide, and whichever tab assigns
+ * last leaves either that newer choice or the corrective Hide, never this stale assignment.
+ */
+function assignBrowserMaskingCookie(cookie: string, intent: string | undefined): boolean {
+  document.cookie = cookie;
+  const stillCurrent = intent === undefined || browserMaskingIntentIsCurrent(intent);
+  if (!stillCurrent) document.cookie = maskingCookie(true, "masked");
+  publishBrowserMaskingChange();
+  return stillCurrent;
+}
+
 /** Writes one enhanced toggle and records the ordering point its revalidation may reconcile. */
 export function writeBrowserMaskingChoice(
   masked: boolean,
@@ -247,11 +267,7 @@ export function writeBrowserMaskingChoice(
   const value = masked ? MASKED : UNMASKED;
   const intent = advanceBrowserMaskingIntent();
   // The policy in this tab may be stale. Extend to *as last left* only after revalidation.
-  document.cookie = maskingCookie(masked, "masked");
-  if (intent !== undefined && !browserMaskingIntentIsCurrent(intent)) {
-    document.cookie = maskingCookie(true, "masked");
-  }
-  publishBrowserMaskingChange();
+  assignBrowserMaskingCookie(maskingCookie(masked, "masked"), intent);
   return { value, intent };
 }
 
@@ -264,13 +280,12 @@ export function reconcileBrowserMaskingChoice(
   if (readBrowserMaskingCookie() !== written.value) return;
   if (!browserMaskingIntentIsCurrent(written.intent)) return;
 
-  document.cookie = fresh.maskingResolved
-    ? maskingCookie(written.value === MASKED, fresh.maskingPolicy)
-    : maskingCookie(true, "masked");
-  if (!browserMaskingIntentIsCurrent(written.intent)) {
-    document.cookie = maskingCookie(true, "masked");
-  }
-  publishBrowserMaskingChange();
+  assignBrowserMaskingCookie(
+    fresh.maskingResolved
+      ? maskingCookie(written.value === MASKED, fresh.maskingPolicy)
+      : maskingCookie(true, "masked"),
+    written.intent,
+  );
 }
 
 /** Keeps a saved policy safe across root revalidation, then removes its temporary override. */
@@ -282,13 +297,14 @@ export async function adoptSavedMaskingPolicy(
   if (!browserMaskingIntentIsCurrent(intent)) return;
 
   // Always session-only: this cookie exists only to cover one root revalidation.
-  document.cookie = maskingCookie(resolveMasked(policy, undefined), "masked");
-  if (!browserMaskingIntentIsCurrent(intent)) {
-    document.cookie = maskingCookie(true, "masked");
-    publishBrowserMaskingChange();
+  if (
+    !assignBrowserMaskingCookie(
+      maskingCookie(resolveMasked(policy, undefined), "masked"),
+      intent,
+    )
+  ) {
     return;
   }
-  publishBrowserMaskingChange();
 
   try {
     await revalidate();
@@ -302,11 +318,7 @@ export async function adoptSavedMaskingPolicy(
     return;
   }
 
-  document.cookie = clearedMaskingCookie();
-  if (!browserMaskingIntentIsCurrent(intent)) {
-    document.cookie = maskingCookie(true, "masked");
-  }
-  publishBrowserMaskingChange();
+  assignBrowserMaskingCookie(clearedMaskingCookie(), intent);
 }
 
 type MaskingLoaderState = {
@@ -333,9 +345,9 @@ export function resolveBrowserMasked(
 export function useMasked(): boolean {
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
   const browser = useSyncExternalStore(
-    subscribeToBrowserMasking,
-    browserMaskingSnapshot,
-    serverMaskingSnapshot,
+    browserMaskingStore.subscribe,
+    browserMaskingStore.getSnapshot,
+    browserMaskingStore.getServerSnapshot,
   );
 
   return resolveBrowserMasked(rootData, browser);

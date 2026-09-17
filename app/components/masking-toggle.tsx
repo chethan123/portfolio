@@ -30,7 +30,11 @@ export function MaskingToggle({ className }: { className?: string }) {
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
   const masked = useMasked();
   const location = useLocation();
-  const pending = useRef<{ write: BrowserMaskingWrite; started: boolean } | null>(null);
+  const pending = useRef<{
+    write: BrowserMaskingWrite;
+    started: boolean;
+    rootData: typeof rootData;
+  } | null>(null);
 
   useEffect(() => {
     if (pending.current === null) return;
@@ -38,7 +42,13 @@ export function MaskingToggle({ className }: { className?: string }) {
       pending.current.started = true;
       return;
     }
-    if (!pending.current.started || rootData === undefined) return;
+    if (!pending.current.started) return;
+    if (rootData === undefined || rootData === pending.current.rootData) {
+      // Idle alone does not prove a new root snapshot. Keep the optimistic cookie session-scoped
+      // rather than applying a possibly stale policy lifetime.
+      pending.current = null;
+      return;
+    }
 
     reconcileBrowserMaskingChoice(pending.current.write, rootData);
     pending.current = null;
@@ -62,6 +72,7 @@ export function MaskingToggle({ className }: { className?: string }) {
           pending.current = {
             write: writeBrowserMaskingChoice(next === MASKED),
             started: false,
+            rootData,
           };
         }
       }}

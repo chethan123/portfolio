@@ -532,10 +532,11 @@ unmarked request remains the no-JavaScript server writer even where Fetch Metada
 absent. The enhanced toggle reconciles an unchanged choice to the freshly loaded policy's lifetime;
 a session cookie covers the request, a failed policy read leaves a session Hide, and unavailable
 token storage skips the lifetime repair. Display Settings uses the same split, plus an origin-local
-random intent token so success clears the override only if no later toggle won before the clear. An
-overlap during the clear fails closed to a session Hide, including over a newer Show. Its session-only
-bridge remains when root revalidation fails. Unavailable token storage preserves the cookie. Neither
-the channel nor the token contains private data.
+random intent token so success clears the override only if no later toggle won before the clear. A
+detected overlap during the clear writes a session Hide; the last assignment leaves either the
+newer choice or that Hide, never the stale clear. Its session-only bridge remains when root
+revalidation fails. Unavailable token storage preserves the cookie. Neither the channel nor the
+token contains private data.
 
 A successful policy resolution is an explicit root-loader field. When the policy read fails, that
 field keeps the browser masked even if a pre-existing cookie says to show. The hook's server

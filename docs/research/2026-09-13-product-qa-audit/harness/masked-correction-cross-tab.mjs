@@ -3,8 +3,9 @@
  *
  * Requires a running production build and the same seeded fixture as
  * masked-correction-toggle-race.mjs. No financial value crosses the tab notification channel.
- * Use a loopback PORTFOLIO_URL: scenario F relies on Chromium's secure-cookie loopback exemption.
- * Run against a disposable fixture; scenario F temporarily locks the instance for every browser.
+ * Use a loopback PORTFOLIO_URL: the `/unlock` lifecycle scenario below relies on Chromium's
+ * secure-cookie loopback exemption. Run against a disposable fixture: the lock is instance-wide
+ * while that scenario runs.
  */
 import assert from "node:assert/strict";
 
@@ -169,6 +170,53 @@ try {
   await lifetime.close();
   await pool.query("update app_setting set masking_policy = 'masked'");
 
+  // A failed enhanced action provides no fresh policy data. React Router currently remounts the
+  // root error subtree; the identity guard independently keeps the staged Show session-scoped if
+  // that lifecycle changes. Normal completion above remains the positive persistent-lifetime case.
+  const failedToggleLifetimes = [];
+  for (const failureMode of ["network", "http-500"]) {
+    await pool.query("update app_setting set masking_policy = 'as_last_left'");
+    const failedToggle = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+    await failedToggle.addCookies([{ name: "masked", value: "1", url: base }]);
+    const failedTogglePage = await failedToggle.newPage();
+    await failedTogglePage.goto(`${base}${path}`, { waitUntil: "networkidle" });
+    await pool.query("update app_setting set masking_policy = 'masked'");
+
+    await failedTogglePage.route("**/masking.data*", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      if (failureMode === "network") await route.abort("failed");
+      else await route.fulfill({ status: 500, contentType: "text/plain", body: "failed" });
+    });
+    const actionFinished =
+      failureMode === "network"
+        ? failedTogglePage.waitForEvent("requestfailed", (request) =>
+            request.url().includes("/masking.data"),
+          )
+        : failedTogglePage.waitForResponse(
+            (response) =>
+              response.url().includes("/masking.data") && response.status() === 500,
+          );
+    await failedTogglePage
+      .getByRole("button", { name: "Show amounts", exact: true })
+      .first()
+      .click();
+    await actionFinished;
+    await failedTogglePage.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
+
+    const failedCookie = (await failedToggle.cookies(base)).find(({ name }) => name === "masked");
+    assert.equal(failedCookie?.value, "0", `A ${failureMode} failure must retain the staged Show.`);
+    assert.equal(
+      failedCookie?.expires,
+      -1,
+      `A ${failureMode} failure must not promote Show with stale as-last-left policy data.`,
+    );
+    failedToggleLifetimes.push(`${failureMode}:${failedCookie.expires}`);
+    await failedToggle.close();
+  }
+  await pool.query("update app_setting set masking_policy = 'masked'");
+
   // The policy bridge has one revalidation to cover and never receives the saved policy's lifetime.
   await pool.query("update app_setting set masking_policy = 'unmasked'");
   const bridge = await browser.newContext({ viewport: { width: 1000, height: 800 } });
@@ -193,6 +241,12 @@ try {
   assert.equal(bridgeCookie?.expires, -1, "The temporary Settings bridge must be session-only.");
   bridgeRelease.resolve();
   await bridgePage.waitForLoadState("networkidle");
+  const clearedBridge = await waitForMaskingCookie(
+    bridge,
+    (cookie) => cookie === undefined,
+    "the Settings bridge clear",
+  );
+  assert.equal(clearedBridge, undefined, "The Settings bridge must clear after revalidation.");
   await bridge.close();
   await pool.query("update app_setting set masking_policy = 'masked'");
 
@@ -207,6 +261,8 @@ try {
   await showHere.getByRole("button", { name: "Show amounts", exact: true }).first().click();
   await showHere.locator(inputs).first().waitFor();
   await stayGated.waitForLoadState("networkidle");
+  // Passive Show intentionally emits no sibling request; a bounded settle plus two paint frames is
+  // the observable barrier before proving that no DOM update arrived.
   await stayGated.waitForTimeout(250);
   await stayGated.evaluate(
     () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
@@ -392,8 +448,17 @@ try {
   );
   await unavailablePage.getByRole("radio", { name: /Showing amounts/ }).check();
   await unavailablePage.getByRole("button", { name: "Save", exact: true }).click();
-  await unavailableResponse;
+  const savedWithoutStorage = await unavailableResponse;
+  assert.ok(savedWithoutStorage.ok(), "The unavailable-storage Display save must succeed.");
   await unavailablePage.waitForLoadState("networkidle");
+  const savedPolicyWithoutStorage = await pool
+    .query("select masking_policy from app_setting")
+    .then(({ rows }) => rows[0]?.masking_policy);
+  assert.equal(
+    savedPolicyWithoutStorage,
+    "unmasked",
+    "The unavailable-storage scenario must exercise a committed policy change.",
+  );
   assert.equal(await maskingCookie(unavailable), "1");
   await unavailablePage.goto(`${base}${path}`, { waitUntil: "networkidle" });
   assert.equal(await unavailablePage.locator(inputs).count(), 0);
@@ -521,6 +586,7 @@ try {
   console.log(
     `Sibling Show: gated inputs ${siblingShowInputs}, control ${JSON.stringify(siblingShowLabel)}; local Show inputs ${localShowInputs}.`,
   );
+  console.log(`Failed toggle lifetimes: ${failedToggleLifetimes.join(", ")}.`);
   console.log(
     `Delayed Show response: Set-Cookie ${showSetCookie}; final masked cookie ${JSON.stringify(finalCookie)}.`,
   );
@@ -533,14 +599,18 @@ try {
 
   console.log("PASS: cross-tab Hide wins immediately and remains ahead of both older cookie writers.");
 } finally {
+  let cleanupFailed = false;
   await pool.query("update app_setting set masking_policy = 'masked'").catch((error) => {
+    cleanupFailed = true;
     console.error("Failed to restore the masking policy after the cross-tab harness:", error);
   });
   await pool
     .query("delete from passkey where credential_id = $1", [lifecyclePasskey])
     .catch((error) => {
+      cleanupFailed = true;
       console.error("Failed to remove the cross-tab harness passkey:", error);
     });
   await pool.end();
   await browser.close();
+  if (cleanupFailed) process.exitCode = 1;
 }

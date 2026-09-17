@@ -751,6 +751,7 @@ describe("the Holdings loader projection", () => {
     "valueCoverage",
     "valueIsNegative",
   ];
+  const SAFE_GROUP_KEYS = ["key", "label", "holdings", "total", "share"];
 
   it("allows exactly the reviewed holding, total, and group fields into loader data", () => {
     const row = holding({
@@ -800,6 +801,10 @@ describe("the Holdings loader projection", () => {
     }
     for (const [key, value] of Object.entries(projectedGroup.total)) {
       if (!SAFE_TOTAL_KEYS.includes(key)) expect([undefined, null]).toContain(value);
+    }
+    for (const [key, value] of Object.entries(projectedGroup)) {
+      // Ratios describe composition rather than magnitude, so `share` remains visible (ADR-0002).
+      if (!SAFE_GROUP_KEYS.includes(key)) expect([undefined, null]).toContain(value);
     }
   });
 

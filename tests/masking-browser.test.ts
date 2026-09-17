@@ -1,13 +1,30 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+/**
+ * Browser globals stay deliberately small. Cookie-setter re-entry models separate tabs sharing one
+ * non-atomic cookie jar; resetting modules gives every test the isolated tab state real tabs have.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  MASKED,
-  UNMASKED,
-  adoptSavedMaskingPolicy,
-  captureBrowserMaskingIntent,
-  reconcileBrowserMaskingChoice,
-  writeBrowserMaskingChoice,
-} from "~/lib/masking";
+let masking: typeof import("~/lib/masking");
+let MASKED: typeof masking.MASKED;
+let UNMASKED: typeof masking.UNMASKED;
+
+function writeBrowserMaskingChoice(masked: boolean) {
+  return masking.writeBrowserMaskingChoice(masked);
+}
+
+function reconcileBrowserMaskingChoice(
+  ...args: Parameters<typeof masking.reconcileBrowserMaskingChoice>
+) {
+  return masking.reconcileBrowserMaskingChoice(...args);
+}
+
+function captureBrowserMaskingIntent() {
+  return masking.captureBrowserMaskingIntent();
+}
+
+function adoptSavedMaskingPolicy(...args: Parameters<typeof masking.adoptSavedMaskingPolicy>) {
+  return masking.adoptSavedMaskingPolicy(...args);
+}
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -37,12 +54,43 @@ class MemoryStorage implements Storage {
   }
 }
 
-class CookieJar {
+class TrackedEventTarget extends EventTarget {
+  readonly listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+
+  override addEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: AddEventListenerOptions | boolean,
+  ) {
+    super.addEventListener(type, callback, options);
+    if (callback !== null) {
+      const listeners = this.listeners.get(type) ?? new Set();
+      listeners.add(callback);
+      this.listeners.set(type, listeners);
+    }
+  }
+
+  override removeEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: EventListenerOptions | boolean,
+  ) {
+    super.removeEventListener(type, callback, options);
+    if (callback !== null) this.listeners.get(type)?.delete(callback);
+  }
+
+  listenerCount(type: string) {
+    return this.listeners.get(type)?.size ?? 0;
+  }
+}
+
+class CookieJar extends TrackedEventTarget {
   value: string | undefined;
   writes: string[] = [];
   beforeWrite: (() => void) | undefined;
   afterWrite: (() => void) | undefined;
   nextRead: string | undefined;
+  visibilityState: DocumentVisibilityState = "visible";
 
   get cookie() {
     if (this.nextRead !== undefined) {
@@ -74,6 +122,27 @@ class CookieJar {
   }
 }
 
+class ChannelStub extends TrackedEventTarget {
+  static instances: ChannelStub[] = [];
+  readonly messages: unknown[] = [];
+  readonly name: string;
+  closed = false;
+
+  constructor(name: string) {
+    super();
+    this.name = name;
+    ChannelStub.instances.push(this);
+  }
+
+  postMessage(message: unknown) {
+    this.messages.push(message);
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
 function deferred() {
   let resolve!: () => void;
   let reject!: (reason?: unknown) => void;
@@ -87,16 +156,28 @@ function deferred() {
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalBroadcastChannel = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
 let jar: CookieJar;
+let windowTarget: TrackedEventTarget;
 
 function installStorage(storage: Storage) {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  masking = await import("~/lib/masking");
+  MASKED = masking.MASKED;
+  UNMASKED = masking.UNMASKED;
   jar = new CookieJar();
-  Object.defineProperty(globalThis, "window", { configurable: true, value: globalThis });
+  windowTarget = new TrackedEventTarget();
+  ChannelStub.instances = [];
+  Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
   Object.defineProperty(globalThis, "document", { configurable: true, value: jar });
+  Object.defineProperty(globalThis, "BroadcastChannel", {
+    configurable: true,
+    value: ChannelStub,
+  });
   installStorage(new MemoryStorage());
 });
 
@@ -105,6 +186,7 @@ afterEach(() => {
     ["window", originalWindow],
     ["document", originalDocument],
     ["localStorage", originalStorage],
+    ["BroadcastChannel", originalBroadcastChannel],
   ] as const) {
     if (descriptor === undefined) delete (globalThis as Record<string, unknown>)[name];
     else Object.defineProperty(globalThis, name, descriptor);
@@ -317,6 +399,7 @@ describe("an enhanced Display policy save", () => {
 
   it("preserves the cookie when local storage cannot establish an ordering point", async () => {
     jar.cookie = "masked=0; Path=/; SameSite=Lax; Max-Age=31536000";
+    const writesBeforeSave = jar.writes.length;
     installStorage({
       getItem() {
         throw new Error("storage unavailable");
@@ -330,6 +413,7 @@ describe("an enhanced Display policy save", () => {
 
     expect(jar.value).toBe(UNMASKED);
     expect(jar.lastWrite).toMatch(/max-age=/i);
+    expect(jar.writes).toHaveLength(writesBeforeSave);
   });
 
   it("does not clear a newer Hide after revalidation", async () => {
@@ -370,5 +454,82 @@ describe("an enhanced Display policy save", () => {
 
     expect(jar.value).toBe(MASKED);
     expect(jar.lastWrite).toBe(newerWrite);
+  });
+});
+
+describe("the browser masking store", () => {
+  it("adopts external Hide but keeps external Show behind the local reveal gate", () => {
+    jar.value = UNMASKED;
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(UNMASKED);
+    const subscriber = vi.fn();
+    const unsubscribe = masking.browserMaskingStore.subscribe(subscriber);
+    const channel = ChannelStub.instances[0]!;
+
+    jar.value = MASKED;
+    channel.dispatchEvent(new Event("message"));
+    expect(subscriber).toHaveBeenCalledTimes(1);
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
+
+    jar.value = UNMASKED;
+    channel.dispatchEvent(new Event("message"));
+    expect(subscriber).toHaveBeenCalledTimes(1);
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
+    unsubscribe();
+  });
+
+  it("starts watchers for the first subscriber and stops them after the last", () => {
+    const first = masking.browserMaskingStore.subscribe(() => undefined);
+    const second = masking.browserMaskingStore.subscribe(() => undefined);
+    const channel = ChannelStub.instances[0]!;
+
+    expect(ChannelStub.instances).toHaveLength(1);
+    expect(windowTarget.listenerCount("focus")).toBe(1);
+    expect(jar.listenerCount("visibilitychange")).toBe(1);
+    expect(channel.listenerCount("message")).toBe(1);
+    first();
+    expect(windowTarget.listenerCount("focus")).toBe(1);
+
+    second();
+    expect(windowTarget.listenerCount("focus")).toBe(0);
+    expect(jar.listenerCount("visibilitychange")).toBe(0);
+    expect(channel.listenerCount("message")).toBe(0);
+    expect(channel.closed).toBe(true);
+  });
+
+  it("adopts a Hide on the first snapshot after an interval with no subscribers", () => {
+    jar.value = UNMASKED;
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(UNMASKED);
+    const unsubscribe = masking.browserMaskingStore.subscribe(() => undefined);
+    unsubscribe();
+
+    jar.value = MASKED;
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
+  });
+
+  it("uses focus and visible-state events when BroadcastChannel is unavailable", () => {
+    Object.defineProperty(globalThis, "BroadcastChannel", {
+      configurable: true,
+      value: undefined,
+    });
+    jar.value = UNMASKED;
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(UNMASKED);
+    const subscriber = vi.fn();
+    const unsubscribe = masking.browserMaskingStore.subscribe(subscriber);
+
+    jar.value = MASKED;
+    windowTarget.dispatchEvent(new Event("focus"));
+    expect(subscriber).toHaveBeenCalledTimes(1);
+
+    jar.value = UNMASKED;
+    masking.publishBrowserMaskingChange();
+    jar.value = MASKED;
+    jar.visibilityState = "hidden";
+    jar.dispatchEvent(new Event("visibilitychange"));
+    expect(subscriber).toHaveBeenCalledTimes(2);
+    jar.visibilityState = "visible";
+    jar.dispatchEvent(new Event("visibilitychange"));
+    expect(subscriber).toHaveBeenCalledTimes(3);
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
+    unsubscribe();
   });
 });

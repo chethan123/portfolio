@@ -76,9 +76,10 @@ response could otherwise overwrite a newer Hide from another tab. An unmarked fo
 no-JavaScript server writer, including where optional Fetch Metadata headers are absent. An
 enhanced toggle starts with a session cookie, then gives its unchanged choice the freshly read
 policy's lifetime after revalidation. A failed policy read replaces an unchanged Show with a
-session Hide. The ordering token skips the repair when a newer choice already won; if the token
-changes during the cookie assignment itself, a session Hide wins. Unavailable storage leaves the
-staged session cookie unchanged.]
+session Hide. The ordering token skips the repair when a newer choice already won. A detected
+overlap during assignment writes a session Hide; whichever tab assigns last leaves the newer choice
+or that Hide, never the stale assignment. Unavailable storage leaves the staged session cookie
+unchanged.]
 
 The browser reads that cookie through an external-store subscription. A direct write publishes to
 all readers in its tab and sends a payload-free invalidation over one module-wide
@@ -99,9 +100,10 @@ current cookie. While root reloads the saved policy, a temporary cookie carries 
 answer. That bridge is session-only even under *as last left*. After successful revalidation the
 component clears it if the ordering token is still current; a failed revalidation leaves the bridge
 in place rather than exposing an older root answer. If another choice overlaps the cookie assignment
-after its token check, a session Hide wins, including over a newer Show. The token and channel
-message contain no amount, policy, or other private data. The no-JavaScript Settings POST still
-clears the cookie in its document response.
+after its token check, the detected overlap writes a session Hide; whichever tab assigns last leaves
+the newer choice or that Hide, never the stale assignment. The token and channel message contain no
+amount, policy, or other private data. The no-JavaScript Settings POST still clears the cookie in its
+document response.
 
 Cookie precedence applies only after the server has resolved the masking policy. A failed policy
 read remains masked after hydration even if an older browser cookie says to show. The first render
