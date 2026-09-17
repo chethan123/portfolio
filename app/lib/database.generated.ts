@@ -204,6 +204,12 @@ export interface UploadDraft {
   raw_file: Buffer;
 }
 
+export interface UploadDraftAnswer {
+  draft_id: Int8;
+  instrument_id: Int8;
+  raw_string: string;
+}
+
 export interface DB {
   account: Account;
   app_setting: AppSetting;
@@ -225,4 +231,5 @@ export interface DB {
   schema_migrations: SchemaMigrations;
   unlock_grant: UnlockGrant;
   upload_draft: UploadDraft;
+  upload_draft_answer: UploadDraftAnswer;
 }

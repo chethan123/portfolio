@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { renderThroughLayout } from "./support/render.tsx";
 
 const PUBLIC = new URL("../public/", import.meta.url);
+const APP = new URL("../app/", import.meta.url);
 
 type Manifest = {
   name: string;
@@ -30,6 +31,45 @@ describe("the document shell", () => {
 
     expect(html).toContain('rel="icon"');
     expect(html).toContain('navigator.serviceWorker.register("/sw.js")');
+  });
+
+  it("preloads the font as a CORS fetch, or the browser discards the preload and fetches it twice", () => {
+    const html = renderThroughLayout("/", { gated: true, firstRun: null });
+
+    const preload = html.match(/<link [^>]*rel="preload"[^>]*>/)?.[0];
+    expect(preload).toBeDefined();
+    expect(preload).toContain('as="font"');
+    expect(preload).toContain('type="font/woff2"');
+    expect(preload).toContain('crossorigin="anonymous"');
+    expect(preload).toMatch(/href="[^"]*inter-latin-var[^"]*\.woff2"/);
+  });
+});
+
+describe("the type stack", () => {
+  const css = readFileSync(new URL("app.css", APP), "utf8");
+
+  it("declares a size-adjusted face for every fallback it names, or the browser skips the name silently", () => {
+    const stack = css.match(/--font-ui:\s*([^;]+);/)?.[1];
+    expect(stack).toBeDefined();
+
+    const families = (stack ?? "").split(",").map((family) => family.trim());
+    expect(families[0]).toBe('"Inter"');
+
+    // Everything between Inter and the first system family. A name here with no `@font-face`
+    // is skipped silently, which is the failure this pins.
+    const fallbacks: string[] = [];
+    for (const family of families.slice(1)) {
+      if (!family.startsWith('"Inter Fallback')) break;
+      fallbacks.push(family);
+    }
+    expect(fallbacks.length).toBeGreaterThan(0);
+
+    const faces = css.split("@font-face").slice(1);
+    for (const family of fallbacks) {
+      const declared = faces.filter((block) => block.includes(`font-family: ${family};`));
+      expect(declared.length, `${family} has no @font-face`).toBeGreaterThan(0);
+      for (const face of declared) expect(face).toContain("size-adjust:");
+    }
   });
 });
 

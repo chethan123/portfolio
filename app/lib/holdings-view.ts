@@ -7,10 +7,12 @@ import {
   QUANTITY_SCALE,
   SHARE_SCALE,
   compareDecimal,
+  deltaDirection,
   divide,
   render,
   sumMoney,
   toUnits,
+  type DeltaDirection,
 } from "./money.ts";
 
 import { toOwnerParam, type OwnerFilter } from "./owner-filter.ts";
@@ -453,6 +455,129 @@ export function groupHoldings(
     share:
       !anyPositive || total.value === null ? null : render(shares[index] ?? 0n, SHARE_SCALE),
   }));
+}
+
+export type HoldingProjection = {
+  accountId: ValuedHolding["accountId"];
+  accountName: ValuedHolding["accountName"];
+  accountNumberTail: ValuedHolding["accountNumberTail"];
+  institution: ValuedHolding["institution"];
+  accountKind: ValuedHolding["accountKind"];
+  taxTreatment: ValuedHolding["taxTreatment"];
+  ownerId: ValuedHolding["ownerId"];
+  ownerName: ValuedHolding["ownerName"];
+  instrumentId: ValuedHolding["instrumentId"];
+  symbol: ValuedHolding["symbol"];
+  instrumentName: ValuedHolding["instrumentName"];
+  quoteType: ValuedHolding["quoteType"];
+  classification: ValuedHolding["classification"];
+  assetClass: ValuedHolding["assetClass"];
+  quantity: string | undefined;
+  price: string | null | undefined;
+  value: string | null | undefined;
+  costBasisPerShare: string | null | undefined;
+  costBasis: string | null | undefined;
+  unrealized: string | null | undefined;
+  isPriced: ValuedHolding["isPriced"];
+  isStale: ValuedHolding["isStale"];
+  annualDividend: string | null | undefined;
+  yieldOnValue: string | null;
+  unrealizedDirection: DeltaDirection | null;
+};
+
+export type TotalProjection = {
+  value: string | null | undefined;
+  costBasis: string | null | undefined;
+  unrealized: string | null | undefined;
+  annualDividend: string | undefined;
+  valueCoverage: CoverageProjection;
+  basisCoverage: CoverageProjection;
+  unrealizedCoverage: CoverageProjection;
+  unrealizedDirection: DeltaDirection | null;
+  valueIsNegative: boolean;
+};
+
+type CoverageProjection = {
+  known: Coverage["known"];
+  total: Coverage["total"];
+};
+
+export type GroupProjection = {
+  key: HoldingsGroup["key"];
+  label: HoldingsGroup["label"];
+  holdings: HoldingProjection[];
+  total: TotalProjection;
+  share: HoldingsGroup["share"];
+};
+
+function privateValue(value: string | null, available: boolean): string | null | undefined {
+  if (value === null) return null;
+  return available ? value : undefined;
+}
+
+function projectCoverage(coverage: Coverage): CoverageProjection {
+  return { known: coverage.known, total: coverage.total };
+}
+
+/** Explicit loader allowlist: a new valuation field stays server-only until added here. */
+export function projectHolding(
+  holding: ValuedHolding,
+  available: boolean,
+): HoldingProjection {
+  return {
+    accountId: holding.accountId,
+    accountName: holding.accountName,
+    accountNumberTail: holding.accountNumberTail,
+    institution: holding.institution,
+    accountKind: holding.accountKind,
+    taxTreatment: holding.taxTreatment,
+    ownerId: holding.ownerId,
+    ownerName: holding.ownerName,
+    instrumentId: holding.instrumentId,
+    symbol: holding.symbol,
+    instrumentName: holding.instrumentName,
+    quoteType: holding.quoteType,
+    classification: holding.classification,
+    assetClass: holding.assetClass,
+    quantity: available ? holding.quantity : undefined,
+    price: privateValue(holding.price, available),
+    value: privateValue(holding.value, available),
+    costBasisPerShare: privateValue(holding.costBasisPerShare, available),
+    costBasis: privateValue(holding.costBasis, available),
+    unrealized: privateValue(holding.unrealized, available),
+    isPriced: holding.isPriced,
+    isStale: holding.isStale,
+    annualDividend: privateValue(holding.annualDividend, available),
+    yieldOnValue: holdingYield(holding),
+    unrealizedDirection:
+      holding.unrealized === null ? null : deltaDirection(holding.unrealized),
+  };
+}
+
+/** Explicit loader allowlist: amount omission does not remove coverage or direction. */
+export function projectTotal(total: HoldingsTotal, available: boolean): TotalProjection {
+  return {
+    value: privateValue(total.value, available),
+    costBasis: privateValue(total.costBasis, available),
+    unrealized: privateValue(total.unrealized, available),
+    annualDividend: available ? total.annualDividend : undefined,
+    valueCoverage: projectCoverage(total.valueCoverage),
+    basisCoverage: projectCoverage(total.basisCoverage),
+    unrealizedCoverage: projectCoverage(total.unrealizedCoverage),
+    unrealizedDirection: total.unrealized === null ? null : deltaDirection(total.unrealized),
+    valueIsNegative: total.value !== null && toUnits(total.value, MONEY_SCALE) < 0n,
+  };
+}
+
+/** Explicit loader allowlist for both the group shell and its nested projections. */
+export function projectGroup(group: HoldingsGroup, available: boolean): GroupProjection {
+  return {
+    key: group.key,
+    label: group.label,
+    holdings: group.holdings.map((holding) => projectHolding(holding, available)),
+    total: projectTotal(group.total, available),
+    share: group.share,
+  };
 }
 
 // Not in format.ts, which renders money — a quantity takes no currency mark. Same U+2212 as

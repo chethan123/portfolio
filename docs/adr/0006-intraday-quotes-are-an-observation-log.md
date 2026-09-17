@@ -7,10 +7,10 @@
 
 The price poller has always fetched a live quote every refresh cadence during market hours and
 overwritten it in place, discarding every intermediate price. To support a 1D chart range, and
-because the owner deliberately values retaining rich data whose future use is unknown, we now
-retain every distinct observation, forever, in a new `price_observation` table. There is one row
-per instrument per provider-stated instant (`as_of`), inserted with `on conflict do nothing` inside
-the same transaction that upserts `quote` and `price_daily`. This reverses the recorded "no sub-daily
+because the owner deliberately values retaining rich data whose future use is unknown, we now retain
+every distinct observation, forever, in a new `price_observation` table. The table holds one row per
+instrument per provider-stated instant (`as_of`), inserted with `on conflict do nothing` inside the
+same transaction that upserts `quote` and `price_daily`. This reverses the recorded "no sub-daily
 range chips" decision in `docs/design/pricing-ui-brief.md` §8; the mutual-funds-strike-one-NAV
 argument there remains true and is accepted as a caveat, not a blocker.
 
@@ -40,8 +40,8 @@ keeps every uploaded CSV forever in `position_set.raw_file`: an audit artifact t
 re-read, never computed from. **`price` is the only column in `price_observation` any query may
 compute from.** A figure needed for arithmetic is promoted to a typed `numeric` column in its own
 migration; summing from `payload` is the §5.6 violation the numeric boundary exists to prevent. The
-honest rationale for hoarding is recorded here on purpose. It is option value, and no consuming
-feature exists or is planned. A future reader should not hunt for one.
+honest rationale for hoarding is option value, recorded here on purpose. No consuming feature exists
+or is planned. A future reader should not hunt for one.
 
 A sibling `price_poll` table records each refresh attempt (~26 rows/day), because dedup makes the
 log's silences ambiguous. Without it, "no observation for two hours" cannot distinguish a quiet

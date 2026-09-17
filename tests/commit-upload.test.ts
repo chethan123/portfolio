@@ -7,7 +7,7 @@ import { sql } from "kysely";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
-import { lastRecorded } from "~/lib/balances.server";
+import { lastRecorded, setBalance } from "~/lib/balances.server";
 import {
   DraftNotReadyError,
   commitUpload,
@@ -16,6 +16,7 @@ import {
   requireDraft,
   uploadReceipt,
 } from "~/lib/uploads.server";
+import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import { accountHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
@@ -149,7 +150,7 @@ describe("diffForDraft", () => {
       expect(diff.unchangedCount).toBe(1);
       expect(diff.majorityRemoved).toBe(false);
       expect(diff.removesEverything).toBe(false);
-      expect(diff.asOf).toEqual({ source: "asked" });
+      expect(diff.asOf).toEqual({ source: "asked", date: null });
 
       expect(diff.added).toHaveLength(1);
       expect(diff.added[0]).toMatchObject({
@@ -433,7 +434,7 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: vxus, rawString: "VXUS" });
       await seedQuote({ instrument: vti, price: "400.00" });
 
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: [{ instrument: vti, quantity: "100", costBasisPerShare: "380.00" }],
@@ -446,7 +447,11 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await commitUpload(draftId, { accountId: account.id }, db);
+      const written = await commitUpload(
+        draftId,
+        { accountId: account.id, baselineSetId: prior.id },
+        db,
+      );
 
       expect(written.accountId).toBe(account.id);
       expect(written.asOf).toBe("2026-06-30");
@@ -521,7 +526,7 @@ describe("commitUpload", () => {
 
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: diff.baselineSetId ?? "" },
         db,
       );
       const holdings = await db
@@ -543,14 +548,22 @@ describe("commitUpload", () => {
     const account = await fixtures.seedAccount({ kind: "brokerage", name: marker });
     const instrument = await fixtures.seedInstrument({ symbol: null, name: marker });
     await fixtures.seedInstrumentAlias({ instrument, rawString: marker });
+    const answered = `${marker}-answered`;
     const draft = await fixtures.seedUploadDraft({
       account,
       filename: "atomicity.csv",
-      bytes: encode(`Symbol,Quantity,Basis\n${marker},100,\n`),
+      bytes: encode(`Symbol,Quantity,Basis\n${marker},100,\n${answered},1,\n`),
     });
 
     try {
       await rememberMapping(draft.id, BASE_MAPPING, db);
+      // A draft answer the commit promotes before the fault — it must come back out with the rest.
+      await resolveAll(
+        draft.id,
+        [{ raw: answered, fields: { kind: "existing", instrumentId: instrument.id } }],
+        { probe: async () => new Map() },
+        db,
+      );
 
       // Account id is our own insert's — inlining it into the trigger is safe.
       await sql
@@ -585,6 +598,20 @@ describe("commitUpload", () => {
         .execute();
       expect(sets).toHaveLength(0);
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
+      expect(
+        await db
+          .selectFrom("instrument_alias")
+          .select("raw_string")
+          .where("raw_string", "=", answered)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await db
+          .selectFrom("upload_draft_answer")
+          .select("raw_string")
+          .where("draft_id", "=", draft.id)
+          .execute(),
+      ).toEqual([{ raw_string: answered }]);
     } finally {
       await sql.raw("drop trigger if exists commit_upload_boom on holding").execute(db);
       await sql.raw("drop function if exists commit_upload_boom()").execute(db);
@@ -599,7 +626,10 @@ describe("commitUpload", () => {
 
       await db.deleteFrom("upload_draft").where("account_id", "=", account.id).execute();
       await db.deleteFrom("position_set").where("account_id", "=", account.id).execute();
-      await db.deleteFrom("instrument_alias").where("raw_string", "=", marker).execute();
+      await db
+        .deleteFrom("instrument_alias")
+        .where("raw_string", "in", [marker, answered])
+        .execute();
       await db.deleteFrom("instrument").where("id", "=", instrument.id).execute();
       if (classificationId !== undefined) {
         await db.deleteFrom("classification").where("id", "=", classificationId).execute();
@@ -902,9 +932,10 @@ describe("commitUpload", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nMA,1,\n");
+      const baselineSetId = (await diffForDraft(draftId, db)).baselineSetId ?? "";
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30", baselineSetId }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes 2 of the 3 positions this account holds/,
@@ -919,7 +950,7 @@ describe("commitUpload", () => {
 
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30", confirmRemovals: "true" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId, confirmRemovals: "true" },
         db,
       );
       expect(written.counts.removed).toBe(2);
@@ -938,7 +969,7 @@ describe("commitUpload", () => {
         await seedInstrumentAlias({ instrument: fund, rawString: symbol });
         funds.push(fund);
       }
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: funds.map((fund) => ({ instrument: fund, quantity: "1" })),
@@ -946,7 +977,11 @@ describe("commitUpload", () => {
 
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
       const refusal = await refusalOf(() =>
-        commitUpload(majority, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(
+          majority,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes 3 of the 4 positions/);
 
@@ -954,7 +989,7 @@ describe("commitUpload", () => {
       expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
       const written = await commitUpload(
         half,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
       );
       expect(written.counts.removed).toBe(2);
@@ -976,7 +1011,7 @@ describe("commitUpload", () => {
       ] as const) {
         await seedInstrumentAlias({ instrument, rawString: raw });
       }
-      await seedPositionSet({
+      const prior = await seedPositionSet({
         account,
         asOf: "2026-03-31",
         holdings: [
@@ -988,7 +1023,11 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNW,5,\n");
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes every position this account holds — all 2\./,
@@ -1073,7 +1112,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nTIE,12,\n");
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: first.id },
         db,
       );
 
@@ -1120,7 +1159,7 @@ describe("uploadReceipt", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRA,12,\nRB,3,\n");
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
       );
 
@@ -1135,9 +1174,18 @@ describe("uploadReceipt", () => {
         firstStatement: false,
         counts: { added: 1, updated: 1, unchanged: 0, removed: 1 },
         holdingCount: 2,
+        isCurrent: true,
+        currentAsOf: "2026-06-30",
       });
 
-      expect(await receiptFor(account.id, prior.id)).toBeNull();
+      // The set the account owns but no longer reads gets a receipt of its own now (#181) —
+      // not null, since the household still needs telling, just not the current one.
+      expect(await receiptFor(account.id, prior.id)).toMatchObject({
+        setId: prior.id,
+        asOf: "2026-03-31",
+        isCurrent: false,
+        currentAsOf: "2026-06-30",
+      });
       expect(await receiptFor(other.id, written.setId)).toBeNull();
       expect(await receiptFor(account.id, "abc")).toBeNull();
     }),
@@ -1168,4 +1216,307 @@ describe("uploadReceipt", () => {
       });
     }),
   );
+
+  it(
+    "yields no receipt for a manually-typed set reached by a hand-edited ?uploaded=",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount } = ctx;
+      const account = await seedAccount({ kind: "bank" });
+
+      // The relaxed gate (#181) only widens what counts as "recorded"; it must not describe a
+      // typed balance as a statement.
+      const written = await setBalance(account.id, { amount: "500.00", asOf: "2026-06-30" }, db);
+      const set = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .executeTakeFirstOrThrow();
+
+      const receipt = await uploadReceipt(
+        account.id,
+        set.id,
+        await lastRecorded(account.id, db),
+        db,
+      );
+      expect(receipt).toBeNull();
+      expect(written.asOf).toBe("2026-06-30"); // sanity: the balance really did land
+    }),
+  );
+});
+
+// Issue #291: a draft's first-sighting answers become vocabulary with the commit, never before.
+describe("commitUpload — the draft's answers", () => {
+  const noProbe = { probe: async () => new Map() };
+
+  it(
+    "promotes the draft's answers to vocabulary, so the next draft asks nothing about them",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedUploadDraft } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nQAALIAS,1,10.00\n");
+
+      await resolveAll(
+        draftId,
+        [{ raw: "QAALIAS", fields: { kind: "existing", instrumentId: vti.id } }],
+        noProbe,
+        db,
+      );
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      expect(
+        await db
+          .selectFrom("instrument_alias")
+          .selectAll()
+          .where("raw_string", "=", "QAALIAS")
+          .execute(),
+      ).toEqual([{ raw_string: "QAALIAS", instrument_id: vti.id }]);
+      // The draft went with its commit, and its answers with the draft.
+      expect(await db.selectFrom("upload_draft_answer").select("draft_id").execute()).toEqual([]);
+
+      const holdings = await db
+        .selectFrom("holding")
+        .select(["instrument_id", "quantity"])
+        .where("position_set_id", "=", written.setId)
+        .execute();
+      expect(holdings).toEqual([{ instrument_id: vti.id, quantity: "1.00000000" }]);
+
+      const next = await seedUploadDraft({ account });
+      expect(await unresolvedStrings(["QAALIAS"], next.id, db)).toEqual([]);
+    }),
+  );
+
+  it(
+    "promotes only the strings the recorded statement names",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nQAALIAS,1,10.00\n");
+
+      // An answer for a string the file no longer states — mapped away after it was given.
+      await resolveAll(
+        draftId,
+        [
+          { raw: "QAALIAS", fields: { kind: "existing", instrumentId: vti.id } },
+          { raw: "MAPPED AWAY", fields: { kind: "existing", instrumentId: vti.id } },
+        ],
+        noProbe,
+        db,
+      );
+      await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      const vocabulary = await db
+        .selectFrom("instrument_alias")
+        .select("raw_string")
+        .orderBy("raw_string")
+        .execute();
+      expect(vocabulary.map((row) => row.raw_string)).toEqual(["QAALIAS"]);
+    }),
+  );
+
+  it(
+    "keeps a vocabulary row over the draft's answer, recording the holding under it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const vxus = await seedInstrument({ symbol: "VXUS" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nQAALIAS,1,10.00\n");
+
+      await resolveAll(
+        draftId,
+        [{ raw: "QAALIAS", fields: { kind: "existing", instrumentId: vxus.id } }],
+        noProbe,
+        db,
+      );
+      // Another upload recorded the same string first.
+      await seedInstrumentAlias({ instrument: vti, rawString: "QAALIAS" });
+
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      expect(
+        await db
+          .selectFrom("instrument_alias")
+          .selectAll()
+          .where("raw_string", "=", "QAALIAS")
+          .execute(),
+      ).toEqual([{ raw_string: "QAALIAS", instrument_id: vti.id }]);
+      const holdings = await db
+        .selectFrom("holding")
+        .select("instrument_id")
+        .where("position_set_id", "=", written.setId)
+        .execute();
+      expect(holdings).toEqual([{ instrument_id: vti.id }]);
+    }),
+  );
+
+  it(
+    "promotes nothing for a commit the guards refuse",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const bnd = await seedInstrument({ symbol: "BND" });
+      const aapl = await seedInstrument({ symbol: "AAPL" });
+      await seedInstrumentAlias({ instrument: bnd, rawString: "BND" });
+      await seedInstrumentAlias({ instrument: aapl, rawString: "AAPL" });
+      const prior = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [
+          { instrument: bnd, quantity: "10" },
+          { instrument: aapl, quantity: "10" },
+        ],
+      });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nQAALIAS,1,10.00\n");
+      await resolveAll(
+        draftId,
+        [{ raw: "QAALIAS", fields: { kind: "existing", instrumentId: vti.id } }],
+        noProbe,
+        db,
+      );
+
+      // Removes both current positions: refused until the removals are confirmed.
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
+          db,
+        ),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/removes every position/);
+
+      expect(
+        await db
+          .selectFrom("instrument_alias")
+          .select("raw_string")
+          .where("raw_string", "=", "QAALIAS")
+          .execute(),
+      ).toEqual([]);
+      expect(await db.selectFrom("upload_draft_answer").select("raw_string").execute()).toEqual([
+        { raw_string: "QAALIAS" },
+      ]);
+    }),
+  );
+});
+
+// Outside withDatabase, as the atomicity test above: a refusal thrown inside the commit's
+// transaction has to roll the promotion back for real, and the shared transaction would keep it.
+// `move` is the SQL another party runs in the gap between the review's diff and the write,
+// played by a trigger on the draft's own delete; `VTI`, `BND` and `MARKER` are substituted.
+async function commitWhileVocabularyMoves(move: string): Promise<ValidationError> {
+  const db = await testDatabase();
+  const fixtures = makeFixtures(db);
+  const marker = `commit-upload-moved-${Date.now()}`;
+
+  const account = await fixtures.seedAccount({ kind: "brokerage", name: marker });
+  const vti = await fixtures.seedInstrument({ symbol: null, name: `${marker} VTI` });
+  const bnd = await fixtures.seedInstrument({ symbol: null, name: `${marker} BND` });
+  const draft = await fixtures.seedUploadDraft({
+    account,
+    filename: "moved.csv",
+    bytes: encode(`Symbol,Quantity,Basis\n${marker},1,\n`),
+  });
+
+  try {
+    await rememberMapping(draft.id, BASE_MAPPING, db);
+    await resolveAll(
+      draft.id,
+      [{ raw: marker, fields: { kind: "existing", instrumentId: vti.id } }],
+      { probe: async () => new Map() },
+      db,
+    );
+
+    // Ids are our own inserts' — safe to inline.
+    const body = move
+      .replaceAll("VTI", vti.id)
+      .replaceAll("BND", bnd.id)
+      .replaceAll("MARKER", marker);
+    await sql
+      .raw(
+        `create or replace function commit_upload_move() returns trigger language plpgsql as $t$
+         begin
+           ${body};
+           return old;
+         end $t$`,
+      )
+      .execute(db);
+    await sql
+      .raw(
+        "create trigger commit_upload_move before delete on upload_draft " +
+          "for each row execute function commit_upload_move()",
+      )
+      .execute(db);
+
+    const refusal = await refusalOf(() =>
+      commitUpload(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
+    );
+
+    const sets = await db
+      .selectFrom("position_set")
+      .select("id")
+      .where("account_id", "=", account.id)
+      .execute();
+    expect(sets).toHaveLength(0);
+    await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
+    // The promotion came back out with everything else.
+    expect(
+      await db
+        .selectFrom("instrument_alias")
+        .select("instrument_id")
+        .where("raw_string", "=", marker)
+        .execute(),
+    ).toEqual([]);
+
+    return new ValidationError({
+      form: (refusal.fieldErrors.form ?? "")
+        .replaceAll(`${marker} BND`, "BND")
+        .replaceAll(marker, "MARKER"),
+    });
+  } finally {
+    await sql.raw("drop trigger if exists commit_upload_move on upload_draft").execute(db);
+    await sql.raw("drop function if exists commit_upload_move()").execute(db);
+
+    const classificationIds = (
+      await db
+        .selectFrom("instrument")
+        .select("classification_id")
+        .where("id", "in", [vti.id, bnd.id])
+        .execute()
+    ).map((row) => row.classification_id);
+
+    await db.deleteFrom("upload_draft").where("account_id", "=", account.id).execute();
+    await db.deleteFrom("position_set").where("account_id", "=", account.id).execute();
+    await db.deleteFrom("instrument_alias").where("raw_string", "=", marker).execute();
+    await db.deleteFrom("instrument").where("id", "in", [vti.id, bnd.id]).execute();
+    if (classificationIds.length > 0) {
+      await db.deleteFrom("classification").where("id", "in", classificationIds).execute();
+    }
+    await db.deleteFrom("account").where("id", "=", account.id).execute();
+    await db.deleteFrom("person").where("id", "=", account.ownerId).execute();
+  }
+}
+
+describe("commitUpload — vocabulary moving under the review", () => {
+  it("refuses when another upload recorded the string as something else, promotion too", async () => {
+    const refusal = await commitWhileVocabularyMoves(
+      "update instrument_alias set instrument_id = BND where raw_string = 'MARKER'",
+    );
+    expect(refusal.fieldErrors.form).toBe(
+      '"MARKER" now means BND — recorded by another upload or repointed under Settings while ' +
+        "this review was open, so nothing was recorded. Reload the review and check what it is " +
+        "about to record.",
+    );
+  });
+
+  it("refuses when Settings forgot the string, so the reloaded review asks again", async () => {
+    const refusal = await commitWhileVocabularyMoves(
+      "delete from instrument_alias where raw_string = 'MARKER'",
+    );
+    expect(refusal.fieldErrors.form).toBe(
+      '"MARKER" was forgotten under Settings while this review was open, so nothing was ' +
+        "recorded. Reload the review — it will ask what the name means.",
+    );
+  });
 });

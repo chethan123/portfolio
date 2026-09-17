@@ -72,7 +72,7 @@ graph TB
 
 | If this happens | What stops it | What still gets through |
 |---|---|---|
-| A device on your LAN dials the box | The **gate**, Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path that reaches the app without a check. It answers 200 only when the database is reachable and every migration is recorded, and names the pending files when it is not. There is one weaker reading. If the migration ledger itself cannot be read, the answer is a 503 whose body still says `migrations: "current"`. Believe the status code over that field. `/oauth2/*` goes past the check too, but only ever to the gate's own sign-in endpoints |
+| A device on your LAN dials the box | The **gate**, Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path that reaches the app without a check. It answers 200 only when the database is reachable and every migration is recorded, and names the pending files when it is not. One reading is weaker: if the migration ledger itself cannot be read, the answer is a 503 whose body still says `migrations: "current"`. Believe the status code over that field. `/oauth2/*` goes past the check too, but only ever to the gate's own sign-in endpoints |
 | Someone picks up a family phone that is already signed in | The **lock**, every screen refused until a passkey is checked | Pages already drawn stay drawn until that tab next asks the server for something |
 | A poisoned release of the market-data package | It runs in `worker`: no database credential, no shared network with `app` or `db`, one route out | It still sees the tickers, because pricing them is its job. And it is in the app image too; see §5 |
 | A poisoned dependency inside the app itself | `app` sits on two internal networks with no default route; read-only root filesystem, every capability dropped | Everything. `app` holds the database credential, so it reads every figure. Although it has no route out of its own, it answers your browser through `caddy`, and no CSP constrains what that page may load or where it may post. **The browser is the way out.** The narrower relay through `caddy` to `gate` is §4's |
@@ -211,14 +211,14 @@ graph TB
 passes `/oauth2/*` to `gate`; `gate` has real egress, because Google's token endpoint is on the
 internet. `compose.yaml` names the path where it declares those networks. Neither carries a default
 route off it at IP level, and `app` still reaches `gate` through Caddy's `/oauth2/*`. The opening is
-narrow. It is not a socket, only whatever can be smuggled through a sign-in proxy's own endpoints.
-But what is on the far side is the least restricted container here. `gate` runs as root, can reach
-the whole internet, and through its network can reach the Docker host and anything else your machine
-is listening with. There is one more of the same kind. Caddy believes the headers naming the original
-caller if they come from any address on the local network, and `app`'s address is one, so `app` could
-fake them. The app itself decides nothing on them. The gate does read them, so its sign-in redirects
-carry the outside hostname. But the address a browser is returned to is pinned to `PUBLIC_ORIGIN`
-rather than taken from a header, which is what keeps a forged one cheap.
+narrow: not a socket, only whatever can be smuggled through a sign-in proxy's own endpoints. But
+what is on the far side is the least restricted container here. `gate` runs as root, can reach the
+whole internet, and through its network can reach the Docker host and anything else your machine is
+listening with. There is one more of the same kind. Caddy believes the headers naming the original
+caller if they come from any address on the local network, and `app`'s address is one, so `app`
+could fake them. The app itself decides nothing on them. The gate does read them, so its sign-in
+redirects carry the outside hostname. But the address a browser is returned to is pinned to
+`PUBLIC_ORIGIN` rather than taken from a header, which is what keeps a forged one cheap.
 
 **The external-database option.** If you run Postgres elsewhere and load
 [`../compose.external-db.yaml`](../compose.external-db.yaml), `app` moves onto a network with a
@@ -239,10 +239,11 @@ compromised feed, and both at once.
 
 It runs in `worker`. What makes that safe is not the image but what the process is denied: no
 `DATABASE_URL` and no `PGPASSWORD` in its environment, no network any database is on, a capped
-process count and memory, a read-only root filesystem, and one route out. It is not the absence of a
-database client. `pg` and the app's own pool module are present in the image like everything else,
-and only the entrypoint's import graph leaves them unloaded. What makes them useless is that `worker`
-sits alone with `egress-proxy`, shares no network with `db`, and holds no password to offer it.
+process count and memory, a read-only root filesystem, and one route out. That safety does not come
+from the absence of a database client. `pg` and the app's own pool module are present in the image
+like everything else, and only the entrypoint's import graph leaves them unloaded. What makes them
+useless is that `worker` sits alone with `egress-proxy`, shares no network with `db`, and holds no
+password to offer it.
 
 **The honest limit of that.** `app`, `worker` and `egress-proxy` are one image started three ways, so
 the package's files are physically present in the app container too. What keeps it out of your
@@ -297,12 +298,12 @@ learns.
 - `npm ci` fails when a tarball does not match the SHA-512 hash `package-lock.json` records for it,
   so a pinned name and version republished with different contents is refused on every install path,
   the image build included. CI adds `npm audit signatures`, which verifies the registry's own
-  signature over each package's name, version and hash. That is the thing a lockfile cannot do for
-  you, since a lockfile only guarantees you keep getting the bytes it recorded, whether or not those
-  were the bytes the registry published. CI also blocks on `npm audit --omit=dev --audit-level=high`.
+  signature over each package's name, version and hash. A lockfile cannot do that for you, since it
+  only guarantees you keep getting the bytes it recorded, whether or not those were the bytes the
+  registry published. CI also blocks on `npm audit --omit=dev --audit-level=high`.
 - CI **fails the build if any production entry in the lockfile declares `hasInstallScript`, `os` or
-  `cpu`**, and the image publish depends on that job. It removes the most common way a poisoned
-  package runs. It is a check on what the lockfile *declares*, not on what a tarball holds: a package
+  `cpu`**, and the image publish depends on that job. The check removes the most common way a poisoned
+  package runs. It reads what the lockfile *declares*, not what a tarball holds: a package
   shipping a prebuilt native addon or a WASM blob and loading it at import time declares none of the
   three and passes.
 - The release image prunes the dev tree and unreachable runtime dependencies, and deletes the
@@ -319,8 +320,8 @@ learns.
   publisher not to move it. Pinning `APP_VERSION` to a `tag@sha256:` digest is the only form that
   holds against a compromised publisher, and it is not the documented default.
 - **`--ignore-scripts` is used only in the audit job**, not in the build. An install script in a dev
-  dependency still runs on the path that produces the release image. That is the gap §5's honest
-  limit points at.
+  dependency still runs on the path that produces the release image. That situation is the gap §5's
+  honest limit points at.
 - **No reproducible build, and no runtime integrity check.**
 
 ## 7. What this does not protect against
@@ -336,9 +337,9 @@ learns.
   is not a browser, and has no cookie to abuse.
 - **No authorization inside the app.** Everyone the allowlist admits sees everything. Choosing whose
   accounts a screen shows is a filter on the view, never a permission.
-- **Request bodies are effectively unbounded.** An upload that declares its size is refused if it is
-  too big. One that declares no size is not, only the file part is measured at all, and every other
-  form buffers whatever arrives. No size limit is set at either proxy.
+- **Most forms are bounded only by the bundled Caddy.** It caps every request body at 1 MiB, 16 MiB on
+  the upload page. Inside the app, only the upload counts bytes as they arrive. Every other form
+  buffers whatever Caddy lets through.
 - **The lock does not un-draw pixels.** A tab already showing figures keeps showing them until it
   next asks the server for something, and a browser's back/forward cache can serve a rendered stale
   page for minutes after a grant is revoked elsewhere.

@@ -107,7 +107,8 @@ households ahead of the server's time zone. The form also states the current sna
 
 Record balance appends a snapshot on the date you choose. A later submission for the same date
 supersedes the earlier one. A backdated balance can change values from that date until the next
-snapshot; an older record does not replace a newer current balance. Undo by recording another entry.
+snapshot; an older record does not replace a newer current balance. The receipt names both dates when
+that happens. Undo by recording another entry.
 
 ## On a phone
 

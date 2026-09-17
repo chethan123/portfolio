@@ -21,7 +21,13 @@ import {
   labelOf,
 } from "~/lib/account-options";
 import { getAccount } from "~/lib/accounts.server";
-import { lastRecorded, setBalance, type LastRecorded } from "~/lib/balances.server";
+import {
+  balanceReceipt,
+  lastRecorded,
+  setBalance,
+  type BalanceReceipt,
+  type LastRecorded,
+} from "~/lib/balances.server";
 import {
   chartRangeMiddleware,
   chartWindow,
@@ -88,26 +94,35 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Started here, not the first wave, so a 404 from the gate above never
   // strands this promise unhandled (Node drops the process on that).
   const recordedPromise = lastRecorded(params.accountId);
+  const searchParams = new URL(request.url).searchParams;
+
+  const recordedParam = searchParams.get("recorded");
+  const balanceReceiptPromise =
+    recordedParam === null
+      ? null
+      : recordedPromise.then((latest) => balanceReceipt(params.accountId, recordedParam, latest));
 
   // Upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5) — read
-  // back from the database, never the URL, so a stale value yields null.
-  const uploadedParam = new URL(request.url).searchParams.get("uploaded");
-  const receiptPromise =
+  // back from the database, never the URL, so an invented value yields null.
+  const uploadedParam = searchParams.get("uploaded");
+  const uploadReceiptPromise =
     uploadedParam === null
       ? null
       : recordedPromise.then((recorded) => uploadReceipt(params.accountId, uploadedParam, recorded));
 
   const points = chartSeries(scope, resolved);
 
-  const [account, holdings, computed, recorded, freshness, receipt] = await Promise.all([
-    // Only the tax treatment — safe after the gate; nothing here deletes an account.
-    getAccount(params.accountId),
-    accountHoldings(params.accountId),
-    points,
-    recordedPromise,
-    asOfView(getConfig().MARKET_TIMEZONE),
-    receiptPromise,
-  ]);
+  const [account, holdings, computed, recorded, freshness, receipt, recordedReceipt] =
+    await Promise.all([
+      // Only the tax treatment — safe after the gate; nothing here deletes an account.
+      getAccount(params.accountId),
+      accountHoldings(params.accountId),
+      points,
+      recordedPromise,
+      asOfView(getConfig().MARKET_TIMEZONE),
+      uploadReceiptPromise,
+      balanceReceiptPromise,
+    ]);
 
   return {
     freshness,
@@ -121,6 +136,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     computed,
     recorded,
     receipt,
+    recordedReceipt,
     // Kind alone decides, via `account-options.ts` — though `setBalance`
     // checks only closure, so a bank-labeled account can still hold
     // securities and refuse with its own message.
@@ -129,10 +145,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     today,
     earliestAsOf: earliestRecordableDate(),
     latestAsOf: latestRecordableDate(),
-    // Confirmed against the actually-recorded set, so a hand-typed
-    // `?recorded=` can't produce a confirmation nobody wrote (§13.7).
-    justRecorded:
-      recorded !== null && new URL(request.url).searchParams.get("recorded") === recorded.asOf,
   };
 }
 
@@ -148,7 +160,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     const receipt = new URLSearchParams(new URL(request.url).searchParams);
     receipt.delete("recorded");
     receipt.delete("uploaded");
-    receipt.set("recorded", written.asOf);
+    receipt.set("recorded", written.setId);
 
     throw redirect(`/accounts/${params.accountId}?${receipt.toString()}`);
   } catch (error) {
@@ -192,12 +204,12 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     computed,
     recorded,
     receipt,
+    recordedReceipt,
     takesBalance,
     owed,
     today,
     earliestAsOf,
     latestAsOf,
-    justRecorded,
     freshness,
     owners,
   } = loaderData;
@@ -238,9 +250,21 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             </>
           )}
           , as of <b className="u-data">{receipt.asOf}</b>.{" "}
-          {total.accountName} now holds{" "}
-          <b className="u-data">{receipt.holdingCount}</b>{" "}
-          {receipt.holdingCount === 1 ? "position" : "positions"}.
+          {receipt.isCurrent ? (
+            <>
+              {total.accountName} now holds{" "}
+              <b className="u-data">{receipt.holdingCount}</b>{" "}
+              {receipt.holdingCount === 1 ? "position" : "positions"}.
+            </>
+          ) : (
+            // holdingCount describes this set, not the account
+            // (docs/specs/0005-report-remediation.md §5) — a later statement is the one it
+            // actually reports, so that is the figure named here instead.
+            <>
+              Filed behind what {total.accountName} already reports — it still shows its{" "}
+              <b className="u-data">{receipt.currentAsOf}</b> figures.
+            </>
+          )}
         </p>
       ) : null}
 
@@ -445,7 +469,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           latestAsOf={latestAsOf}
           errors={actionData?.errors}
           values={actionData?.values}
-          justRecorded={justRecorded}
+          receipt={recordedReceipt}
           amount={total.amount}
           valued={valued}
         />
@@ -468,7 +492,7 @@ function SetBalance({
   latestAsOf,
   errors,
   values,
-  justRecorded,
+  receipt,
   amount,
   valued,
 }: {
@@ -480,7 +504,7 @@ function SetBalance({
   latestAsOf: string;
   errors?: Readonly<Record<string, string>>;
   values?: Record<string, string>;
-  justRecorded: boolean;
+  receipt: BalanceReceipt | null;
   amount: string;
   valued: boolean;
 }) {
@@ -508,18 +532,27 @@ function SetBalance({
           the most recent is the one every figure is computed from.
         </p>
 
-        {justRecorded && recorded !== null ? (
+        {receipt !== null ? (
           <p className="form-note" role="status">
-            Recorded. {accountName} now reads{" "}
-            {valued ? (
-              <b className="u-data">
-                <Amount value={amount} />
-              </b>
+            {receipt.filedBehind ? (
+              <>
+                Recorded a balance for <b className="u-data">{receipt.asOf}</b>. Current figures
+                are unchanged because {accountName} has a newer record for{" "}
+                <b className="u-data">{receipt.currentAsOf}</b>.
+              </>
             ) : (
-              "no valuation"
-            )}{" "}
-            as of{" "}
-            {recorded.asOf}.
+              <>
+                Recorded. {accountName} now reads{" "}
+                {valued ? (
+                  <b className="u-data">
+                    <Amount value={amount} />
+                  </b>
+                ) : (
+                  "no valuation"
+                )}{" "}
+                as of <b className="u-data">{receipt.asOf}</b>.
+              </>
+            )}
           </p>
         ) : null}
       </div>

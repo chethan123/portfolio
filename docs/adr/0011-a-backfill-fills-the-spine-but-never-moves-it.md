@@ -48,8 +48,8 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
 ## The decision
 
 - **Gap-triggered.** An instrument is backfilled because its spine starts later than its position
-  history does, or does not exist. That is the recipe's own gap query, made a domain read. Not
-  because it is new, and not because a person asked. History already uploaded is already a gap.
+  history does, or does not exist. The trigger is the recipe's own gap query, made a domain read.
+  An instrument is never backfilled because it is new, or because a person asked. History already uploaded is already a gap.
 - **Coupled to the refresh.** A refresh is quotes, then one bounded batch of backfills, under the
   one advisory lock, whoever started it: the poller's tick, a press of Refresh now, or the request
   fired when an upload commits. Outside market hours the tick asks for no quotes and still runs the
@@ -81,10 +81,10 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   for. The insert-where-absent rule is the only thing that lets two writers share one table without
   one silently owning the other's rows. It costs the ability to correct a live row from history,
   which `docs/importing-history.md` already declined to promise.
-- **A separate scheduled job.** Rejected on ADR-0009's grounds read the other way: that job earned
-  a second container because `pg_dump` does not belong in the app image and a dump must survive the
-  app being down. Neither holds here. This is the app's own provider and its own table, and a
-  refresh already runs on a cadence under a lock. A second schedule would be a second thing to
+- **A separate scheduled job.** Rejected on ADR-0009's grounds read the other way: that job earned a
+  second container because `pg_dump` does not belong in the app image and a dump must survive the
+  app being down. Neither holds here. A backfill uses the app's own provider and its own table, and
+  a refresh already runs on a cadence under a lock. A second schedule would be a second thing to
   miss for no property gained.
 - **Mailbox-shaped, for the worker.** Spec 0015 would move every Yahoo call into an egress-isolated
   sidecar coordinated through rows. Rejected for now: that spec is not built, and shaping this as a
@@ -107,8 +107,8 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   every distorted point on the chart repairs itself as the rows land. The poller's own rows are
   never touched. Every attempt is on record.
 - **What is not.** The chart still draws a partially-priced past date on the ordinary line while the
-  gap is open, and says nothing. That is the second half of issue #83, still owed and filed on its
-  own. Nothing on any screen changes in this slice except the list at Settings → Prices.
+  gap is open, and says nothing. That silence is the second half of issue #83, still owed and filed
+  on its own. Nothing on any screen changes in this slice except the list at Settings → Prices.
 - **Ticker reuse is an accepted limitation.** A symbol's history belongs to whatever holds the
   ticker now. An instrument that changed symbols gets the current ticker's past, and the only guard
   is a person spot-checking a figure against a statement. Detecting it would need a source of

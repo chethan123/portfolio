@@ -37,9 +37,9 @@ the one left unset. Configuration is parsed lazily. `getConfig()` in
 [`../server/config.ts`](../server/config.ts) reads and caches `process.env` on first use, so a boot
 with no configuration is not a boot that fails. The dev server starting means nothing.
 
-The current [README](../README.md#working-on-it) gives the two-line version. This is the sequence
-that actually produces a working checkout. It is a deliberate overlap with the README: that reader is
-deciding whether to install anything, you are at a terminal with a clone.
+The current [README](../README.md#working-on-it) gives the two-line version. What follows is the
+sequence that actually produces a working checkout. The overlap with the README is deliberate: that
+reader is deciding whether to install anything, you are at a terminal with a clone.
 
 Node 24.12 or newer is required (`engines` in [`../package.json`](../package.json)), plus Docker
 with the Compose v2 plugin.
@@ -207,6 +207,8 @@ what changes how you run and write things.
   redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo` are how
   a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a route's
   middleware chain the way the framework would, the seam for `chartRangeMiddleware`.
+  A Holdings correction test must model the reveal that makes its form available by sending the
+  `masked=0` cookie; `tests/routes/holdings.test.ts`'s `correct()` helper carries that precondition.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing
@@ -346,13 +348,13 @@ this is the same sequence with the parts that bite.
    to stay singular is only accidentally idempotent.
 3. `node --env-file=.env ./server/migrate.ts`
 4. **`npm run db:types`, and commit the regenerated `app/lib/database.generated.ts`.**
-5. `npm run typecheck`. This is where a migration that broke a query actually surfaces.
+5. `npm run typecheck`, where a migration that broke a query actually surfaces.
 
 Step 4 is not optional and is not a courtesy. `db:types` introspects a **live** database and rewrites
 that file; every Kysely query in the codebase is typed from it. Skip it and nothing fails locally:
 your queries stay typed against the *old* schema, `typecheck` passes, and the new column does not
 exist as far as TypeScript is concerned. CI's `db:types -- --verify` is what turns that silence into
-a red build. Note the `--`. It is a passthrough to `kysely-codegen`, not an npm flag.
+a red build. Note the `--`, a passthrough to `kysely-codegen`, not an npm flag.
 
 `db:types` introspects whatever `DATABASE_URL` names, defaulting to `portfolio_test`. Point it at a
 database you have just migrated, or you will faithfully generate types for the wrong schema. Never
@@ -631,7 +633,7 @@ form that works everywhere beats a table of which command reads what.
 **Logs are stdout, and that is the entire pipeline.** In development they are in the terminal running
 `npm run dev`. There is no metrics endpoint, no tracing, no log shipping. Which kinds of line the
 application emits, and a stem worth grepping for each, is the list in
-[`operating.md`](operating.md#logs). It is the same output in a checkout as in a container.
+[`operating.md`](operating.md#logs). The output is the same in a checkout as in a container.
 
 **Reset local state**, from cheapest to most thorough:
 
@@ -645,8 +647,10 @@ rm -rf .react-router build && npm run typecheck     # regenerate route types and
 An afternoon of clicking around leaves rows the seed did not write, and a database in that state
 without a `demo_seed` marker is exactly what it refuses. Drop it and recreate it instead.
 
-There is nothing to clean up after a test run: every test body is rolled back, so the suite leaves the
-database exactly as it found it, including after a failure.
+There is nothing to clean up after a test run: every test body is rolled back, and the few tests
+that have to commit (the two-connection races in `lock`, `lock-schema` and `account-lock`, and one
+`price-backfill` case) sweep their own rows, so the suite leaves the database exactly as it found
+it, including after a failure.
 
 **What is not available**, so you stop looking:
 

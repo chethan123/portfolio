@@ -5,7 +5,7 @@ import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sql, type Kysely } from "kysely";
+import type { Kysely } from "kysely";
 
 import { isoCBOR } from "@simplewebauthn/server/helpers";
 import type { AuthenticationResponseJSON, VerifiedAuthenticationResponse } from "@simplewebauthn/server";
@@ -14,7 +14,13 @@ import { createDatabase, type Database } from "~/lib/db.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { CHALLENGE_TTL_MS, IDLE_WINDOW_MS, RETURN_PARAM, joinTransports, splitTransports } from "~/lib/lock";
 
-import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
+import {
+  backendPid,
+  closeTestDatabase,
+  testDatabase,
+  waitUntilBlocked,
+  withDatabase,
+} from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
 import {
   NO_USER_VERIFICATION_FLAGS,
@@ -1481,36 +1487,6 @@ describe("one live grant per browser", () => {
     }),
   );
 });
-
-/** Polls real database state (never a fixed delay) until pid is genuinely blocked on a lock — bounded so a real deadlock fails loudly. */
-async function waitUntilBlocked(
-  watcher: Kysely<Database>,
-  pid: number,
-  timeoutMs = 5_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const result = await sql<{ blocked: boolean }>`
-      select exists (
-        select 1 from pg_stat_activity where pid = ${pid} and wait_event_type = 'Lock'
-      ) as blocked
-    `.execute(watcher);
-    if (result.rows[0]?.blocked === true) return;
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `Timed out after ${timeoutMs}ms waiting for backend ${pid} to block on a lock — ` +
-          "either the race this test drives no longer contends on the row it expects to, " +
-          "or something is genuinely stuck.",
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function backendPid(handle: Kysely<Database>): Promise<number> {
-  const result = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(handle);
-  return result.rows[0]!.pid;
-}
 
 describe("duplicate credential id", () => {
   it(

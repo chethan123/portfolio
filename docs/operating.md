@@ -36,13 +36,12 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 | `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
 | `caddy` | The ingress front door, and where the gate is enforced | **`80:8080`, on every interface**. Host side still 80; 8080 is Caddy's own listener |
 
-A request goes from the browser to `caddy`, then to `gate`, back to `caddy`, then to `app`, then
-to `db`.
-Caddy asks the gate about every request except `/healthz` before it forwards anything. Only `caddy`
-is reachable from your LAN; `db`, `dump`, `app`, `worker`, `egress-proxy` and `gate` are reachable
-only on the compose network. That is not a hardening extra. It is the assumption both the app's
-trust of `X-Forwarded-*` and the gate's own trust of them rest on, and [Security](#security) says
-what breaks if you publish either port yourself.
+A request goes from the browser to `caddy`, then to `gate`, back to `caddy`, then to `app`, then to
+`db`. Caddy asks the gate about every request except `/healthz` before it forwards anything. Only
+`caddy` is reachable from your LAN; `db`, `dump`, `app`, `worker`, `egress-proxy` and `gate` are
+reachable only on the compose network. That closed network is not a hardening extra. It is the
+assumption both the app's trust of `X-Forwarded-*` and the gate's own trust of them rest on, and
+[Security](#security) says what breaks if you publish either port yourself.
 
 They start in dependency order: `app` waits for `db` to report healthy, and `caddy` waits for both
 `app` and `gate`.
@@ -169,7 +168,7 @@ directory, it does not create one.
 **You do not chown it.** `db` runs as uid 70 and never as root, and a plain bind mount would arrive
 root-owned and stop `initdb` dead. A volume mounted over an *empty* directory takes the image's
 ownership for it instead. That is the same seeding that gives Caddy a writable `/data`
-([below](#before-you-enable-tls-give-caddy-volumes)), so Docker sets `70:70` before Postgres looks,
+([below](#before-you-enable-tls-give-caddy-volumes)), and Docker sets `70:70` before Postgres looks,
 whoever owns the checkout. Afterwards the directory is `0700` uid 70 and your own account cannot
 read inside it. Borrow root from the daemon to look:
 
@@ -329,7 +328,7 @@ happens to need it.
 |---|---|---|---|
 | `DATABASE_URL` | **Yes** | no default | Postgres connection string. Compose supplies one pointing at its own `db` service, so you only set this to run against your own Postgres. |
 | `AUTH_GATE` | No | `none` | Whether the app has been *told* that something in front of it authenticates. `external` silences the unprotected-instance banner; `none` draws it. `compose.yaml` hardcodes `external` because the `gate` service is right there, so you do not set this. A developer running the app with nothing in front of it does. It is a description of the deployment, not a switch, and setting it protects nothing. |
-| `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port. That is the fixed `80:8080` in [`compose.yaml`](../compose.yaml). Moving the host side means editing the left half of that line; the right half is Caddy's listener and is also the `Caddyfile`'s site address, so those two only ever move together. |
+| `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port. The published port is the fixed `80:8080` in [`compose.yaml`](../compose.yaml). Moving the host side means editing the left half of that line; the right half is Caddy's listener and is also the `Caddyfile`'s site address, so those two only ever move together. |
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`**. See below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for the scheduled quote window around regular market hours, and for reading which trading day a quote belongs to, so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
@@ -359,14 +358,13 @@ at this stage.
 **`PUBLIC_ORIGIN` is not gate-only; the application reads it now too.** [The lock](#the-lock)
 derives from it the one identity a passkey check has to run against, which makes it another setting
 shared with the sidecar rather than owned by it alone. It is not the first. `compose.yaml` already
-passes `TZ` to both `app` and `gate`, and the app validates and uses that one too. It carries the
-same no-default, `${VAR:?}` treatment as the settings above, so `docker compose up` stops on it too
-if it is unset or empty. The gate still builds its Google redirect URL as `PUBLIC_ORIGIN` +
-`/oauth2/callback`, which must match what is registered on the OAuth client exactly
-([One-time Google setup](#one-time-google-setup)), and that half is unchanged.
-What is new is that the application's own startup validator checks the same value a second time,
-stricter than Compose's "present and non-empty," and a value that clears Compose's bar can still
-fail this one:
+passes `TZ` to both `app` and `gate`, and the app validates and uses that one too. `PUBLIC_ORIGIN`
+carries the same no-default, `${VAR:?}` treatment as the settings above, so `docker compose up`
+stops on it too if it is unset or empty. The gate still builds its Google redirect URL as
+`PUBLIC_ORIGIN` + `/oauth2/callback`, which must match what is registered on the OAuth client
+exactly ([One-time Google setup](#one-time-google-setup)), and that half is unchanged. What is new
+is that the application's own startup validator checks the same value a second time, stricter than
+Compose's "present and non-empty," and a value that clears Compose's bar can still fail this one:
 
 - the scheme has to be `https://`, and `http://localhost` is the one exception, for the dev loop;
 - the host cannot be an IP address, only a domain name;
@@ -421,6 +419,10 @@ yourself:
     environment:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
 ```
+
+At 16 or more, also raise `max_size` under `request_body @upload` in the `Caddyfile` above it, then
+`docker compose restart caddy`. Caddy caps upload bodies at 16 MiB, and past that an upload gets a
+bare 413 instead of the app's sentence.
 
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
 app, which is why it is not in the table above.
@@ -571,7 +573,7 @@ with the password it served.
 |---|---|---|
 | `X-Forwarded-Proto`, `X-Forwarded-Host` | `gate` | The scheme and host the sign-in redirects are built with. Without them the sidecar would build them from this stack's internal plain HTTP and nobody could follow them. |
 | `X-Forwarded-For`, `X-Real-IP` | `gate` | The client address in the sidecar's own log lines. Nothing is authorised on either. |
-| `X-Auth-Request-Email` | nothing, yet | The [authenticated email](../CONTEXT.md) the gate vouched for, forwarded to `app` on every admitted request. The app reads it nowhere today. It is attribution, never permission, and Caddy deletes any value a browser sent before copying the gate's, so nobody can assert their own identity. |
+| `X-Auth-Request-Email` | nothing, yet | The [authenticated email](../CONTEXT.md) the gate vouched for, forwarded to `app` on every admitted request. The app reads it nowhere today. It is attribution, never permission. Caddy deletes any value a browser sent before copying the gate's, so nobody can assert their own identity. |
 
 **The Caddyfile trusts these from any private address**, not from one named proxy. It sets
 `trusted_proxies static private_ranges`, because the house proxy's address is yours and not this
@@ -666,8 +668,8 @@ lifetime is the seven-day default. That default is what makes signing in a once-
 rather than a weekly ritual, because the renewal bounces through Google without showing anyone a
 screen. The *gate* keeps no server-side session store, so there is nothing to revoke one of its
 cookies against; see [the levers below](#revocation-and-the-levers-you-have). The lock's own grants
-are a different matter. Those are rows, and removing the passkey that minted them takes them with it;
-[The lock](#the-lock) below and the runbook's own entries say how.
+are a different matter. Those are rows, and removing the passkey that minted them takes them with
+it. [The lock](#the-lock) below and the runbook's own entries say how.
 
 **There is no CSRF token anywhere.** `SameSite=Lax` is the whole of the posture. The app issues a
 cookie of its own now too, [the lock](#the-lock)'s grant, so the posture no longer rests on the
@@ -698,7 +700,7 @@ affordable only for as long as nothing authorises on them, which today nothing d
 
 ### Revocation, and the levers you have
 
-There are three, in ascending order of blast radius. The first two are the real ones.
+There are three levers, in ascending order of blast radius. The first two are the real ones.
 
 **Remove the address from `allowed-emails.txt`. This signs that person out everywhere.** The gate
 re-validates every request's email against the file and watches the file for changes, so their next
@@ -727,10 +729,10 @@ docker compose up -d gate
 sounds.** It clears the gate's own cookie in that one browser and nothing else. The Google session
 on the device is untouched, and sign-in goes straight to Google with no screen of our own in the
 way, so the next visit bounces out to Google and back and is re-admitted without anyone typing
-anything, silently, on a device signed into one Google account. It is useful for handing a phone to
-someone for a minute. It is not revocation, and there is no sign-out control in the UI. That is
-deliberately deferred and tracked as [issue #89](https://github.com/chethan123/portfolio/issues/89),
-and these limits are the argument for it.
+anything, silently, on a device signed into one Google account. The bounce is useful for handing a
+phone to someone for a minute. It is not revocation, and there is no sign-out control in the UI.
+That control is deliberately deferred and tracked as [issue
+#89](https://github.com/chethan123/portfolio/issues/89), and these limits are the argument for it.
 
 ### One thing that leaves the house
 
@@ -762,8 +764,8 @@ agreeing to answer under the wrong name. Every refusal, whichever check failed, 
 `host is not on the allowlist`; a name that passed that check but failed the ClientHello comparison
 reads `server_name <name> does not match CONNECT host <host>`. From `app`'s side the first of those
 is a numbered refusal like any
-other, `fetch failed: Proxy response (403) !== 200 when HTTP Tunneling`. That is a `403` rather than
-the `502` an unreachable Yahoo gives, which is the difference between "the proxy would not let this
+other, `fetch failed: Proxy response (403) !== 200 when HTTP Tunneling`. That is a `403` rather
+than the `502` an unreachable Yahoo gives, which is the difference between "the proxy would not let this
 out" and "the proxy tried and could not get through". That second case is also the one place
 `worker`'s own fetch surfaces differently from an ordinary failure. The proxy has already sent the
 tunnel's `200` by the time it catches the mismatch, so it can only tear the connection down rather
@@ -810,7 +812,7 @@ in a production build React Router replaces a thrown error's message with a gene
 reaches the page, so a Postgres error does not leak from the shipped image. That is a mitigation for
 the deployed case only. It is not true under `react-router dev`, which should never face anything.
 
-**A VPN is not the answer here, and that is a decision rather than an oversight.** It was the old
+**A VPN is not the answer here, and that is a decision rather than an oversight.** A VPN was the old
 recommendation, and [ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md) rejects it for this threat
 model, because a VPN onto the LAN does nothing about an adversary already on that LAN. Run one if
 you want remote access without publishing a port, but run it as well as the gate, never instead
@@ -821,7 +823,7 @@ of it.
 ## The lock
 
 Once the household enrols a passkey from Settings → Passkeys, inside the app itself, every
-browser the gate has already admitted is additionally refused every screen until a passkey check
+browser the gate has already admitted is also refused every screen until a passkey check
 unlocks it.
 [ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md) is the design record and
 [the family guide](guide/passkeys.md) covers it in the household's own words. This section is what
@@ -1014,8 +1016,8 @@ and still spent a request on the backfill batch, but asked for no quotes; this i
 provider logs; this response carries no symbol. Settings → Prices lists historical coverage gaps,
 so a stale quote with complete history may not appear there. `failed` with
 `pricing.worker: "available"` means only that the listener answered *this* health probe while the
-*last tick's* quote attempt did not succeed end to end. That is not the same shape as `partial`, and
-it is not proof the socket hop was fine at the time of that attempt either. `worker` is a
+*last tick's* quote attempt did not succeed end to end. That combination is not the same shape as
+`partial`, and not proof the socket hop was fine at the time of that attempt either. `worker` is a
 five-second-cached snapshot of right now, `quotes` is carried from up to a full cadence ago, and the
 worker can have failed and recovered in between. It is worth investigating either way
 (`egress-proxy`, Yahoo, or the worker's own rate limiting; see [Logs](#logs)), just not narrowed past
@@ -1097,9 +1099,9 @@ That is a TCP handshake that completes cleanly whether or not anything behind it
 work. Only a check that waits for a real HTTP response tells a proxy with a free slot apart from one
 whose eight are all held by stalled tunnels, which is why this healthcheck has to be a request the
 server itself answers rather than a connection alone. So "unhealthy" here means the proxy is
-saturated or wedged. It never means "Yahoo is down," which shows up instead as `worker` failing every
-call while both containers keep reporting healthy (see [Logs](#logs)). And the restart rule above
-still holds here too. Nothing recreates `egress-proxy` on this failing, so an unhealthy row in
+saturated or wedged. It never means "Yahoo is down," which shows up instead as `worker` failing
+every call while both containers keep reporting healthy (see [Logs](#logs)). And the restart rule
+above still holds here too. Nothing recreates `egress-proxy` on this failing, so an unhealthy row in
 `docker compose ps` is where you look, not something Compose resolves for you.
 
 ### Logs
@@ -1152,7 +1154,7 @@ owns the wording:
   `fetch failed: Proxy response (502) !== 200 when HTTP Tunneling` (a `504` in place of the `502`
   for a resolve or connect that ran past its own deadline instead of being refused outright), and
   `egress-proxy`'s own log carries one `Egress proxy` line per such failure, naming the host and the
-  cause. That is worth reading directly rather than only inferring it from `app`'s side. `worker`
+  cause. That line is worth reading directly rather than only inferring it from `app`'s side. `worker`
   itself stays healthy in every one of these; see [Security](#security) for the fourth shape this
   same stem takes, when the host is reachable but answers under a name `egress-proxy` refuses to
   forward. Other refresh failures (the pool, the advisory lock, the
@@ -1404,6 +1406,12 @@ checkout of this repository is not needed to run or upgrade an instance, only `c
 `Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
 `volumes/db/data` and `volumes/dumps` directories beside them.
 
+**A release that changes the `Caddyfile` needs it replaced and `caddy` restarted.** Caddy reads the
+file once, at start. Replacing it on disk, as a download or a `git checkout` does, puts a new file at
+that path, and the running container keeps reading the old one, so `docker compose up -d` leaves the
+old configuration serving. Replace `Caddyfile` with the copy at the release tag, then
+`docker compose restart caddy`. This release changes it: it adds the request body caps.
+
 **A release that adds a service or a volume needs `compose.yaml` replaced too, not just the image
 pulled.** The release that added `worker` and the `price-worker-sock` volume was the first to need
 this, and every release since has needed it again, this one included. `compose.yaml` is one of the
@@ -1439,8 +1447,8 @@ is the wrong command for this.
 **An instance that predates the dump service needs three things before its next `up`**: that script
 in place, `mkdir -p ./volumes/dumps`, and `DUMP_UID`/`DUMP_GID` in `.env` set to the account that
 owns it (`id -u`, `id -g`). Missing any of them stops `docker compose up -d` naming what is
-missing. That is the intended behaviour rather than a failed upgrade, since nothing is recreated
-until it can start.
+missing. That stop is the intended behaviour rather than a failed upgrade, since nothing is
+recreated until it can start.
 
 **Stop the dumper across an upgrade that migrates.** `pg_dump` holds `ACCESS SHARE` on every table
 for its whole run and a migration's `ACCESS EXCLUSIVE` queues behind it, so a dump that happens to
@@ -1600,11 +1608,11 @@ the filename, so the edited file is still recorded as applied and is silently sk
 start. Ship a new file instead.
 
 **An older image against a newer database reports perfect health.** Nothing compares applied
-migrations against the ones on disk in that direction, so every check passes while the code queries a
-schema it has never seen ([Monitoring](#monitoring)). Setting `APP_VERSION` back to the previous
-version is therefore not a rollback. It is an instance that has stopped being able to tell you it
-is wrong. Pinning a tag is easy now, which makes this *easier* to do by accident than it used to be,
-not harder.
+migrations against the ones on disk in that direction, so every check passes while the code queries
+a schema it has never seen ([Monitoring](#monitoring)). Setting `APP_VERSION` back to the previous
+version is therefore not a rollback. What you get is an instance that has stopped being able to tell
+you it is wrong. Pinning a tag is easy now, which makes this *easier* to do by accident than it used
+to be, not harder.
 
 **The only true rollback is the old image *plus* the backup taken before the upgrade.** That is why
 the dump and the tag you wrote down are the first two lines above, and why "take a backup before

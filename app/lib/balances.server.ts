@@ -1,13 +1,14 @@
 // Sets the balance of a single-position account (DESIGN.md §5.2, §11) via the same
 // append-a-position-set mechanism as an upload (source='manual', no filename).
 // Sign is derived from kind, never typed in. Refusals read actual current holdings, not just
-// `kind` (a label that can lie, SET-1). The account write transaction serializes its current-state
-// read; both inserts are one data-modifying CTE so a set can never land without its holding row.
+// `kind` (a label that can lie, SET-1), and read them under withAccountLock (§7.2) so a
+// statement can't land between the check and the write. Both inserts are one statement: a
+// data-modifying CTE so a position_set can never land without its holding row.
 import { sql } from "kysely";
 import { z } from "zod";
 
-import { withAccountWrite } from "./account-write.server.ts";
 import { acceptsSetBalance, isOwed } from "./account-options.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
   NotFoundError,
@@ -17,7 +18,7 @@ import {
   parseInput,
   recordedDate,
 } from "./input.server.ts";
-import { getAccount } from "./accounts.server.ts";
+import { withAccountLock, type Account } from "./accounts.server.ts";
 import { currentStatement } from "./current-statement.server.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
@@ -31,6 +32,7 @@ export const balanceInput = z.object({
 export type BalanceInput = z.infer<typeof balanceInput>;
 
 export type RecordedBalance = {
+  setId: string;
   accountId: string;
   accountName: string;
   asOf: IsoDate;
@@ -46,18 +48,29 @@ export type LastRecorded = {
   source: "upload" | "manual";
 };
 
+export type BalanceReceipt = {
+  setId: string;
+  asOf: IsoDate;
+  filedBehind: boolean;
+  currentAsOf: IsoDate;
+};
+
 // Resolved via latest_position_set (§8.2) — never a second order-by here.
 // Returns null when the account has no statement of any kind yet.
+// `asOf` is latest_position_set's own second parameter, unused by every caller until #181's
+// dated baseline: undated is the account's current set; dated is the latest one at or before it.
+// Kept last, after `db`, so existing callers passing `db` second need no change.
 export async function lastRecorded(
   accountId: string,
   db: Kysely<Database> = getDb(),
+  asOf: IsoDate | null = null,
 ): Promise<LastRecorded | null> {
-  if (!/^\d+$/.test(accountId)) return null;
+  if (!couldBeId(accountId)) return null;
 
   const result = await sql<{ id: string; as_of_date: string; source: string }>`
     select id, as_of_date, source
     from position_set
-    where id = latest_position_set(${accountId}::bigint)
+    where id = latest_position_set(${accountId}::bigint, ${asOf}::date)
   `.execute(db);
 
   const row = result.rows[0];
@@ -67,6 +80,34 @@ export async function lastRecorded(
   return { id: row.id, asOf: row.as_of_date, source: row.source as LastRecorded["source"] };
 }
 
+// `?recorded=` names the row, never the receipt's contents. The source check keeps an upload id
+// from masquerading as a balance write when the parameter is hand-edited.
+export async function balanceReceipt(
+  accountId: string,
+  setId: string,
+  latest: LastRecorded | null,
+  db: Kysely<Database> = getDb(),
+): Promise<BalanceReceipt | null> {
+  if (!couldBeId(accountId) || !couldBeId(setId) || latest === null) return null;
+
+  const set = await db
+    .selectFrom("position_set")
+    .select(["id", "as_of_date"])
+    .where("id", "=", setId)
+    .where("account_id", "=", accountId)
+    .where("source", "=", "manual")
+    .executeTakeFirst();
+
+  if (set === undefined) return null;
+
+  return {
+    setId: set.id,
+    asOf: set.as_of_date,
+    filedBehind: latest.id !== set.id,
+    currentAsOf: latest.asOf,
+  };
+}
+
 // Appends, never edits — resubmitting for one date resolves like a re-upload
 // (latest_position_set ties on created_at then id); the earlier stays as history.
 export async function setBalance(
@@ -74,15 +115,15 @@ export async function setBalance(
   raw: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<RecordedBalance> {
-  return withAccountWrite(accountId, db, (trx) => setBalanceUnderLock(accountId, raw, trx));
+  return withAccountLock(accountId, db, (account, trx) => setBalanceUnderLock(account, raw, trx));
 }
 
 async function setBalanceUnderLock(
-  accountId: string,
+  account: Account,
   raw: unknown,
   db: Kysely<Database>,
 ): Promise<RecordedBalance> {
-  const account = await getAccount(accountId, db);
+  const accountId = account.id;
 
   // Before field validation: wrong account kind isn't fixable by correcting the form.
   if (!acceptsSetBalance(account.kind)) {
@@ -124,8 +165,10 @@ async function setBalanceUnderLock(
   const zero = /^0+(\.0+)?$/.test(input.amount);
   const quantity = isOwed(account.kind) && !zero ? `-${input.amount}` : input.amount;
 
-  // Defense in depth after the serialized pre-check: no guard row means no insert at all, even
-  // with no prior statement (latest_position_set is NULL, so `not exists` still holds).
+  // Guard repeated inside the write (revisePosition's pattern), the statement's own answer now
+  // that the lock keeps anything from landing between the pre-check and this insert. No guard
+  // row => no insert at all, even with no prior statement (latest_position_set is NULL, so
+  // `not exists` still holds).
   const written = await sql<{ position_set_id: string }>`
     with guard as (
       select 1
@@ -147,7 +190,8 @@ async function setBalanceUnderLock(
     returning holding.position_set_id
   `.execute(db);
 
-  if (written.rows[0] === undefined) {
+  const row = written.rows[0];
+  if (row === undefined) {
     throw ValidationError.form(
       `${account.name} changed while this form was open, so nothing was recorded. ` +
         "Reload the page and record the balance against what it holds now.",
@@ -155,6 +199,7 @@ async function setBalanceUnderLock(
   }
 
   return {
+    setId: row.position_set_id,
     accountId: account.id,
     accountName: account.name,
     asOf: input.asOf,

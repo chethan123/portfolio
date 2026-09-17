@@ -34,6 +34,14 @@ export default function SettingsIndex() {
             </dd>
 
             <dt>
+              <Link to="/settings/instruments">Instruments</Link>
+            </dt>
+            <dd>
+              Every name a statement has taught this instance, and the instrument each one means.
+              Repoint or forget a wrong match before the next upload reads it.
+            </dd>
+
+            <dt>
               <Link to="/settings/tax">Tax</Link>
             </dt>
             <dd>
@@ -64,10 +72,11 @@ export default function SettingsIndex() {
               can sync to a family member's other devices, and remove one that is lost for good.
             </dd>
 
-            <dt>Classifications, Instruments and History</dt>
+            <dt>Classifications and History</dt>
             <dd>
-              Asset labels, ticker and manual-price management, and the hand-typed net worth
-              series from before this instance existed. Later slices build these.
+              Asset labels, and the hand-typed net worth series from before this instance
+              existed. Later slices build these, along with ticker and manual-price management
+              under Instruments.
             </dd>
           </dl>
         </div>

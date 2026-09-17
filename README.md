@@ -133,8 +133,10 @@ Choose an account and CSV, map columns, resolve new instruments, then review the
 A statement replaces the account's complete set of holdings for its date. Missing positions
 are treated as sold. Every removal is listed before commit.
 
-Positions are written only at commit. Drafts, column mappings, instruments, and aliases may be
-saved earlier. [Upload walkthrough](docs/guide/first-statement.md).
+Positions and the name-to-instrument aliases are written only at commit. Drafts, column mappings,
+instruments and classifications may be saved earlier. An upload abandoned before the last step
+teaches the next one nothing, and Settings → Instruments repoints or forgets a wrong alias behind a preview.
+[Upload walkthrough](docs/guide/first-statement.md).
 
 ### Settings: people and accounts
 
@@ -174,8 +176,9 @@ browser and credential provider. [Lock guide](docs/guide/passkeys.md).
   <img alt="The overview with every amount replaced by a run of dots: the net worth headline, the chart's axis figures, the amount in the chart's readout and every account balance are hidden, while the trend line, the readout's date, the allocation bars, the account names and the dates are unchanged" src="docs/screenshots/overview-masked-light.png">
 </picture>
 
-Hide amounts when someone can see your screen. Masking is display only. Amounts remain in page
-data, and anyone using the browser can reveal them.
+Hide amounts when someone can see your screen. Masking remains a display control, and anyone using
+the browser can reveal amounts. Most screens keep amounts in page data for an instant toggle;
+Holdings omits them while masked so opening a correction cannot expose exact input defaults.
 [Display settings](docs/guide/settings.md#display).
 
 ### On a phone
@@ -266,7 +269,8 @@ worker caches no pages or financial data.
 
 ### Not built yet
 
-Settings has no Classifications, Instruments, or History editor. There is no manual-price UI,
+Settings has no Classifications or History editor, and its Instruments tab holds aliases only.
+There is no manual-price UI,
 export, transaction ledger, realized-gain calculation, or investment-return calculation.
 The page-level stale-price summary is also pending. See [accepted limitations](DESIGN.md#14-accepted-limitations).
 

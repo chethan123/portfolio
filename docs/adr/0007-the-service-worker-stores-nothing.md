@@ -7,9 +7,9 @@ tutorial reaches for, and it was considered and refused. The worker this applica
 network-only: it opens no Cache Storage, touches no IndexedDB, and its offline page is a template
 string inside the worker script itself. Nothing the server ever said is retained on the device.
 
-The reason is where the boundary sits. The gate is the household's one boundary, and it protects
-the *server*. It challenges every request, and nothing is reachable without the VPN and a signed-in
-session. A cache on a phone sits outside that boundary. It is readable by whoever holds the
+The reason is where the boundary sits. The gate is the household's one boundary, and it protects the
+*server*. It challenges every request, and nothing is reachable without the VPN and a signed-in
+session. A cache on a phone sits outside that boundary. The cache is readable by whoever holds the
 unlocked phone, it survives the VPN disconnecting, and it cannot be revoked from the server side.
 Masking (ADR-0002) is deliberately weak and says so; a cache would be the same kind of weakness
 without the honesty. The household's answer to "may balances persist on family phones?" was no, and

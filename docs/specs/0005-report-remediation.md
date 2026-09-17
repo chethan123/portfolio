@@ -250,6 +250,17 @@ correctly does not prove a sentence rendered. Add a before-and-after on an ordin
 upload — every change here runs through `assembleDiff`, which every upload goes through, and the
 filed-behind path exercises none of the 99% case.
 
+**Revisited by #181.** What shipped here left the diff's baseline as "current holdings" and only
+warned; issue #181 reported the consequence directly — a statement dated behind a correction landed
+with no confirmation and no receipt, exactly the gap the cut above was meant to close later. The
+follow-up plan reopened the as-of-relative baseline this section cut, this time refusing the commit
+rather than warning and suppressing a tick, and closing it with a bound confirmation
+(`baselineSetId`) rather than the rejected GET round trip. The `{A,B,C}` → `{A}` argument against an
+as-of baseline is not wrong — a tick now appears in cases where it did not before — but it is
+accepted rather than avoided: a tick demanded against the correct baseline is a true statement about
+what the commit will do. See "baseline" and "filed behind" in `CONTEXT.md`, and `ARCHITECTURE.md`
+§7.2, for what actually shipped.
+
 ## How this was checked
 
 Postgres 16.13 stood up without Docker, migrations and demo seed run, dev server driven over HTTP.

@@ -23,6 +23,14 @@ no longer say *only*, and nothing else here changes. Masking still keeps nobody 
 access control, and the amounts are still in the payload of a screen a reader is allowed to see; the
 lock decides whether they are allowed to see it, which is the question masking was never asking.]
 
+[Holdings is now an exception to that payload limit. Its inline correction would turn loader values
+into exact input defaults while the control still said amounts were hidden. The masked Holdings
+loader therefore finishes filtering, sorting, grouping, totals and ratios, then omits quantities and
+money from rows, groups, totals and saved receipts. Showing amounts costs a revalidation round trip
+before correction inputs appear. The browser can reveal them with one click, so masking remains a
+display choice rather than access control. Root and Holdings share one masking decision for the
+request; a failed policy read fixes that decision to masked for both loaders.]
+
 Everything below follows from accepting that limit rather than fighting it.
 
 ## Why the policy is a row and the state is a cookie
@@ -62,16 +70,58 @@ writers this paragraph opened with. Client script sets it directly, where the ch
 only ever written by the server. What changed here is only that the gate's is no longer the only
 cookie here that carries more than a preference.]
 
+[The two-writer description now has a timing qualification. Client script records its enhanced
+intent before writing the cookie, and that response does not repeat the write: an older Show
+response could otherwise overwrite a newer Hide from another tab. An unmarked form remains the
+no-JavaScript server writer, including where optional Fetch Metadata headers are absent. An
+enhanced toggle starts with a session cookie, then gives its unchanged choice the freshly read
+policy's lifetime after revalidation. A failed policy read replaces an unchanged Show with a
+session Hide. The ordering token skips the repair when a newer choice already won. A detected
+overlap during assignment writes a session Hide; whichever tab assigns last leaves the newer choice
+or that Hide, never the stale assignment. Unavailable storage leaves the staged session cookie
+unchanged.]
+
+The browser reads that cookie through an external-store subscription. A direct write publishes to
+all readers in its tab and sends a payload-free invalidation over one module-wide
+`BroadcastChannel`; another tab rereads the cookie rather than trusting state in the message. Focus
+and visibility changes repeat that read when no channel event was delivered. A receiving live tab
+adopts Hide immediately; an unsubscribed or unsignalled tab adopts it on focus, visibility change,
+or its next snapshot. Show is not adopted externally: a tab whose masked loader omitted exact
+Holdings values stays at its dot gate until Show in that tab intentionally revalidates. An older
+exact loader response cannot reopen correction inputs because the newer Hide cookie remains
+authoritative. Every external-store snapshot also adopts a current Hide, so a cached Show cannot
+survive an interval with no mounted subscribers, such as the bare unlock shell.
+
+Display Settings is a second cookie writer. Its enhanced action returns success without
+`Set-Cookie`; only then may the component reset the browser override. A random ordering token in
+origin-local storage records intervening Hide and Show intents, including a Show-then-Hide ABA. If
+the token changed, or storage is unavailable, the successful older Settings action preserves the
+current cookie. While root reloads the saved policy, a temporary cookie carries that policy's safe
+answer. That bridge is session-only even under *as last left*. After successful revalidation the
+component clears it if the ordering token is still current; a failed revalidation leaves the bridge
+in place rather than exposing an older root answer. If another choice overlaps the cookie assignment
+after its token check, the detected overlap writes a session Hide; whichever tab assigns last leaves
+the newer choice or that Hide, never the stale assignment. The token and channel message contain no
+amount, policy, or other private data. The no-JavaScript Settings POST still clears the cookie in its
+document response.
+
+Cookie precedence applies only after the server has resolved the masking policy. A failed policy
+read remains masked after hydration even if an older browser cookie says to show. The first render
+and hydration still use the root loader snapshot; no browser state is shared between server
+requests.
+
 ## Considered options
 
 **State in `app_setting` as well.** Coherent, and it matches the Tax tab exactly. Rejected because
 setting "start masked" on a phone would silently change the desktop at home, which is the wrong
 scope for a preference about where you are sitting.
 
-**Omit the amounts from the loader while masked.** A real strengthening. The figures would not be in
-the page at all. Rejected because unmasking then costs a round trip, which puts the network back in
-the path the client-side write exists to remove, and because it defends against an attacker who can
-already click the toggle.
+**Omit the amounts from every loader while masked.** A real strengthening — the figures would not be
+in the page at all. Rejected as the application-wide rule because unmasking then costs a round trip,
+which puts the network back in the path the client-side write exists to remove, and because it
+defends against an attacker who can already click the toggle. Holdings accepts that round trip for
+the correction case above: the alternative made a routine click disclose the exact values
+while the control still said they were hidden.
 
 **Blur the rendered text instead of replacing it.** Keeps typography and layout exactly. Rejected
 because blurred digits stay selectable, copyable and readable by a screen reader, and at the 32px

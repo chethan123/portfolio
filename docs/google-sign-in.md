@@ -118,9 +118,9 @@ that is unset or empty. Half-configured is not a state Compose lets by. It has o
 Beyond the client ID and secret from step 3:
 
 - **`PUBLIC_ORIGIN`** is the origin from [Before you start](#before-you-start), with no trailing
-  slash. This is the one gate setting Compose cannot catch. `.env.example` ships it pre-filled with
-  an example origin, so a copied file passes the `${VAR:?}` check unedited and the mistake surfaces
-  later, as Google's `redirect_uri_mismatch` page at sign-in. Edit it.
+  slash. `PUBLIC_ORIGIN` is the one gate setting Compose cannot catch. `.env.example` ships it
+  pre-filled with an example origin, so a copied file passes the `${VAR:?}` check unedited and the
+  mistake surfaces later, as Google's `redirect_uri_mismatch` page at sign-in. Edit it.
 - **`GATE_COOKIE_SECRET`** is the key the gate encrypts its session cookie with. It must decode to
   exactly 16, 24 or 32 bytes. The sidecar builds an AES cipher from it and refuses to start
   otherwise, naming `cookie_secret` in its log. Generate one with the command
@@ -130,9 +130,9 @@ Beyond the client ID and secret from step 3:
   openssl rand -base64 32 | tr -- '+/' '-_'
   ```
 
-  It is not a password anyone types and there is no reason to choose it yourself. Keep it. It is one
-  of the things a backup has to carry ([`operating.md`](operating.md#backups)), and rotating it signs
-  everyone out everywhere at once.
+  The secret is not a password anyone types and there is no reason to choose it yourself. Keep it.
+  The secret is one of the things a backup has to carry ([`operating.md`](operating.md#backups)),
+  and rotating it signs everyone out everywhere at once.
 
 > [`.env.example`](../.env.example) also states the shapes of these settings, beside the blanks they
 > fill. That duplication is deliberate. This file is read once, before an instance exists, and that
@@ -217,11 +217,11 @@ The restart is not what makes the address work, because the gate watches the fil
 single-file bind mount can stop following a file an editor replaces by rename, and the restart
 removes the doubt.
 
-**Removing one.** Delete their line and restart the gate the same way. That is genuine revocation.
-The address is re-checked on every request, so their next one is refused on every device they hold.
-[`operating.md`](operating.md#revocation-and-the-levers-you-have) has the detail: what that lever
-does, what rotating `GATE_COOKIE_SECRET` does instead, and why the sidecar's sign-out URL is worth
-less than it sounds.
+**Removing one.** Delete their line and restart the gate the same way. That deletion is genuine
+revocation. The address is re-checked on every request, so their next one is refused on every device
+they hold. [`operating.md`](operating.md#revocation-and-the-levers-you-have) has the detail: what
+that lever does, what rotating `GATE_COOKIE_SECRET` does instead, and why the sidecar's sign-out URL
+is worth less than it sounds.
 
 **Rotating the client secret.** Add a new secret to the existing OAuth client in the console, put it
 in `GATE_CLIENT_SECRET`, and bring the gate back up:

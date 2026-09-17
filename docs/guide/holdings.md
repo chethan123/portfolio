@@ -111,15 +111,15 @@ A dash is not a zero. A dash means the figure is not known: no price recorded, o
 recorded.
 
 **Annual dividend is the exception, and it never shows a dash.** A holding with no dividend rate on
-file reads `$0`, including one nobody can price, which shows a blank Value and `$0` in the same
-row. There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both
-are counted as nothing and the projection omits missing rates, including income and loan costs. It
-is incomplete rather than a guaranteed minimum for net income. A holding worth nothing has an
-amount and no percentage, since there is nothing to be a percentage of.
+file reads `$0`, including one nobody can price, which shows a blank Value and `$0` in the same row.
+There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both are
+counted as nothing and the projection omits missing rates, including income and loan costs. The
+projection is incomplete rather than a guaranteed minimum for net income. A holding worth nothing
+has an amount and no percentage, since there is nothing to be a percentage of.
 
-Something owed can show a negative figure. A loan whose note carries a rate reads as money going
-out rather than coming in, with the rate it is charged at underneath. That is the same two lines as
-any other row, with the other sign.
+Something owed can show a negative figure. A loan whose note carries a rate reads as money going out
+rather than coming in, with the rate it is charged at underneath. The row shows the same two lines
+as any other, with the other sign.
 
 This column added up, for the whole portfolio and split by tax treatment and by account, is the
 [Income](income.md) screen.
@@ -161,8 +161,15 @@ Both are explained in [prices.md](prices.md).
 A statement arrives quarterly and a position changes weekly. Rather than run the whole upload for
 "the 401k contribution added eleven units", correct the row here.
 
-**To do it:** click the pencil at the end of a row. The Quantity and Cost basis cells become
-boxes. Type, then **Save**. **Cancel** closes without writing.
+**To do it:** click the pencil at the end of a row. If amounts are showing, the Quantity and Cost
+basis cells become boxes. Type, then **Save**. **Cancel** closes without writing.
+
+If amounts are hidden, opening the row keeps every figure hidden and shows no boxes. Press **Show
+amounts** in the navigation to load the exact defaults and begin editing. Pressing **Hide amounts**
+while a correction is open removes the boxes here at once. Other open tabs hide too, at the latest
+when you return to them. A Show in another tab does not fetch exact defaults into this one in the
+background; press **Show amounts** here when you intend to load them. Save and Cancel both close the
+editor; the global amount setting stays as you left it.
 
 On a phone the row is already a card. The whole table reflows to one below 768px, the asset name
 as its heading and every other column a labelled line underneath. Open for correction, that gives

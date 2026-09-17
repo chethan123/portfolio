@@ -1,7 +1,7 @@
 // Step three's action pairs a posted answer with the string it answers by index (ingest brief §5, §7.5) — the hidden raw-N
-// field proves the index still means what it meant when drawn. Worth its own file: a mispairing is global and permanent
-// (point a string at the wrong instrument once, every future export resolves to it silently). Domain rules are
-// instrument-resolution.test.ts's.
+// field proves the index still means what it meant when drawn. Worth its own file: a mispairing reaches vocabulary with
+// the commit (point a string at the wrong instrument once, every future export resolves to it silently until repaired).
+// Domain rules are instrument-resolution.test.ts's; the audit's abandoned-draft case (QA-04) is here, at route level.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { action, loader } from "../../app/routes/upload/instruments.tsx";
@@ -70,25 +70,11 @@ describe("the stale-form guard", () => {
     withDatabase(async (ctx) => {
       const draftId = await stageDraft(ctx);
 
-      // Page drawn with VTI/VXUS both unresolved; another draft resolves VTI while it sits open — index 0 is now VXUS.
-      await resolveAll(
-        [
-          {
-            raw: "VTI",
-            fields: {
-              kind: "create",
-              symbol: "VTI",
-              name: "Vanguard Total Stock Market",
-              priceSource: "manual",
-              classificationId: "__new__",
-              newClassificationName: "US equity",
-              newClassificationAssetClass: "equity",
-            },
-          },
-        ],
-        // Manual: probe must never be reached; empty-map stub satisfies the required param.
-        { probe: async () => new Map() },
-      );
+      // Page drawn with VTI/VXUS both unresolved; another upload records VTI while it sits open — index 0 is now VXUS.
+      await ctx.seedInstrumentAlias({
+        instrument: await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" }),
+        rawString: "VTI",
+      });
 
       const outcome = await outcomeOf(() =>
         action(
@@ -108,7 +94,7 @@ describe("the stale-form guard", () => {
       });
 
       // The point of refusing wholesale — VXUS untouched, not resolved to VTI's answer.
-      expect(await unresolvedStrings(["VXUS"], ctx.db)).toEqual(["VXUS"]);
+      expect(await unresolvedStrings(["VXUS"], draftId, ctx.db)).toEqual(["VXUS"]);
     }),
   );
 
@@ -134,7 +120,7 @@ describe("the stale-form guard", () => {
 
       expect(destination).toBe(`/upload/${draftId}/review`);
       // Stored as the file wrote it, never the form round trip's spelling.
-      expect(await unresolvedStrings([raw], ctx.db)).toEqual([]);
+      expect(await unresolvedStrings([raw], draftId, ctx.db)).toEqual([]);
     }),
   );
 });
@@ -147,6 +133,7 @@ describe("a step with nothing left to ask", () => {
       const draftId = await stageDraft(ctx, ["Symbol,Quantity", "VTI,100"].join("\n"));
 
       await resolveAll(
+        draftId,
         [
           {
             raw: "VTI",
@@ -180,6 +167,43 @@ describe("a step with nothing left to ask", () => {
 
       expect(response).toBeInstanceOf(Response);
       expect((response as Response).status).toBe(404);
+    }),
+  );
+});
+
+describe("an upload abandoned after this step", () => {
+  it(
+    "teaches the next upload nothing: the same string is asked about again, not read as the old answer",
+    withDatabase(async (ctx) => {
+      // The audit's QAALIAS (docs/research/2026-09-13-product-qa-audit.md, QA-04): matched to VTI, then the upload is walked away from.
+      const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      const csv = ["Symbol,Quantity", "QAALIAS,1"].join("\n");
+      const abandoned = await stageDraft(ctx, csv);
+
+      const toReview = await redirectTo(() =>
+        action(
+          args(
+            post(`/upload/${abandoned}/instruments`, {
+              "raw-0": "QAALIAS",
+              "kind-0": "existing",
+              "instrumentId-0": vti.id,
+            }),
+            { draftId: abandoned },
+          ),
+        ),
+      );
+      expect(toReview).toBe(`/upload/${abandoned}/review`);
+
+      // Nothing recorded. The next upload of the same file meets QAALIAS as a first sighting again.
+      const next = await stageDraft(ctx, csv);
+      const screen = await loader(args(get(`/upload/${next}/instruments`), { draftId: next }));
+      expect(screen).not.toBeInstanceOf(Response);
+      expect((screen as Exclude<typeof screen, Response>).screen.unresolved.map((item) => item.raw)).toEqual([
+        "QAALIAS",
+      ]);
+
+      // Nothing became vocabulary: the answer stayed the abandoned draft's own.
+      expect(await ctx.db.selectFrom("instrument_alias").select("raw_string").execute()).toEqual([]);
     }),
   );
 });

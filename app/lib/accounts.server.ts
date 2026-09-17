@@ -2,9 +2,9 @@
 // (joint accounts not modelled — split into two); tax treatment is three-way, never boolean
 // (§4.5); nothing is deleted — closeAccount sets a date so history still values before it (§7).
 // What "closed" means for a figure is the views' rule (SQL, §8.2), not this module's.
+// withAccountLock is here because the row it locks is this module's (ARCHITECTURE.md §7.2).
 import { z } from "zod";
 
-import { withAccountWrite } from "./account-write.server.ts";
 import {
   ACCOUNT_KINDS,
   acceptsSetBalance,
@@ -14,7 +14,7 @@ import {
   taxTreatmentValues,
 } from "./account-options.ts";
 import { currentStatement } from "./current-statement.server.ts";
-import { getDb, type Database } from "./db.server.ts";
+import { getDb, inTransaction, type Database } from "./db.server.ts";
 import {
   NotFoundError,
   ValidationError,
@@ -131,6 +131,34 @@ export async function getAccount(
   return toAccount(row);
 }
 
+// A position set restates the whole account, so two writers copying the same latest set forward
+// each land a complete snapshot missing the other's edit (#283). Every writer that appends one,
+// and closeAccount, runs inside this: FOR NO KEY UPDATE on the account row, one transaction from
+// the read a writer decides on to its insert, so the later writer's read is the earlier's commit.
+// NO KEY, not FOR UPDATE: the stronger mode also blocks the FOR KEY SHARE an insert referencing
+// the account takes, stalling createDraft and any out-of-app insert behind a commit in flight.
+// Hands back the row it locked, read after any wait.
+// READ COMMITTED only: the re-read must see the writer ahead. Several accounts: lock ids in order.
+export async function withAccountLock<T>(
+  accountId: string,
+  db: Kysely<Database>,
+  body: (account: Account, trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  if (!/^\d+$/.test(accountId)) throw new NotFoundError(`No account with id ${accountId}.`);
+
+  const locked = async (trx: Kysely<Database>): Promise<T> => {
+    const row = await selectAccounts(trx)
+      .where("account.id", "=", accountId)
+      .forNoKeyUpdate("account")
+      .executeTakeFirst();
+    if (row === undefined) throw new NotFoundError(`No account with id ${accountId}.`);
+
+    return body(toAccount(row), trx);
+  };
+
+  return inTransaction(db, locked);
+}
+
 export async function createAccount(
   raw: unknown,
   db: Kysely<Database> = getDb(),
@@ -234,15 +262,16 @@ export type CloseAccountInput = {
 
 // Records a date, not a flag: contributes nothing to current net worth but still values every
 // date before closed_at. Acknowledgement is checked here (not left to the screen) since a
-// replayed POST must not close silently. Already-closed keeps the original date — checked
-// before the tick, so a second click can't move a boundary figures are computed against.
+// replayed POST must not close silently. Already-closed keeps the original date — checked under
+// the account lock, before the tick, so a second click can't move a boundary figures are computed
+// against. Its update would queue on that row lock by itself; inside withAccountLock the closing
+// instant is stamped after any in-flight writer commits, and every writer of the row has one rule.
 export async function closeAccount(
   id: string,
   raw: CloseAccountInput,
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
-  return withAccountWrite(id, db, async (trx) => {
-    const existing = await getAccount(id, trx);
+  return withAccountLock(id, db, async (existing, trx) => {
     if (existing.isClosed) return existing;
 
     if (raw.confirmClose !== "true") {

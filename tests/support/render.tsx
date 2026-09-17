@@ -5,7 +5,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { Outlet, createRoutesStub } from "react-router";
 
-import { Layout } from "../../app/root.tsx";
+import { Layout, links } from "../../app/root.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
 
@@ -16,6 +16,8 @@ export type RootData = {
   firstRun: FirstRunStep;
   /** Masked amounts (spec 0007). Optional: tests predating masking pass root data without it and must not flip to *masked* by default — `Layout` itself has no default. */
   masked?: boolean;
+  /** Test stubs represent a successful policy read unless a test explicitly supplies false. */
+  maskingResolved?: boolean;
   /** Household holds any passkey (ticket 06) — gates "Lock now" and its reentry guard. Optional for the same predates-the-feature reason as `masked`; `undefined` reads as no passkey, same as `Layout`. */
   hasPasskey?: boolean;
 };
@@ -50,7 +52,7 @@ export function renderRoute<T>(
     <Stub
       initialEntries={[path]}
       hydrationData={{
-        loaderData: { root: { masked }, page: loaderData },
+        loaderData: { root: { masked, maskingResolved: true }, page: loaderData },
         ...(actionData !== undefined ? { actionData: { page: actionData } } : {}),
       }}
     />,
@@ -68,10 +70,12 @@ export function renderThroughLayout(path: string, rootData: RootData): string {
     if (!message.startsWith(STUB_STYLESHEET_WARNING)) warnings.push(message);
   };
 
+  // `links` too: the stub feeds a route's `links` to `<Links />`, so the head is the real shell's.
   const Stub = createRoutesStub([
     {
       id: "root",
       path: "*",
+      links,
       Component: () => (
         <Layout>
           <p>page body</p>
@@ -82,7 +86,12 @@ export function renderThroughLayout(path: string, rootData: RootData): string {
 
   try {
     return renderToStaticMarkup(
-      <Stub initialEntries={[path]} hydrationData={{ loaderData: { root: rootData } }} />,
+      <Stub
+        initialEntries={[path]}
+        hydrationData={{
+          loaderData: { root: { maskingResolved: true, ...rootData } },
+        }}
+      />,
     );
   } finally {
     console.error = wasErroring;

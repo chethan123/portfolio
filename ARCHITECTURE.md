@@ -216,22 +216,22 @@ Each service is a decision rather than an accident:
   dials, so it is a `tmpfs`, sized at 1 MB, gone the moment the host is. `compose.yaml` carries the
   transcript for both.
 
-**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
-for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`, `/config`
-and `/data` for `caddy`. That is enforcement, not intention. It states that none of them writes to its
-own filesystem and that any can be destroyed and recreated freely. It holds for the gate because
-its sessions live in an encrypted cookie in the browser (a sidecar with a session database would need
-a volume, and this one does not have one), for `db` because all of its state is in the bound directory
-above, and for `worker` because the one thing it needs to write, its socket, lives on the volume
-mounted at `/run/price-worker`, not on the container's own root.
+**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes:
+`/tmp` for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`,
+`/config` and `/data` for `caddy`. That pairing is enforcement, not intention. It states that none
+of them writes to its own filesystem and that any can be destroyed and recreated freely. It holds
+for the gate because its sessions live in an encrypted cookie in the browser (a sidecar with a
+session database would need a volume, and this one does not have one), for `db` because all of its
+state is in the bound directory above, and for `worker` because the one thing it needs to write, its
+socket, lives on the volume mounted at `/run/price-worker`, not on the container's own root.
 
 Alongside it, on all seven: every Linux capability dropped and `no-new-privileges` set, an
 unprivileged uid pinned on six of them, and exactly two capabilities granted back. `gate` alone runs
 as root, which `compose.yaml` argues and `scripts/smoke-test.sh` asserts rather than leaves to
 drift. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
 operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, which is not there
-to bind anything. Binding 8080 needs no capability. It is granted because the image's binary carries
-that file capability and the kernel will not `exec` it from an empty bounding set.
+to bind anything. Binding 8080 needs no capability. It is granted because the image's binary
+carries that file capability and the kernel will not `exec` it from an empty bounding set.
 
 ### 3.2 Startup sequence
 
@@ -376,9 +376,9 @@ counts of the last decimal place. Nothing adds a money value except through `mon
 ### 4.2 Single-site invariants
 
 A recurring shape in this codebase: a hazard is contained by making exactly one place able to cause
-it. These are the ones worth knowing before changing anything, but they are not all the same kind of
-guarantee, and treating them as one kind is how a reader ends up disproving the table with a single
-grep. They come in three tiers.
+it. The invariants below are the ones worth knowing before changing anything, but they are not all
+the same kind of guarantee, and treating them as one kind is how a reader ends up disproving the
+table with a single grep. They come in three tiers.
 
 **Enforced by structure.** A second site is not reachable without deleting the first.
 
@@ -400,18 +400,20 @@ grep. They come in three tiers.
 | Everything read off a closed vocabulary: an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind, one for which kinds hold their whole position in one number and one for which run negative, are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data, because the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 | Settling the owner-filter reading: the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading`, what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it. For the chart's reads they name it to the module that makes them, which §6.3 sets out. Either way, whose money a loader reads stays visible in review rather than hidden inside this one. |
+| Resolving masking for one request | `app/lib/masking.server.ts:maskingForRequest` | Root and Holdings call this helper with React Router's request context, so parallel loaders share one deferred policy-and-cookie read and one fail-closed result. Nothing else calls `resolveMasked` while serving a screen. The `/masking` action reads the policy only to choose the cookie lifetime, and Settings reads it to draw and save the policy itself. |
+| Appending to an account's history, and closing the account | `app/lib/accounts.server.ts` | `withAccountLock` takes `select … for no key update` on the account row inside one transaction and hands the writer the row it locked. The obligation is on every writer that inserts a `position_set`, and on `closeAccount`: run inside it from the read decided on to the insert, and thread its transaction through every query on the way. A writer that reads the latest set outside it reintroduces #283 (§7.2). |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:125` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:132` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 | Whose money a screen is reading | The readers' own signatures, where the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons, both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip, since a new screen can pass `ALL_OWNERS` and draw no control. It can only make the filter **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:783` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:775` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -422,7 +424,7 @@ grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:460` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
   compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -487,6 +489,7 @@ sequenceDiagram
     L->>H: availableFilters / applyFilters / groupHoldings / summarise
     Note right of H: Pure functions over the array that<br/>already exists. Rows, groups and totals<br/>all come from it, so they cannot disagree.
     H-->>L: rows + groups + totals
+    L->>L: if masked, omit amount fields after all calculations
     L-->>B: SSR HTML (hydrates to client routing)
 ```
 
@@ -509,6 +512,38 @@ Three properties of this path are deliberate:
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
 
+Holdings is the one read path whose masked projection does not carry those decimal strings to the
+browser. `masking.server.ts` places one deferred policy-and-cookie resolution in React Router's
+per-request `RouterContextProvider`; the root and Holdings loaders obtain the same promise even when
+they start in parallel. The Holdings loader does every calculation against `ValuedHolding[]`, then
+replaces known amounts with omitted properties. Null remains null so an unknown figure stays a dash;
+direction and ratios are projected separately. The global masking fetcher revalidates route loaders
+after its action (React Router 7.18.2), so showing amounts obtains a fresh exact projection before
+correction inputs mount.
+
+The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
+publishes its synchronous write locally and sends one payload-free invalidation through the
+module's single `BroadcastChannel`; focus, visibility, and the next store snapshot are the fallback.
+A live tab receiving the invalidation rereads the cookie and adopts Hide immediately; an
+unsubscribed or unsignalled tab adopts it at one of those fallback points. Tabs do not adopt Show
+until their own intentional Show can revalidate a masked Holdings projection. Enhanced actions
+carry an explicit form marker and never repeat the client cookie write in a delayed response; an
+unmarked request remains the no-JavaScript server writer even where Fetch Metadata headers are
+absent. The enhanced toggle reconciles an unchanged choice to the freshly loaded policy's lifetime;
+a session cookie covers the request, a failed policy read leaves a session Hide, and unavailable
+token storage skips the lifetime repair. Display Settings uses the same split, plus an origin-local
+random intent token so success clears the override only if no later toggle won before the clear. A
+detected overlap during the clear writes a session Hide; the last assignment leaves either the
+newer choice or that Hide, never the stale clear. Its session-only bridge remains when root
+revalidation fails. Unavailable token storage preserves the cookie. Neither the channel nor the
+token contains private data.
+
+A successful policy resolution is an explicit root-loader field. When the policy read fails, that
+field keeps the browser masked even if a pre-existing cookie says to show. The hook's server
+snapshot remains the root loader value, so hydration has no module-global request state. During
+either transition the editor requires both unmasked state and an exact projection, keeping stale
+exact data or a placeholder out of form defaults.
+
 ### 4.5 Write paths
 
 Every operation that produces **history** appends: the position sets every figure is computed from,
@@ -518,16 +553,21 @@ rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
-| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes, a new set |
+| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` when still null | Yes, a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes, a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:528`) |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `upload_draft_answer` (the draft's own answer, never `instrument_alias`) | Yes, with one compensating delete: an instrument created for a string that vocabulary gained meanwhile, or that the same draft's earlier submit already answered, is removed rather than left as a duplicate |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No. The intraday tier is overwritten by design |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes. It fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
+The first three, the writers of history, run inside `withAccountLock` (§4.2, §7.2), and
+`closeAccount` with them; the rest touch no account's history.
+
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:161` edits an account and `:238` closes one, `people.server.ts:117`
-renames a person and `:138` deletes one outright when they own no accounts, `settings.server.ts:29`
+CRUD should: `accounts.server.ts:189` edits an account and `:268` closes one, `people.server.ts:117`
+renames a person and `:138` deletes one outright when they own no accounts,
+`instrument-aliases.server.ts`'s `changeAlias` repoints an alias in place or deletes it outright
+once a preview has been confirmed, `settings.server.ts:29`
 writes the tax rate, `column-mapping.server.ts:50` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
@@ -587,6 +627,8 @@ erDiagram
     PERSON ||--o{ ACCOUNT : "owns (single owner)"
     ACCOUNT ||--o{ POSITION_SET : "receives statements"
     ACCOUNT ||--o{ UPLOAD_DRAFT : "stages"
+    UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ANSWER : "answers"
+    INSTRUMENT ||--o{ UPLOAD_DRAFT_ANSWER : "answered as"
     POSITION_SET ||--o{ HOLDING : "photographs"
     INSTRUMENT ||--o{ HOLDING : "is held as"
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
@@ -685,6 +727,11 @@ erDiagram
         boolean had_first_sightings "nullable — the step strip's memory"
         timestamptz created_at "swept at 24h"
     }
+    UPLOAD_DRAFT_ANSWER {
+        bigint draft_id PK "composite with raw_string; on delete cascade"
+        text raw_string PK "collate C — byte-exact, as instrument_alias"
+        bigint instrument_id FK "on delete cascade"
+    }
     PASSKEY {
         text credential_id PK "exactly as the library returns it, never re-encoded"
         bytea public_key "the public half; the private half is never seen"
@@ -729,15 +776,20 @@ split is exact and each side is a decision:
 | `instrument_alias.instrument_id` → `instrument` | `CASCADE` | An alias is vocabulary about a row that no longer exists. |
 | `quote` / `price_daily` / `price_observation` / `price_backfill` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted, nor was its history ever fetched, which is why the backfill ledger cascades with the rest rather than standing outside the graph as `price_poll` does. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
+| `upload_draft_answer.draft_id` → `upload_draft` | `CASCADE` | An answer is the draft's own. A draft abandoned, swept or committed takes its answers with it; the commit has promoted the ones it needed first (issue #291). |
+| `upload_draft_answer.instrument_id` → `instrument` | `CASCADE` | As `instrument_alias`: an answer naming a gone instrument says nothing. |
 | `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it, which is how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
-hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
-performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
-instrument that lost an alias race (`instrument-resolution.server.ts:528`) are the only two
-application deletes reaching that half, there is no account delete and no position-set delete
-anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
-about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
+hand.** Above `unlock_grant`'s own row, the application deletes a referenced row only where that row
+is scaffolding or was never held: an `upload_draft`, at commit and at the sweep, taking its
+`upload_draft_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
+`removePerson`); a just-created, never-held instrument that lost the race for its string
+(`instrument-resolution.server.ts`'s `resolveAll`). There is no account delete and no position-set
+delete anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql`
+session, not about a screen. The alias a household forgets (`instrument-aliases.server.ts`'s
+`changeAlias`) is a leaf nothing references, so it cascades nothing and belongs with the in-place
+writes above. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
 both routinely: removing a passkey (`removePasskey`), the explicit "Lock
 now" control (`app/routes/lock-now.ts`, through `deleteGrant`), and the
 expired-grant sweep every grant mint runs first (`mintGrant`), each in
@@ -781,10 +833,14 @@ in `0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per accoun
 `created_at desc` then `id desc`. Re-uploading a correction for an as-of date that already has a set
 is a real occurrence; without the tie-break the answer is a coin flip. Surrogate keys are `bigint
 generated always as identity` precisely so that "tie-break by id descending" means "the later insert
-wins". A random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
-exactly, so this is an index scan stopping at the first row.
+wins". A random UUID would make it arbitrary. `created_at` is stamped by `statement_timestamp()` at
+the insert, not `now()` at `BEGIN` (`0014_position_set_created_at.sql`): a writer that waited for
+the account lock (§7.2) began its transaction before the set it then copies forward, and a
+`BEGIN`-time stamp would sort its set, the one carrying both edits, behind the one it waited for.
+The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping
+at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1131`) needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -834,6 +890,7 @@ anywhere.
 | `account_owner_id_idx` | `(owner_id)` | Grouping by person. |
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
+| `upload_draft_answer_instrument_id_idx` | `(instrument_id)` | The instrument cascade, as `instrument_alias_instrument_id_idx`; the answers themselves are reached through the primary key `(draft_id, raw_string)`. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at`, an index scan stopping at the first row, executed once per holding per plotted date. |
 | `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. |
@@ -942,23 +999,27 @@ flowchart TD
         R1["readCsv"] --> R2["parseStatement"] --> R3["assembleDiff<br/><i>folds AGAIN, by RESOLVED instrument</i>"] --> R4["commitUpload<br/>one transaction"]
     end
 
-    A[("instrument_alias")]
-    I4 -->|writes| A
-    A -->|"read back — never handed<br/>over in memory"| R3
+    DA[("upload_draft_answer<br/><i>this draft's answers</i>")]
+    A[("instrument_alias<br/><i>vocabulary</i>")]
+    I4 -->|writes| DA
+    DA -->|"read back — never handed<br/>over in memory"| R3
+    A -->|"read too — outranks<br/>the draft's answer"| R3
+    R4 -->|"promotes, for the strings<br/>the file names"| A
 
     classDef store fill:#f2efe6,stroke:#8a7a5c,color:#3b3222
-    class D,A store
+    class D,DA,A store
 ```
 
 **Nothing passes between steps in memory.** Each screen re-reads the draft's bytes, re-parses them
-through the saved mapping, and re-resolves against the alias table. `resolveAll` is not a stage that
-hands its output to the commit. It has one caller, the instruments route, and it communicates with
-the commit only by having written rows into `instrument_alias`. That is what makes a reload, the back
-button and a bookmarked half-finished upload all behave, and it is why the mapping records its own
-delimiter rather than letting a second sniff reach a different verdict.
+through the saved mapping, and re-resolves against vocabulary and the draft's own answers.
+`resolveAll` is not a stage that hands its output to the commit. It has one caller, the instruments
+route, and it communicates with the commit only by having written rows into `upload_draft_answer`.
+That is what makes a reload, the back button and a bookmarked half-finished upload all behave, and
+it is why the mapping records its own delimiter rather than letting a second sniff reach a different
+verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:486`) folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -1002,7 +1063,7 @@ stateDiagram-v2
     Columns --> Instruments: mapping saved, file raises<br/>a string no alias resolves
     Columns --> Review: mapping saved, every string known
 
-    Instruments --> Review: resolveAll() — aliases written NOW,<br/>not at commit
+    Instruments --> Review: resolveAll() — answers written on<br/>the draft; vocabulary waits for commit
 
     Review --> Columns: mapping no longer parses —<br/>DraftNotReadyError, resume where the answer is
     Review --> Instruments: a first sighting reappeared
@@ -1048,12 +1109,15 @@ The two sensitivities are chosen in opposite directions, deliberately:
 `NOT_IN_FILE` (`"__none__"`) is a sentinel distinct from the empty string: "unset" and "not in this
 file" are different answers, and only the deliberate one survives a save.
 
-#### Instrument resolution: vocabulary, remembered forever
+#### Instrument resolution: vocabulary, remembered once recorded
 
 Lookup against `instrument_alias` is **byte-exact**, which is `collate "C"` doing its job. No
 trimming, no case folding, no heuristics. A respelling is rightly a first sighting even when the
 instrument is old news, because a heuristic that "helpfully" merged two near-identical strings would
-attach a holding to the wrong fund silently. A miss prompts once and is remembered permanently.
+attach a holding to the wrong fund silently. A miss prompts once per draft; the answer is the
+draft's own (`upload_draft_answer`) until its statement is recorded, when the commit promotes it into
+`instrument_alias` ([ADR-0013](docs/adr/0013-a-first-sighting-answer-is-the-drafts-until-recorded.md)).
+Vocabulary wins over a draft's answer wherever both name a string.
 
 ```mermaid
 sequenceDiagram
@@ -1077,86 +1141,114 @@ sequenceDiagram
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end
     IR->>PG: BEGIN
+    IR->>PG: select upload_draft … for update — none? 404, the draft was swept
     IR->>PG: insert classification (new ones, deduped within the submit)
     IR->>PG: insert instrument
-    IR->>PG: insert instrument_alias — ON CONFLICT: existing row wins
-    Note right of IR: Lost the race? The instrument this<br/>submit just created is DELETED rather<br/>than left as a duplicate.
+    IR->>PG: select instrument_alias — vocabulary gained meanwhile wins
+    IR->>PG: insert upload_draft_answer — ON CONFLICT (this draft's own earlier submit): that row wins
+    Note right of IR: Lost either way? The instrument this<br/>submit just created is DELETED rather<br/>than left as a duplicate.
     IR->>PG: COMMIT
     IR-->>R: ResolvedAlias[]
     R-->>U: redirect → review
 ```
 
-**The writes happen at this step rather than at commit, deliberately.** An alias is a fact about
-vocabulary, not about this statement, so re-uploading a corrected file must not ask the same
-questions again. A draft abandoned after this step leaves the vocabulary behind, which is correct:
-the next upload is quieter, and nothing was recorded as held.
+**The instrument and classification rows are written at this step; the alias is not.** The answer
+lands on the draft, and `commitUpload` promotes it into vocabulary for the strings the recorded file
+names. Until then it is read by this draft alone, so a wrong match made in an upload nobody finished
+never resolves the next one silently (audit QA-04, issue #291). The cost is deliberate: a file
+corrected and re-uploaded *before* the first attempt was recorded asks its questions again. A
+created instrument does outlive an abandoned draft, unaliased and unheld, which is clutter rather
+than a wrong figure; Settings → Instruments is where a promoted alias is repointed or forgotten.
 
 There is deliberately **no skip**. A skipped row is a holding silently missing from the statement.
 
 #### Commit: the flow's one write
 
-`commitUpload` first finds the draft only to learn which account to lock. Its decisions begin after
-the transaction and account lock, from a fresh read of that draft. The order is the design:
+`commitUpload` is the deepest function in the codebase, three parameters over an entry check, the
+account lock, seven guards and a transaction. The order is the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> A1{"draft still there?"}
-    A1 -->|no| R0["404 — swept, or already committed"]
-    A1 -->|yes| T["BEGIN, or reuse caller transaction"]
-    T --> L["SELECT account<br/>FOR NO KEY UPDATE"]
-    L --> A2{"draft still there<br/>on locked re-read?"}
-    A2 -->|no| R0
-    A2 -->|yes| B{"account closed?"}
+    A["commitUpload(draftId, input)"] --> A0{"draft still there?<br/>(only to learn which account)"}
+    A0 -->|no| R0["404 — swept, or already committed"]
+    A0 -->|yes| T["BEGIN, lock the account row<br/>(withAccountLock, §7.2)"]
+    T --> A1{"draft still there,<br/>read under the account lock?"}
+    A1 -->|no| R0
+    A1 -->|yes| B{"account closed?"}
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
     C -->|yes| R2["refuse: stale or forged form"]
-    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, classify"]
-    D --> E{"file names two<br/>different accounts?"}
+    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, resolve the<br/>date, classify against ITS<br/>dated baseline (#181)"]
+    D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
+    D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
+    D1 -->|no| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
-    F -->|no| G{"file dated itself?"}
-    G -->|no| G1{"posted asOf a real,<br/>non-future date?"}
-    G1 -->|no| R5["refuse: the statement date"]
-    G -->|yes| H
-    G1 -->|yes| H
-    H{"quantity × basis, or<br/>quantity × price,<br/>overflows numeric(20,4)?"}
+    F -->|no| H{"quantity × basis, price or<br/>dividend rate overflows<br/>numeric(20,4)?"}
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
-    H -->|no| I{"majority removed and<br/>not confirmed?"}
-    I -->|yes| R7["refuse, stating the ratio"]
-    I -->|no| T1["DELETE the draft — first mutation"]
+    H -->|no| J{"posted baselineSetId ≠ the<br/>diff's; filed behind and<br/>unconfirmed; or majority removed<br/>and unconfirmed?"}
+    J -->|any| R7["refuse, naming every applicable<br/>reason — the stale-baseline sentence<br/>fires whenever the baseline moved and<br/>no unconfirmed filed-behind demand is<br/>left to subsume it (#181)"]
+    J -->|none| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
+    T0 --> T1["DELETE the draft"]
     T1 --> T2{"0 rows deleted?"}
-    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT"]
-    T2 -->|no| T3["INSERT position_set"]
+    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT, promotion included"]
+    T2 -->|no| T2b{"vocabulary for the file's strings,<br/>read FOR SHARE: any meaning differing<br/>from the diff's, or missing?"}
+    T2b -->|yes| R9["refuse: recorded, repointed or forgotten<br/>under the review; promotion rolled back"]
+    T2b -->|no| T3["INSERT position_set"]
     T3 --> T4["INSERT holdings"]
     T4 --> T5["UPDATE account.external_account_number<br/>only where still null"]
-    T5 --> T6["COMMIT, or return inside<br/>the caller's transaction"]
+    T5 --> T6["COMMIT"]
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9 refuse
 ```
 
-Three of those deserve emphasis:
+Five of those deserve emphasis:
 
-- **The as-of guard is easy to miss** and sits in the middle of the run. When the file dates itself,
-  that date is used; when it does not, the date the reader typed is validated here, not in
-  `parseStatement`, which never saw it.
+- **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the two-account and
+  account-number guards rather than between them. When the file dates itself, that date is used;
+  when it does not, the date the reader typed is validated here, not in `parseStatement`, which
+  never saw it. Resolving it first is what lets every guard after read the dated baseline the
+  commit will actually act on, and it is the one refusal in this diagram that is not a
+  `RefusedUpload`: no diff exists yet for a bad date to attach to.
+- **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
+  classifies against the latest set at or before the resolved date, not always "now"; `J` collects
+  every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
+  the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
+  majority removal — and throws once, naming every applicable one. The stale-baseline sentence
+  fires whenever the baseline moved and no unconfirmed filed-behind demand is left to subsume it —
+  reason 2 subsumes reason 1 whenever it applies, not only on an untouched first submission. Ticks
+  are irrelevant to it: an untouched first submit of a backdated, undated file also has its
+  baseline "move" between the loader's guess and the commit's own resolved date, and that is not
+  the reader's round trip to answer for (see §7.2's baseline-moving row).
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
-  together. Checking both multiplications before storing turns a site-wide outage into one sentence
+  together. Checking every multiplication before storing turns a site-wide outage into one sentence
   about one row.
-- **Delete-first as the transaction's first mutation.** The initial draft lookup only supplies the
-  account lock key. Once that lock is held, the draft is read again and all guards run; deletion then
-  leads the mutations. Zero rows deleted still aborts everything as a final defence, and no earlier
-  step wrote anything.
+- **Everything under the account lock, promotion then delete-first inside it.** The first draft
+  read only learns which account to lock; the draft is read again once the row is held, so a
+  concurrent commit of the same draft waits, finds the row gone, and gets its 404 before it has
+  decided anything. The promotion of the draft's answers comes first because the delete cascades
+  those rows away; the deletion then leads the rest of the writes, and `numDeletedRows === 0`
+  still aborts everything, the promotion included. No commit reaches that abort now, but
+  `createDraft`'s 24-hour sweep runs under no lock, so a day-old draft can still vanish between
+  the re-read and the delete.
+- **Vocabulary is re-read inside the transaction.** The diff resolved the file's strings before the
+  transaction opened. A string another upload recorded, or Settings repointed or forgot, in that
+  gap would land the holding under an instrument the alias no longer names, for the next re-upload
+  to diff away. So the commit re-reads `instrument_alias` for those strings, share-locked so a
+  repoint waits for it, and refuses with a sentence on any difference or absence, which rolls the
+  promotion back with the rest.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`commitUpload`, guarded by
-`where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
-itself on the first upload, and every later statement is checked against it.
+file carries one, the commit writes it onto the account (`uploads.server.ts:1086-1093`, guarded by
+`where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
+predicate stays as the write's own statement of the rule). The guard arms itself on the first upload,
+and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
@@ -1260,16 +1352,16 @@ refresh that ran and could not commit.
 
 The batch that follows is **one transaction per instrument**, not one for the batch: an attempt's
 closes and the `price_backfill` row describing them commit together or not at all, and nothing spans
-two attempts. That is deliberate, because a batch is a bounded sequence of independent fetches, and one
-unreachable instrument must not undo the four that already landed.
+two attempts. The per-instrument boundary is deliberate, because a batch is a bounded sequence of
+independent fetches, and one unreachable instrument must not undo the four that already landed.
 
 `price_backfill` is `price_poll`'s sibling and shares its argument, an attempt recorded whether or
 not it produced anything, so a silence can be read. Two
 things are its own: it references the instrument, because an attempt is about one, and it stores a
 named `outcome` and the provider's `error` text where `price_poll` stores only counts. That is what
 makes it the retry clock, since an instrument attempted in the last day is not a candidate and an
-unfillable gap costs one request a day rather than one every tick. It is also what lets Settings →
-Prices give a reason rather than a silence.
+unfillable gap costs one request a day rather than one every tick. Those two things also let
+Settings → Prices give a reason rather than a silence.
 
 **`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
 the same precedent that keeps every uploaded CSV in `position_set.raw_file`, an audit artifact that
@@ -1338,9 +1430,9 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 The interval itself is the household's refresh cadence (`app_setting.refresh_cadence_minutes`,
 edited at Settings → Prices). The timer is armed at the seeded 15 and each in-session tick re-reads
-the row, re-arming when the value moved. That is the entire propagation mechanism: no restart, no
-cross-process signal, and every process converges within one old cadence because every process's
-next tick reads the same row.
+the row, re-arming when the value moved. That re-read is the entire propagation mechanism: no
+restart, no cross-process signal, and every process converges within one old cadence because every
+process's next tick reads the same row.
 
 `/healthz` now reads this same slot for `pricing.scheduler` and `pricing.quotes` (spec
 price-health/03). The derivation itself lives in `price-health.ts`, and the loader only reads a
@@ -1371,8 +1463,8 @@ netWorthSessionSeries(owners, session)
 netWorthChange(owners, since) / firstRecordedDate(owners)
 
 // Account-scoped: already narrower than an owner, so they take no filter.
-accountTotal(id) / accountHoldings(id) / accountSeries(id, dates)
-accountSessionSeries(id, session) / accountFirstRecordedDate(id)
+accountTotal(id) / accountHoldings(id) / accountHoldingsAt(id, '2026-02-14')
+accountSeries(id, dates) / accountSessionSeries(id, session) / accountFirstRecordedDate(id)
 
 // Neither: facts about the feed and about the hand-typed prefix.
 latestObservedSession()        // which session 1D plots, off the observation log
@@ -1409,7 +1501,7 @@ before editing any of these. Four shapes, and they are not interchangeable:
 - `firstRecordedDate` narrows by subquery, because `position_set` carries `account_id` and no owner
   (DESIGN.md §4.2). That subquery spans **closed** accounts where the view excludes them, so a
   narrowed first-recorded date and a narrowed `currentHoldings` can disagree about which owners have
-  any history. That is deliberate, and the Overview's chart reach depends on it.
+  any history. The disagreement is deliberate, and the Overview's chart reach depends on it.
 
 The id guard is shared: `isOneOf` binds ids as one `bigint[]` behind a digits-and-length test, so an
 id past the type's range answers "no such row" in SQL rather than erroring inside Postgres.
@@ -1471,6 +1563,10 @@ separately rounded new value less the rounded value it replaced (spec 0016, meas
                  chart-series.server.ts
 ```
 
+`accountHoldingsAt` sits beside `accountHoldings` in the same module but is not a dashboard reader:
+its one caller is the upload flow's `assembleDiff` (`uploads.server.ts`), which classifies a
+statement against the account's holdings on its own date rather than today's (#181).
+
 **No dashboard writes its own join.** Filtering, grouping and subtotalling happen as pure functions
 over the array the query layer already returned, because the grouping key is already on every row:
 `holding_valued` was built to expose exactly the eight dimensions DESIGN.md §8.3 names. Three
@@ -1510,23 +1606,29 @@ more ceremony than the fact deserves.
 | The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL, so a correction can never file *behind* the statement it corrects |
 | The sign | **Derived, never typed.** The household types what they owe and the module negates it | **Refused if it flips in one edit.** Zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
 | Guards, in order | Account exists → kind accepts it → not closed → the seeded `USD` row exists → the current statement lists nothing but that row → fields parse | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
-| Atomicity | One transaction under the account write guard; one data-modifying CTE keeps the set and its row indivisible | The same guard; one data-modifying CTE keeps the set and copied rows indivisible |
+| Atomicity | One transaction under the account lock (§7.2), and inside it one statement, a data-modifying CTE, so the set and its row land together or not at all; the pre-check is repeated **inside** the write, and zero rows written is still a refusal | The same, asked of one position rather than of the whole statement |
 
 **Why one statement and not two.** A `position_set` that landed without its holdings would not read as
 a failed write. It would read as a *successful* one meaning "this account now holds nothing", and by
 the tie-break it would outrank every earlier statement. Both writers are therefore a single
 data-modifying CTE, so the set and its rows exist together or not at all.
 
-**Why the account row is locked before either reads.** `withAccountWrite` opens or reuses a
-transaction and takes `FOR NO KEY UPDATE` on the account. Corrections, balances, upload commits and
-closure all take that same lock, so a writer reads the latest committed snapshot only after every
-earlier writer has finished. `revisePosition` then carries that snapshot forward, which lets two
-overlapping corrections to different holdings both survive. The data-modifying CTEs retain their
-own membership checks and keep each position set inseparable from its holdings.
+**Why both writers take the account lock.** `currentPosition` and `currentStatement` run before the
+write so the form can refuse politely and name what is in the way, and until #283 those reads
+raced: two corrections to different rows each copied the same latest set forward, and whichever
+landed last restated the account without the other's edit. Every writer that appends a position
+set, and `closeAccount`, now runs inside `withAccountLock` (`accounts.server.ts:141-159`): `select
+… for no key update` on the account row, one transaction from the read the writer decides on to its
+insert, so the later writer's read is the earlier writer's commit. The in-write checks stay, because
+the data-modifying CTE is what makes the set and its rows one statement: `revisePosition`'s `source`
+CTE still requires the instrument be in the latest set (`positions.server.ts:234-262`) and
+`setBalance`'s `guard` CTE still requires that set to hold nothing but the cash row
+(`balances.server.ts:132-149`), and a write that selects nothing is still a refusal rather than a
+half-landed set.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
-change behind it, because `createDraft` (`uploads.server.ts:120`) reads only whether the account is
+change behind it, because `createDraft` (`uploads.server.ts:139`) reads only whether the account is
 closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1569,34 +1671,35 @@ an address is not a refusal.
 ### 7.2 Transactions and concurrency
 
 Single-instance deployment makes contention unlikely rather than impossible. A restart can overlap a
-still-shutting-down container, and a determined operator can run two.
+still-shutting-down container, a determined operator can run two, and two browser tabs are two
+requests on one process whatever the deployment, which is how #283 was reproduced.
 
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
 | Two refreshes anywhere, from a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's. The checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
-| Two commits of one draft | Serialized on the account lock; the second commit's locked re-read finds no draft. Delete-first remains the final defence: zero rows aborts | `uploads.server.ts` |
-| Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| Two current-state writes for one account | `withAccountWrite` holds `FOR NO KEY UPDATE` on the account through the latest-state read and mutation. Corrections merge into the preceding complete snapshot; uploads and balances append in lock order | `account-write.server.ts`; all three position-set writers |
-| A form posted against a position that moved | Once its account lock is acquired, `currentPosition` resolves the latest committed set; absence becomes an actionable refusal. The write's `source` CTE repeats the membership check and keeps the set plus copied holdings atomic | `positions.server.ts` |
-| A balance typed against a statement that changed under it | Once its account lock is acquired, `currentStatement` sees the preceding writer; non-cash holdings become an actionable refusal. Its CTE keeps the set plus cash holding atomic | `balances.server.ts` |
-| A position write landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | [`accounts.server.ts`](app/lib/accounts.server.ts); [#311](https://github.com/chethan123/portfolio/issues/311) |
-| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | [`accounts.server.ts`](app/lib/accounts.server.ts); [#312](https://github.com/chethan123/portfolio/issues/312) |
-| An account closes while a current-state write is in flight | Closure takes the same account lock. A writer ordered after it re-reads `closed_at` under the lock and refuses; no position history is appended to the closed account | `accounts.server.ts`; all three position-set writers |
-
-Same-date position sets remain ordered by `as_of_date`, then `created_at`, then `id` in
-`latest_position_set`. The `created_at` default is `statement_timestamp()`, evaluated by the insert
-after the account lock is acquired; this preserves serialized order when a caller passes a
-transaction that began before the writer ahead of it. `id` deterministically breaks timestamp ties.
+| Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; zero rows deleted still aborts everything, the promotion included, which only the unlocked 24-hour sweep can now cause | `uploads.server.ts` |
+| Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
+| Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
+| A string recorded, repointed or forgotten between the review's diff and the commit | The commit re-reads vocabulary for the file's strings inside its transaction, `for share`, and refuses on any difference or absence; the throw takes the promotion with it. The promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` |
+| A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
+| An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts:141-159`, taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
+| A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
+| A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
+| A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
+| A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:190`; [#311](https://github.com/chethan123/portfolio/issues/311) |
+| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:190`; [#312](https://github.com/chethan123/portfolio/issues/312) |
+| An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:268` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
 `7295380114023641` (migrations) and `…42` (poller). With a shared key the collision would be
 one-directional rather than mutual: the migration takes a blocking `pg_advisory_lock` and would queue
 behind a poll, while the poller takes `pg_try_advisory_lock` and would simply drop its tick.
 
-**Transactions and the test seam.** `prices.server.ts` and `instrument-resolution.server.ts` carry
-the same small helper, while `account-write.server.ts` includes the same branch around its lock:
+**`inTransaction` and the test seam.** One helper in `db.server.ts`, used by `prices.server.ts`,
+`instrument-resolution.server.ts` and `withAccountLock`:
 
 ```ts
 db.isTransaction ? body(db) : db.transaction().execute(body)
@@ -1654,11 +1757,11 @@ proxy is not saturated. None restarts a container on failure, and all three are 
 `docker compose ps`. `app`'s own now proves one hop none of the other two can: not "is `worker`
 accepting requests on its socket" (that's `worker`'s own check, run from inside its container, on the
 uid that owns the mount) but "can *this app process*, over its separate read-only mount, actually
-reach it". That is the hop `scripts/smoke-test.sh` proved only once, at deploy, before this. It is still a
-bounded, cached probe of the worker's listener alone: it says nothing about `egress-proxy` or Yahoo,
-and a transition can lag its five-second cache. `docs/operating.md`'s "Verify it actually worked" has
-the uncached, one-shot version of the same check, worth running by hand right after any change to the
-host's engine or container runtime.
+reach it". `scripts/smoke-test.sh` proved that hop only once, at deploy, before this. `app`'s check
+is still a bounded, cached probe of the worker's listener alone: it says nothing about
+`egress-proxy` or Yahoo, and a transition can lag its five-second cache. `docs/operating.md`'s
+"Verify it actually worked" has the uncached, one-shot version of the same check, worth running by
+hand right after any change to the host's engine or container runtime.
 
 ### 7.5 The provider seam
 
@@ -1740,6 +1843,7 @@ allowlist does.
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves. Google's registered redirect URI is that origin plus `/oauth2/callback` |
 | Upload bounds | Guarded twice. The whole body is counted as it streams: a declared `Content-Length` over the cap is refused before any read, and a chunked body is cut off at the cap. `File.size` is checked after |
+| Request body size | Capped at `caddy`, counted as read so a chunked body is capped too: 16 MiB on `/upload`, `/upload/` and `/upload.data`, 1 MiB on every other path. A browser declares an upload's size, so the app refuses an oversized file first, with its own sentence. Caddy's bare 413 reaches a person only if `MAX_UPLOAD_MB` is raised to 16 or more without raising the cap. Checked by `scripts/caddy-body-cap-test.sh` |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
 | Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field, or its backslash spelling, lands on `/`. Both resource routes (`masking`, `refresh`) use it |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status, and nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
@@ -1958,8 +2062,9 @@ no SQLite. (For the size of the suite, count it: `find tests -name '*.test.ts*'`
 in Postgres-specific SQL and in `numeric` handling, and both disappear under a substitute: a fake
 database would pass while the real one silently rounded money or resolved the wrong position set.
 
-Alongside the `vitest` suite there is exactly one other test: `scripts/smoke-test.sh`, run as its own
-CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and §8.1.
+Alongside the `vitest` suite there is one other test job: `scripts/smoke-test.sh`, which is the only
+coverage of the deployment claims in §3.1, §3.2 and §8.1. It also runs `scripts/caddy-body-cap-test.sh`,
+which checks the `Caddyfile`'s body caps against a stub upstream.
 
 ### 9.1 The three groups
 
@@ -1981,6 +2086,9 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 │  migrations.test.ts · numeric.test.ts                                    │
 │  They open their own pool because what they test IS the pool and the     │
 │  migration runner — the things withDatabase depends on.                  │
+│  lock · lock-schema · account-lock, and one price-backfill case: they    │
+│  commit (races on two connections, a real ledger write) and sweep        │
+│  their own rows, so the database is still left as found                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -2119,9 +2227,6 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **The transaction-or-reuse branch exists three times** — in `prices.server.ts`,
-  `instrument-resolution.server.ts` and `account-write.server.ts`. All three already import from
-  `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
@@ -2132,8 +2237,6 @@ still live in the current code:
 
 **Found while writing this document**, not from the review:
 
-- **Account and upload-draft route ids check decimal shape but not the `bigint` bound**, so an
-  oversized id reaches PostgreSQL as a 500 ([#310](https://github.com/chethan123/portfolio/issues/310)).
 - **`MAX_UPLOAD_MB` is not wired through `compose.yaml`**, so under the documented deployment the cap
   is permanently 10 MB whatever an operator puts in `.env` (§3.3).
 - **`statement.ts:15` imports a `.server` module as a value** (§4.3). It stays out of the client
@@ -2167,18 +2270,18 @@ still live in the current code:
 | `validate-config.ts` | The startup gate. It fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:257`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
 | `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host. The `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/`: domain (`.server`) and pure
 
 | File | Role |
 |---|---|
-| `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
-| `account-write.server.ts` | The transaction and account-row lock shared by position-set writers and account closure |
+| `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write |
-| `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
+| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write, run inside the account lock (§7.2) |
+| `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
+| `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill: its candidate query, its batch, its ledger, and the composition every refresh runs |
 | `price-provider.server.ts` | The provider interface, both methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
@@ -2189,9 +2292,9 @@ still live in the current code:
 | `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
-| `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
-| `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
-| `accounts.server.ts` | Accounts. Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
+| `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
+| `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
+| `accounts.server.ts` | Accounts, and `withAccountLock`, the row lock every position-set writer and `closeAccount` run inside (§7.2). Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading`, what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
@@ -2212,9 +2315,11 @@ still live in the current code:
 | `allocation.ts` | `allocationBy`, one grouper over any figure, filed under whichever dimension `holdings-view.ts` hands it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isScheduledQuoteWindow` and `isMarketOpen` (both optimisations) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
+| `raw-string.ts` | The one line-ending rule a raw instrument string needs when a form posts it back, browser-safe because the instruments step's action and the alias screen's rows both apply it |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
-| `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). `resolveMasked`, `resolveBrowserMasked` and the cookie builders are pure; the same client-bundle module also owns the browser store, `BroadcastChannel`, listeners and `localStorage` ordering tokens |
+| `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and fail-closed outcome |
 | `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request, attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
@@ -2234,12 +2339,13 @@ and resource routes last. `root.tsx` and `routes.ts` sit one level up and lead t
 everything below is drawn inside the first and listed by the second. The one stylesheet,
 `app/app.css`, belongs to this tree too: several component headers argue decisions, the chart's
 custom properties, `.panel-form`'s wrapping and the mobile card reflow, that are only enforceable
-there.
+there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 
 | File | Role |
 |---|---|
 | `../root.tsx` | The shell every page is drawn inside: the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its `middleware` export, last in the array, starts the price poller, because `react-router-serve` leaves no server entry to hook and the middleware pipeline is the one server path every *request* passes through, resource routes included; a loader would miss `/healthz`, which has no `default`/`ErrorBoundary` to run one for. Also where the lock's `middleware` export lives (`lockMiddleware`, docs/adr/0012), the first rule ever to fill the slot the gate's own middleware never did, refusing a request with no valid grant before `next()` is called, except for the two exempt paths (`/unlock`, `/healthz`). The same file still records, in the same place, that the gate's verified email rides in on every request and is read by nothing |
 | `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons: two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
+| `../fonts/` | Inter, self-hosted, subset to latin, with no third-party round trip to draw a household's finances (DESIGN.md §13.4). Under `app/` rather than `public/` so Vite hashes it into `/assets/`, the one mount served `immutable`; `app.css` names it by relative `url()` and `root.tsx` preloads the same import |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
 | `holdings.tsx` | Every position across every account, §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
 | `analysis.tsx` | The portfolio cut four ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All four breakdowns group one read, since four `GROUP BY` queries would be four more of the hand-rolled dashboard queries §8.2 names as the weakest point |
@@ -2248,7 +2354,7 @@ there.
 | `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader, because the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
 | `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
-| `upload/instruments.tsx` | Step three: resolve first sightings, each answered once and remembered forever. The flow's one early write: it records vocabulary, not the statement. Reached only on a miss; otherwise the loader redirects to review |
+| `upload/instruments.tsx` | Step three: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
 | `upload/review.tsx` | Step four: the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. Otherwise read-only: a wrong figure is fixed back on the columns step, because it is wrong in the mapping |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
 | `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
@@ -2256,13 +2362,14 @@ there.
 | `settings/people.tsx` | The household roster; every rule lives in `people.server.ts` |
 | `settings/accounts.tsx` | The account list and the add form. Editing and closing are their own screen, not row affordances |
 | `settings/account.tsx` | One account: correct it, or close it. Closing is a separate submission with its own acknowledgement, refused by the domain when the tick is missing. Nothing here deletes anything |
+| `settings/instruments.tsx` | The Instruments tab's alias half: every name a recorded statement taught the instance, the instrument each means, and a repoint or forget that always passes through a preview of what stays recorded. Every rule lives in `instrument-aliases.server.ts` |
 | `settings/tax.tsx` | The capital gains rate, a stored setting rather than an environment variable, because it is the household's number (`0005_app_setting.sql`) |
 | `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls, and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
 | `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control.** ADR-0002 records why that lives in the chrome |
 | `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here. This route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
 | `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript, since there is no progressive-enhancement path for a passkey check |
 | `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie, posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
-| `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
+| `masking.ts` | The masking toggle's no-JavaScript cookie writer and enhanced-form revalidation target, with an explicit form marker distinguishing the two; `lib/masking.ts` owns the cookie name, vocabulary, lifetime, cross-tab invalidation and intent ordering |
 | `refresh.ts` | The one way a person spends a provider request on demand, a resource route like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Those two alone decide the 200/503. Carries a `pricing` object beside them (spec 0021) which never changes that status: a live `worker` probe over the socket, and `scheduler`/`quotes`/`ok` read passively off the poller's own slot. Still never checks the provider, still never requires authentication (§7.4). A thin composer: `lib/health-response.ts` builds the body, `lib/price-health.ts` derives the categories |
 
@@ -2308,7 +2415,8 @@ also export pure helpers for testing.
 | `0010_price_backfill.sql` | `price_backfill`, one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
 | `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
-| `0013_account_write_order.sql` | The `position_set.created_at` insert-time default that keeps same-date latest-set order aligned with serialized account writes |
+| `0013_upload_draft_answer.sql` | `upload_draft_answer`, a draft's own answers to its first sightings, keyed like `instrument_alias` and scoped by draft. `commitUpload` promotes the rows the recorded file names into vocabulary, and the draft's delete cascades the rest away (ADR-0013) |
+| `0014_position_set_created_at.sql` | `position_set.created_at` defaults to `statement_timestamp()`, the insert, not `now()`, the `BEGIN`, so a writer that waited for the account lock still sorts after the set it copied (§7.2) |
 
 ### `public/`
 
@@ -2319,7 +2427,6 @@ Static files, served as-is, and all behind the gate like everything else.
 | `sw.js` | The whole service worker (§7.7, ADR-0007): network-only, stores nothing, exists for the inlined offline page. Deliberately hand-written and short enough to verify by eye |
 | `manifest.webmanifest` | The install manifest. Hand-written except the `icons` array, which `scripts/render-icons.ts` owns and rewrites. Its entries are `data:` URIs so installation works from behind the gate (§7.7) |
 | `icon.svg`, `icons/` | The drawing, and the committed rasterisations `render-icons.ts` produces from it |
-| `fonts/` | Inter, self-hosted, subset to latin, with no third-party round trip to draw a household's finances (DESIGN.md §13.4) |
 
 ### `scripts/`
 
@@ -2333,6 +2440,7 @@ recipe a human followed by hand, a defence that works until the day nobody has t
 | `render-icons.ts` | The committed PWA icons, rasterised from `public/icon.svg`, and the manifest's `data:`-URI `icons` array (§7.7). Committed rather than generated at build time so the artifacts change only when someone means them to |
 | `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference, so it cannot remove anything still reachable. Not a general garbage collector |
 | `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree, since otherwise every run would silently certify the last release |
+| `caddy-body-cap-test.sh` | The `Caddyfile`'s request body caps, run against a stub `app` and `gate` that read every byte, because the live stack redirects an unauthenticated POST before reading its body. Run by `smoke-test.sh` |
 
 ### `tests/support/`
 
@@ -2355,8 +2463,9 @@ where each piece lives.
 | **Position set** | One photograph of everything an account held on one date. The unit of ingest. Immutable |
 | **Holding** | One instrument within a position set: a signed quantity and an optional cost basis per share |
 | **Latest** | `max(as_of_date)` per account, tie-broken by `created_at desc, id desc`. Defined once in SQL, in `latest_position_set`; `uploadReceipt` restates the ordering to reach a set's *predecessor*, which the function cannot express |
-| **First sighting** | A raw instrument string with no `instrument_alias` row behind it. Asked about once, remembered forever |
-| **Alias** | A byte-exact raw string from a statement, mapped to an instrument. `collate "C"`, so no trimming and no case folding |
+| **First sighting** | A raw instrument string neither vocabulary nor the draft's own answers resolve. Asked about once per draft |
+| **Alias** | A byte-exact raw string from a recorded statement, mapped to an instrument. `collate "C"`, so no trimming and no case folding. Vocabulary: every upload reads it |
+| **Answer** | A draft's own resolution of a first sighting (`upload_draft_answer`), read by that draft alone. Promoted to an alias when the statement is recorded; gone with an abandoned draft |
 | **Fingerprint** | SHA-256 over a normalised header row. Order-sensitive, case-insensitive |
 | **Coverage** | `{ known, total }` beside every figure, so a partial answer is labelled partial rather than understated |
 | **Stale** | A price that exists and failed to refresh. Distinct from **unpriced**, which is a price that has never existed |
