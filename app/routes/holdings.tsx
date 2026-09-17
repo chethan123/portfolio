@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Form, Link, redirect } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
@@ -774,6 +775,10 @@ function Row({
   const open = editor.editing === key;
   const { errors, values } = editor;
   const masked = useMasked();
+  const [quantityErrorActive, setQuantityErrorActive] = useState(errors?.quantity !== undefined);
+  const [basisErrorActive, setBasisErrorActive] = useState(
+    errors?.costBasisPerShare !== undefined,
+  );
   const canEdit =
     open &&
     editor.amountsAvailable &&
@@ -787,7 +792,13 @@ function Row({
       ? []
       : (["form", "quantity", "costBasisPerShare"] as const)
           .map((field) => [field, errors[field]] as const)
-          .filter((entry): entry is readonly [(typeof entry)[0], string] => entry[1] !== undefined);
+          .filter(
+            (entry): entry is readonly [(typeof entry)[0], string] =>
+              entry[1] !== undefined &&
+              (entry[0] === "form" ||
+                (entry[0] === "quantity" && quantityErrorActive) ||
+                (entry[0] === "costBasisPerShare" && basisErrorActive)),
+          );
 
   // Typed value wins over stored, so a refusal never costs the entry.
   const typedQuantity =
@@ -837,18 +848,14 @@ function Row({
               inputMode="decimal"
               className="cell-input"
               aria-label={`Quantity of ${holding.instrumentName}`}
-              aria-invalid={errors?.quantity ? true : undefined}
-              aria-describedby={
-                errors?.quantity
-                  ? "revise-error-quantity revise-quantity-format revise-number-format"
-                  : "revise-quantity-format revise-number-format"
-              }
+              aria-describedby="revise-quantity-format revise-number-format"
               autoComplete="off"
               autoFocus
               compact
-              hasServerError={errors?.quantity !== undefined}
               noteId="revise-quantity-format"
+              onServerErrorActiveChange={setQuantityErrorActive}
               rule={signedQuantityRule("A quantity")}
+              serverErrorId={errors?.quantity ? "revise-error-quantity" : undefined}
               shape="quantity"
             />
           ) : (
@@ -874,17 +881,15 @@ function Row({
               // Column shows whole-position basis, this box per-share — stated in the label since they won't match.
               aria-label={`Cost basis per share of ${holding.instrumentName}`}
               placeholder="per share"
-              aria-invalid={errors?.costBasisPerShare ? true : undefined}
-              aria-describedby={
-                errors?.costBasisPerShare
-                  ? "revise-error-costBasisPerShare revise-cost-basis-format revise-number-format"
-                  : "revise-cost-basis-format revise-number-format"
-              }
+              aria-describedby="revise-cost-basis-format revise-number-format"
               autoComplete="off"
               compact
-              hasServerError={errors?.costBasisPerShare !== undefined}
               noteId="revise-cost-basis-format"
+              onServerErrorActiveChange={setBasisErrorActive}
               rule={perShareAmountRule("A cost basis")}
+              serverErrorId={
+                errors?.costBasisPerShare ? "revise-error-costBasisPerShare" : undefined
+              }
               shape="money"
             />
           ) : (

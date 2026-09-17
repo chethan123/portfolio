@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Form, Link, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
@@ -513,6 +514,7 @@ function SetBalance({
   // Typed value wins over the default, so a refusal never costs the entry.
   const typedAmount = values?.amount ?? "";
   const asOf = values?.asOf ?? today;
+  const [amountErrorActive, setAmountErrorActive] = useState(errors?.amount !== undefined);
 
   return (
     <section className="panel" id="set-balance">
@@ -572,19 +574,15 @@ function SetBalance({
             type="text"
             inputMode="decimal"
             placeholder="14,500.00"
-            aria-invalid={errors?.amount ? true : undefined}
-            aria-describedby={
-              errors?.amount
-                ? "set-balance-amount-error set-balance-amount-format"
-                : "set-balance-amount-format"
-            }
+            aria-describedby="set-balance-amount-format"
             autoComplete="off"
-            hasServerError={errors?.amount !== undefined}
             noteId="set-balance-amount-format"
+            onServerErrorActiveChange={setAmountErrorActive}
             rule={moneyMagnitudeRule("A balance")}
+            serverErrorId={errors?.amount ? "set-balance-amount-error" : undefined}
             shape="money"
           />
-          {errors?.amount ? (
+          {errors?.amount && amountErrorActive ? (
             <p id="set-balance-amount-error" className="field-error" role="alert">
               {errors.amount}
             </p>

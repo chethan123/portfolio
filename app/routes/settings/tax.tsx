@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Form } from "react-router";
 
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
@@ -39,6 +40,7 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
   const { capitalGainsRate } = loaderData;
   const error = actionData?.errors.capitalGainsRate;
+  const [errorActive, setErrorActive] = useState(error !== undefined);
 
   return (
     <>
@@ -75,20 +77,16 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
               defaultValue={
                 error ? (actionData?.values.capitalGainsRate ?? "") : rateDigits(capitalGainsRate)
               }
-              aria-invalid={error ? true : undefined}
-              aria-describedby={
-                error
-                  ? "capital-gains-rate-error capital-gains-rate-format capital-gains-rate-note"
-                  : "capital-gains-rate-format capital-gains-rate-note"
-              }
+              aria-describedby="capital-gains-rate-format capital-gains-rate-note"
               autoComplete="off"
-              hasServerError={error !== undefined}
               noteId="capital-gains-rate-format"
+              onServerErrorActiveChange={setErrorActive}
               rule={percentRateRule("A capital gains rate")}
+              serverErrorId={error ? "capital-gains-rate-error" : undefined}
               shape="percentage"
             />
 
-            {error ? (
+            {error && errorActive ? (
               <p id="capital-gains-rate-error" className="field-error" role="alert">
                 {error}
               </p>

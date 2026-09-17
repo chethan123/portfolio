@@ -9,9 +9,10 @@ import {
 
 type Props = Omit<ComponentProps<"input">, "onChange"> & {
   compact?: boolean;
-  hasServerError?: boolean;
   noteId: string;
+  onServerErrorActiveChange?: (active: boolean) => void;
   rule: DecimalInputRule;
+  serverErrorId?: string;
   shape: "money" | "quantity" | "percentage";
 };
 
@@ -33,9 +34,10 @@ export function clientRefusalIsLive({
 
 export function InterpretedNumberInput({
   compact = false,
-  hasServerError = false,
   noteId,
+  onServerErrorActiveChange,
   rule,
+  serverErrorId,
   shape,
   defaultValue,
   ...input
@@ -50,15 +52,23 @@ export function InterpretedNumberInput({
       : null;
   const invalidReason = parsed.kind === "invalid" ? parsed.reason : null;
   const invalid = typed.trim() !== "" && invalidReason !== null;
+  const serverErrorActive = serverErrorId !== undefined && typed === initial;
   const announceInvalid = clientRefusalIsLive({
     hydrated,
     invalid,
-    hasServerError,
-    matchesServerValue: typed === initial,
+    hasServerError: serverErrorId !== undefined,
+    matchesServerValue: serverErrorActive,
   });
+  const describedBy = [serverErrorActive ? serverErrorId : undefined, input["aria-describedby"]]
+    .filter((id) => id !== undefined && id !== "")
+    .join(" ");
 
   // Server render carries only fixed grammar; hydration adds punctuation normalization or a refusal.
   useEffect(() => setHydrated(true), []);
+  useEffect(
+    () => onServerErrorActiveChange?.(serverErrorActive),
+    [onServerErrorActiveChange, serverErrorActive],
+  );
 
   return (
     <span
@@ -66,8 +76,14 @@ export function InterpretedNumberInput({
     >
       <input
         {...input}
+        aria-describedby={describedBy || undefined}
+        aria-invalid={serverErrorActive || invalid ? true : undefined}
         defaultValue={defaultValue}
-        onChange={(event) => setTyped(event.currentTarget.value)}
+        onChange={(event) => {
+          const value = event.currentTarget.value;
+          setTyped(value);
+          onServerErrorActiveChange?.(serverErrorId !== undefined && value === initial);
+        }}
       />
       <span id={noteId} className="field-note">
         {compact ? null : DECIMAL_FORMAT_HINT}
