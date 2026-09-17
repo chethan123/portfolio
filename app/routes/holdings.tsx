@@ -18,7 +18,11 @@ import {
 } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
 import { formatShare } from "~/lib/allocation";
-import { DECIMAL_FORMAT_HINT } from "~/lib/decimal-input";
+import {
+  DECIMAL_FORMAT_HINT,
+  perShareAmountRule,
+  signedQuantityRule,
+} from "~/lib/decimal-input";
 import { joinWords } from "~/lib/format";
 import {
   DEFAULT_DIRECTION,
@@ -843,6 +847,7 @@ function Row({
               autoFocus
               compact
               noteId="revise-quantity-format"
+              rule={signedQuantityRule("A quantity")}
               shape="quantity"
             />
           ) : (
@@ -877,6 +882,7 @@ function Row({
               autoComplete="off"
               compact
               noteId="revise-cost-basis-format"
+              rule={perShareAmountRule("A cost basis")}
               shape="money"
             />
           ) : (

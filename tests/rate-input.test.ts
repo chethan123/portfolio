@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { ValidationError, parseInput, percentRate } from "~/lib/input.server";
+import { percentRateRule } from "~/lib/decimal-input";
 
 const rate = z.object({ rate: percentRate("A capital gains rate") });
 
@@ -57,6 +58,8 @@ describe("percentRate", () => {
     expect(refusal("12,345")).toMatch(/more than 100/);
     expect(refusal("100.000001")).toMatch(/more than 100/);
     expect(refusal("101")).toMatch(/more than 100/);
+    expect(refusal("150")).toMatch(/more than 100/);
+    expect(refusal("150")).toBe(percentRateRule("A capital gains rate").message("range"));
   });
 
   it("refuses a negative rate, however it was typed", () => {

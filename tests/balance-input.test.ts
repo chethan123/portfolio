@@ -9,6 +9,7 @@ import {
   parseInput,
   recordedDate,
 } from "~/lib/input.server";
+import { moneyMagnitudeRule } from "~/lib/decimal-input";
 import { z } from "zod";
 
 const amount = z.object({ amount: moneyMagnitude("A balance") });
@@ -53,11 +54,14 @@ describe("moneyMagnitude", () => {
     ["$ 14 500.00", "14500.00"],
     ["+14500.00", "14500.00"],
     ["1 000", "1000"],
+    ["1\t000", "1000"],
     ["5.", "5"],
     ["+5", "5"],
-    // A copy out of a rendered statement brings a non-breaking space with it.
+    // Copies from HTML, locale output and tabular PDFs bring several whitespace separators.
     ["$14 500.00", "14500.00"],
     ["14 500.00", "14500.00"],
+    ["14 500.00", "14500.00"],
+    ["14 500.00", "14500.00"],
   ])("reads %o as the same amount", (typed, stored) => {
     expect(parseInput(amount, { amount: typed }).amount).toBe(stored);
   });
@@ -86,6 +90,13 @@ describe("moneyMagnitude", () => {
     expect(parseInput(amount, { amount: "0.5" }).amount).toBe("0.5");
   });
 
+  it.each(["1\n234", "1\r234", "1 234", "1 234"])(
+    "refuses a line terminator in %o",
+    (typed) => {
+      expect(refusal(amount, { amount: typed }, "amount")).toMatch(/must be an amount/);
+    },
+  );
+
   it("keeps a trailing zero a float round trip would destroy", () => {
     // Number("14500.10").toString() is "14500.1" — scale lost though the value's unchanged.
     expect(parseInput(amount, { amount: "14500.10" }).amount).toBe("14500.10");
@@ -102,6 +113,9 @@ describe("moneyMagnitude", () => {
     expect(refusal(amount, { amount: "-14500" }, "amount")).toMatch(/without a minus sign/);
     expect(refusal(amount, { amount: "−14500" }, "amount")).toMatch(/without a minus sign/);
     expect(refusal(amount, { amount: "-$1,234" }, "amount")).toMatch(/without a minus sign/);
+    expect(refusal(amount, { amount: "-5" }, "amount")).toBe(
+      moneyMagnitudeRule("A balance").message("sign"),
+    );
   });
 
   it("refuses what is not an amount", () => {

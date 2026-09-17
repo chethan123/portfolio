@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
+import {
+  moneyMagnitudeRule,
+  parseDecimalInput,
+  perShareAmountRule,
+  percentRateRule,
+  signedQuantityRule,
+} from "~/lib/decimal-input";
 
 import { renderRoute } from "./support/render.tsx";
 
@@ -16,6 +23,13 @@ function Preview({
       name="figure"
       defaultValue={value}
       noteId="figure-note"
+      rule={
+        shape === "money"
+          ? moneyMagnitudeRule("A balance")
+          : shape === "quantity"
+            ? signedQuantityRule("A quantity")
+            : percentRateRule("A capital gains rate")
+      }
       shape={shape}
     />
   );
@@ -25,6 +39,22 @@ const render = (value: string, shape: "money" | "quantity" | "percentage", maske
   renderRoute(() => <Preview value={value} shape={shape} />, "/", {}, { masked });
 
 describe("the interpreted-number note", () => {
+  it.each([
+    ["balance sign", "-5", moneyMagnitudeRule("A balance"), "sign"],
+    ["balance size", "1234567890123", moneyMagnitudeRule("A balance"), "size"],
+    ["cost basis scale", "92.41599", perShareAmountRule("A cost basis"), "scale"],
+    ["rate range", "150", percentRateRule("A capital gains rate"), "range"],
+  ] as const)("refuses %s before it can be presented as interpreted", (_case, typed, rule, reason) => {
+    expect(parseDecimalInput(typed, rule.options)).toEqual({ kind: "invalid", reason });
+  });
+
+  it("keeps signed quantities valid in the preview rule", () => {
+    expect(parseDecimalInput("−1,234.5", signedQuantityRule("A quantity").options)).toEqual({
+      kind: "decimal",
+      value: "-1234.5",
+    });
+  });
+
   it("server-renders the complete interpretation rule without a stale exact echo", () => {
     const money = render("$1,234.5600", "money");
     const quantity = render("−12 345.67000000", "quantity");

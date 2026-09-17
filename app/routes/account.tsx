@@ -4,6 +4,7 @@ import { Amount } from "~/components/amount";
 import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
+import { moneyMagnitudeRule } from "~/lib/decimal-input";
 import {
   AccountBalanceIcon,
   EditIcon,
@@ -579,6 +580,7 @@ function SetBalance({
             }
             autoComplete="off"
             noteId="set-balance-amount-format"
+            rule={moneyMagnitudeRule("A balance")}
             shape="money"
           />
           {errors?.amount ? (

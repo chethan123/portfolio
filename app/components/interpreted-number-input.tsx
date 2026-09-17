@@ -1,17 +1,23 @@
 import { useEffect, useState, type ComponentProps } from "react";
 
 import { Amount } from "~/components/amount";
-import { DECIMAL_FORMAT_HINT, parseDecimalInput } from "~/lib/decimal-input";
+import {
+  DECIMAL_FORMAT_HINT,
+  parseDecimalInput,
+  type DecimalInputRule,
+} from "~/lib/decimal-input";
 
 type Props = Omit<ComponentProps<"input">, "onChange"> & {
   compact?: boolean;
   noteId: string;
+  rule: DecimalInputRule;
   shape: "money" | "quantity" | "percentage";
 };
 
 export function InterpretedNumberInput({
   compact = false,
   noteId,
+  rule,
   shape,
   defaultValue,
   ...input
@@ -19,9 +25,9 @@ export function InterpretedNumberInput({
   const initial = typeof defaultValue === "string" ? defaultValue : "";
   const [hydrated, setHydrated] = useState(false);
   const [typed, setTyped] = useState(initial);
-  const parsed = parseDecimalInput(typed, { allowTrailingPercent: shape === "percentage" });
+  const parsed = parseDecimalInput(typed, rule.options);
   const interpreted =
-    hydrated && parsed.kind === "decimal" && /^-?\d+(\.\d+)?$/.test(parsed.value)
+    hydrated && parsed.kind === "decimal" && parsed.value !== ""
       ? parsed.value
       : null;
   const invalid = hydrated && typed.trim() !== "" && parsed.kind === "invalid";
@@ -38,11 +44,17 @@ export function InterpretedNumberInput({
         defaultValue={defaultValue}
         onChange={(event) => setTyped(event.currentTarget.value)}
       />
-      <span id={noteId} className="field-note" aria-live="polite">
+      <span id={noteId} className="field-note">
         {compact ? null : DECIMAL_FORMAT_HINT}
-        {invalid ? (
-          <>{compact ? null : " "}This number format is ambiguous or invalid.</>
-        ) : interpreted === null ? null : (
+        <span aria-live="polite">
+          {invalid ? (
+            <>
+              {compact ? null : " "}
+              {rule.message(parsed.reason)}
+            </>
+          ) : null}
+        </span>
+        {invalid || interpreted === null ? null : (
           <>
             {compact ? null : " "}Number format reads as{" "}
             <b className="u-data">

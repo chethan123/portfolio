@@ -1,6 +1,7 @@
 import { Form } from "react-router";
 
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
+import { percentRateRule } from "~/lib/decimal-input";
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import { rateDigits } from "~/lib/allocation";
 import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
@@ -82,6 +83,7 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
               }
               autoComplete="off"
               noteId="capital-gains-rate-format"
+              rule={percentRateRule("A capital gains rate")}
               shape="percentage"
             />
 
