@@ -166,11 +166,10 @@ basis cells become boxes. Type, then **Save**. **Cancel** closes without writing
 
 If amounts are hidden, opening the row keeps every figure hidden and shows no boxes. Press **Show
 amounts** in the navigation to load the exact defaults and begin editing. Pressing **Hide amounts**
-while a correction is open removes the boxes immediately in other live tabs that receive the
-browser notification. A tab that was between screens or missed that notification adopts Hide when
-it next renders amounts, regains focus or becomes visible. A Show in another tab does not fetch
-exact defaults into this one in the background; press **Show amounts** here when you intend to load
-them. Save and Cancel both close the editor; the global amount setting stays as you left it.
+while a correction is open removes the boxes here at once. Other open tabs hide too, at the latest
+when you return to them. A Show in another tab does not fetch exact defaults into this one in the
+background; press **Show amounts** here when you intend to load them. Save and Cancel both close the
+editor; the global amount setting stays as you left it.
 
 On a phone the row is already a card. The whole table reflows to one below 768px, the asset name
 as its heading and every other column a labelled line underneath. Open for correction, that gives

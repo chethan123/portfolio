@@ -3,6 +3,8 @@
  *
  * Requires a running production build and the same seeded fixture as
  * masked-correction-toggle-race.mjs. No financial value crosses the tab notification channel.
+ * Use a loopback PORTFOLIO_URL: scenario F relies on Chromium's secure-cookie loopback exemption.
+ * Run against a disposable fixture; scenario F temporarily locks the instance for every browser.
  */
 import assert from "node:assert/strict";
 
@@ -81,12 +83,76 @@ try {
   await settingsFlowPage.getByRole("button", { name: "Save", exact: true }).click();
   await settingsFlowPage.getByText("Choose a masking policy.", { exact: true }).waitFor();
   const refusedSettingsCookie = await maskingCookie(settingsFlow);
+  assert.equal(refusedSettingsCookie, "1", "A refused Display save must preserve the Hide cookie.");
 
   await settingsFlowPage.getByRole("radio", { name: /Showing amounts/ }).check();
   await settingsFlowPage.getByRole("button", { name: "Save", exact: true }).click();
   await settingsFlowPage.waitForFunction(() => !document.cookie.includes("masked="));
   const successfulSettingsCookie = await maskingCookie(settingsFlow);
+  assert.equal(
+    successfulSettingsCookie,
+    undefined,
+    "A successful Display save with no newer intent must reset the browser override.",
+  );
   await settingsFlow.close();
+  await pool.query("update app_setting set masking_policy = 'masked'");
+
+  // A tab can submit with an old as-last-left policy after another tab saved a fixed policy. Its
+  // optimistic Show remains session-only once the toggle revalidation returns the fresh policy.
+  await pool.query("update app_setting set masking_policy = 'as_last_left'");
+  const lifetime = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await lifetime.addCookies([{ name: "masked", value: "1", url: base }]);
+  const stalePolicy = await lifetime.newPage();
+  const policyEditor = await lifetime.newPage();
+  await stalePolicy.goto(`${base}${path}`, { waitUntil: "networkidle" });
+  await policyEditor.goto(`${base}/settings/display`, { waitUntil: "networkidle" });
+  const fixedPolicySaved = policyEditor.waitForResponse(
+    (response) =>
+      response.url().includes("/settings/display.data") &&
+      response.request().method() === "POST",
+  );
+  await policyEditor.getByRole("radio", { name: /Masked —/ }).check();
+  await policyEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await fixedPolicySaved;
+  await policyEditor.waitForLoadState("networkidle");
+  await stalePolicy.getByRole("button", { name: "Show amounts", exact: true }).first().click();
+  await stalePolicy.locator(inputs).first().waitFor();
+  await stalePolicy.waitForLoadState("networkidle");
+  const reconciledCookie = (await lifetime.cookies(base)).find(({ name }) => name === "masked");
+  assert.equal(reconciledCookie?.value, "0");
+  assert.equal(
+    reconciledCookie?.expires,
+    -1,
+    "A stale tab's Show must adopt the fresh fixed policy's session lifetime.",
+  );
+  await lifetime.close();
+  await pool.query("update app_setting set masking_policy = 'masked'");
+
+  // The policy bridge has one revalidation to cover and never receives the saved policy's lifetime.
+  await pool.query("update app_setting set masking_policy = 'unmasked'");
+  const bridge = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await bridge.addCookies([{ name: "masked", value: "0", url: base }]);
+  const bridgePage = await bridge.newPage();
+  await bridgePage.goto(`${base}/settings/display`, { waitUntil: "networkidle" });
+  const bridgeCaptured = deferred();
+  const bridgeRelease = deferred();
+  let displayGets = 0;
+  await bridgePage.route("**/settings/display.data*", async (route) => {
+    if (route.request().method() === "GET" && ++displayGets === 2) {
+      bridgeCaptured.resolve();
+      await waitForBarrier(bridgeRelease, "the Settings bridge revalidation release");
+    }
+    await route.continue();
+  });
+  await bridgePage.getByRole("radio", { name: /However it was last left/ }).check();
+  await bridgePage.getByRole("button", { name: "Save", exact: true }).click();
+  await waitForBarrier(bridgeCaptured, "the Settings bridge revalidation");
+  const bridgeCookie = (await bridge.cookies(base)).find(({ name }) => name === "masked");
+  assert.equal(bridgeCookie?.value, "1");
+  assert.equal(bridgeCookie?.expires, -1, "The temporary Settings bridge must be session-only.");
+  bridgeRelease.resolve();
+  await bridgePage.waitForLoadState("networkidle");
+  await bridge.close();
   await pool.query("update app_setting set masking_policy = 'masked'");
 
   // Show in a sibling tab cannot fill a projection that deliberately omitted exact values. The
@@ -99,11 +165,19 @@ try {
   await stayGated.goto(`${base}${path}`, { waitUntil: "networkidle" });
   await showHere.getByRole("button", { name: "Show amounts", exact: true }).first().click();
   await showHere.locator(inputs).first().waitFor();
+  await stayGated.waitForLoadState("networkidle");
+  await stayGated.waitForTimeout(250);
+  await stayGated.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
   const siblingShowInputs = await stayGated.locator(inputs).count();
   const siblingShowLabel = await buttonLabel(stayGated);
+  assert.equal(siblingShowInputs, 0, "Show in another tab must not reveal a redacted projection.");
+  assert.equal(siblingShowLabel, "Show amounts", "The redacted tab must retain its local Show gate.");
   await stayGated.getByRole("button", { name: "Show amounts", exact: true }).first().click();
   await stayGated.locator(inputs).first().waitFor();
   const localShowInputs = await stayGated.locator(inputs).count();
+  assert.equal(localShowInputs, 2, "Show in that tab must fetch and mount the exact editor inputs.");
   await showScope.close();
 
   // One tab hides while another still has exact correction inputs mounted.
@@ -137,6 +211,8 @@ try {
 
   const remainingInputs = await editor.locator(inputs).count();
   const editorLabel = await buttonLabel(editor);
+  assert.equal(remainingInputs, 0, "Hide in one tab must remove exact inputs from every open tab.");
+  assert.equal(editorLabel, "Show amounts", "Every open tab must reflect the shared Hide cookie.");
   await shared.close();
 
   // A fetcher Show response from one tab must not overwrite a newer direct Hide cookie from another.
@@ -185,11 +261,18 @@ try {
   const showResponse = await showActionFinished;
   const showHeaders = await showResponse.allHeaders();
   showSetCookie = showHeaders["set-cookie"] === undefined ? "absent" : "present";
+  assert.equal(showSetCookie, "absent", "An enhanced toggle response must not set a cookie.");
   await showLoaderFinished;
   await showing.waitForLoadState("networkidle");
   await showing.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   const finalCookie = await maskingCookie(delayed);
   const reopenedInputs = await showing.locator(inputs).count();
+  assert.equal(
+    finalCookie,
+    "1",
+    "An older fetcher Show response must not overwrite a newer Hide from another tab.",
+  );
+  assert.equal(reopenedInputs, 0, "An older Show response must not remount exact inputs.");
   await delayed.close();
 
   // Display settings is another cookie writer. An older policy save must not clear a newer Hide.
@@ -235,11 +318,81 @@ try {
   const settingsHeaders = await settingsResponse.allHeaders();
   const settingsSetCookie =
     settingsHeaders["set-cookie"] === undefined ? "absent" : "present";
+  assert.equal(settingsSetCookie, "absent", "An enhanced Display response must not set a cookie.");
   await settings.waitForLoadState("networkidle");
   const settingsFinalCookie = await maskingCookie(settingsRace);
   await settingsEditor.reload({ waitUntil: "networkidle" });
   const settingsReopenedInputs = await settingsEditor.locator(inputs).count();
+  assert.equal(
+    settingsFinalCookie,
+    "1",
+    "An older Display save must not clear a newer Hide from another tab.",
+  );
+  assert.equal(settingsReopenedInputs, 0, "Reloading after an older Display save must remain masked.");
   await settingsRace.close();
+  await pool.query("update app_setting set masking_policy = 'masked'");
+
+  // If storage cannot carry an ordering token, a successful save preserves the existing Hide.
+  const unavailable = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await unavailable.addCookies([{ name: "masked", value: "1", url: base }]);
+  await unavailable.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      get() {
+        throw new DOMException("Disabled", "SecurityError");
+      },
+    });
+  });
+  const unavailablePage = await unavailable.newPage();
+  await unavailablePage.goto(`${base}/settings/display`, { waitUntil: "networkidle" });
+  const unavailableResponse = unavailablePage.waitForResponse(
+    (response) =>
+      response.url().includes("/settings/display.data") &&
+      response.request().method() === "POST",
+  );
+  await unavailablePage.getByRole("radio", { name: /Showing amounts/ }).check();
+  await unavailablePage.getByRole("button", { name: "Save", exact: true }).click();
+  await unavailableResponse;
+  await unavailablePage.waitForLoadState("networkidle");
+  assert.equal(await maskingCookie(unavailable), "1");
+  await unavailablePage.goto(`${base}${path}`, { waitUntil: "networkidle" });
+  assert.equal(await unavailablePage.locator(inputs).count(), 0);
+  await unavailable.close();
+  await pool.query("update app_setting set masking_policy = 'masked'");
+
+  // A Show followed by Hide has the bridge's original value again; the intent token distinguishes it.
+  const aba = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await aba.addCookies([{ name: "masked", value: "1", url: base }]);
+  const abaSettings = await aba.newPage();
+  const abaEditor = await aba.newPage();
+  await abaSettings.goto(`${base}/settings/display`, { waitUntil: "networkidle" });
+  await abaEditor.goto(`${base}${path}`, { waitUntil: "networkidle" });
+  const abaCaptured = deferred();
+  const abaRelease = deferred();
+  await abaSettings.route("**/settings/display.data*", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    abaCaptured.resolve();
+    await waitForBarrier(abaRelease, "the ABA Display request release");
+    await route.continue();
+  });
+  await abaSettings.getByRole("radio", { name: /Showing amounts/ }).check();
+  await abaSettings.getByRole("button", { name: "Save", exact: true }).click();
+  await waitForBarrier(abaCaptured, "the delayed ABA Display action request");
+  await abaEditor.getByRole("button", { name: "Show amounts", exact: true }).first().click();
+  await abaEditor.locator(inputs).first().waitFor();
+  await abaEditor.getByRole("button", { name: "Hide amounts", exact: true }).first().click();
+  await abaEditor.locator(inputs).first().waitFor({ state: "detached" });
+  const abaFinished = abaSettings.waitForResponse(
+    (response) =>
+      response.url().includes("/settings/display.data") &&
+      response.request().method() === "POST",
+  );
+  abaRelease.resolve();
+  await abaFinished;
+  await abaSettings.waitForLoadState("networkidle");
+  assert.equal(await maskingCookie(aba), "1");
+  await abaEditor.reload({ waitUntil: "networkidle" });
+  assert.equal(await abaEditor.locator(inputs).count(), 0);
+  await aba.close();
   await pool.query("update app_setting set masking_policy = 'masked'");
 
   // `/unlock` is a real shell state with no Amount or MaskingToggle subscribers. Preserve this
@@ -309,6 +462,12 @@ try {
     () => window.__maskingExactObserved,
   );
   const labelAfterRemount = await buttonLabel(remounting);
+  assert.ok(
+    amountAfterRemount?.includes("••••••"),
+    "A remounted Amount must adopt a Hide that arrived while the tab had no subscribers.",
+  );
+  assert.equal(exactPaintedAfterRemount, false, "The remount must not paint the cached exact value.");
+  assert.equal(labelAfterRemount, "Show amounts");
   await lifecycle.close();
   await pool.query("delete from passkey where credential_id = $1", [lifecyclePasskey]);
 
@@ -331,45 +490,16 @@ try {
     `Subscriber remount: exact before ${JSON.stringify(exactBeforeUnmount)}; after ${JSON.stringify(amountAfterRemount)}; exact mutation ${exactPaintedAfterRemount}; control ${JSON.stringify(labelAfterRemount)}.`,
   );
 
-  assert.equal(remainingInputs, 0, "Hide in one tab must remove exact inputs from every open tab.");
-  assert.equal(refusedSettingsCookie, "1", "A refused Display save must preserve the Hide cookie.");
-  assert.equal(
-    successfulSettingsCookie,
-    undefined,
-    "A successful Display save with no newer intent must reset the browser override.",
-  );
-  assert.equal(siblingShowInputs, 0, "Show in another tab must not reveal a redacted projection.");
-  assert.equal(siblingShowLabel, "Show amounts", "The redacted tab must retain its local Show gate.");
-  assert.equal(localShowInputs, 2, "Show in that tab must fetch and mount the exact editor inputs.");
-  assert.equal(editorLabel, "Show amounts", "Every open tab must reflect the shared Hide cookie.");
-  assert.equal(
-    finalCookie,
-    "1",
-    "An older fetcher Show response must not overwrite a newer Hide from another tab.",
-  );
-  assert.equal(reopenedInputs, 0, "An older Show response must not remount exact inputs.");
-  assert.equal(
-    settingsFinalCookie,
-    "1",
-    "An older Display save must not clear a newer Hide from another tab.",
-  );
-  assert.equal(
-    settingsReopenedInputs,
-    0,
-    "Reloading after an older Display save must remain masked.",
-  );
-  assert.ok(
-    amountAfterRemount?.includes("••••••"),
-    "A remounted Amount must adopt a Hide that arrived while the tab had no subscribers.",
-  );
-  assert.equal(exactPaintedAfterRemount, false, "The remount must not paint the cached exact value.");
-  assert.equal(labelAfterRemount, "Show amounts");
   console.log("PASS: cross-tab Hide wins immediately and remains ahead of both older cookie writers.");
 } finally {
-  await pool.query("update app_setting set masking_policy = 'masked'").catch(() => undefined);
+  await pool.query("update app_setting set masking_policy = 'masked'").catch((error) => {
+    console.error("Failed to restore the masking policy after the cross-tab harness:", error);
+  });
   await pool
     .query("delete from passkey where credential_id = $1", [lifecyclePasskey])
-    .catch(() => undefined);
+    .catch((error) => {
+      console.error("Failed to remove the cross-tab harness passkey:", error);
+    });
   await pool.end();
   await browser.close();
 }

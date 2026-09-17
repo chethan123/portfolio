@@ -1,4 +1,4 @@
-import { Form, Link, redirect, type RouterContextProvider } from "react-router";
+import { Form, Link, redirect } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import {
@@ -97,7 +97,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const [household, freshness, amountsAvailable] = await Promise.all([
     currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
-    maskingForRequest(request, context as RouterContextProvider).then(({ masked }) => !masked),
+    maskingForRequest(request, context).then(({ masked }) => !masked),
   ]);
 
   // Narrowed in SQL via the same predicate every screen reads through — not by filtering `household` here, a second implementation free to disagree.
@@ -176,7 +176,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     throw new Response("A correction has to name the row it corrects.", { status: 400 });
   }
 
-  if ((await maskingForRequest(request, context as RouterContextProvider)).masked) {
+  if ((await maskingForRequest(request, context)).masked) {
     // Privacy guard for a stale tab or no-JavaScript form whose cookie changed, not authorization.
     return {
       errors: { form: "Show amounts before correcting a position." },

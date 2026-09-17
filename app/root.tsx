@@ -7,7 +7,6 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
-  type RouterContextProvider,
   redirect,
   useLocation,
   useRevalidator,
@@ -216,7 +215,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   const { masked, maskingPolicy, resolved: maskingResolved } = await maskingForRequest(
     request,
-    context as RouterContextProvider,
+    context,
   );
 
   // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again

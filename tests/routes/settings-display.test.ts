@@ -70,11 +70,12 @@ describe("saving a masking policy", () => {
           post("/settings/display", {
             maskingPolicy: "unmasked",
             [MASKING_ENHANCED_FIELD]: "1",
+            maskingIntent: "request-7fbc",
           }),
         ),
       );
 
-      expect(outcome).toMatchObject({ saved: true, intent: undefined });
+      expect(outcome).toMatchObject({ saved: true, intent: "request-7fbc" });
       expect(cookieOf(outcome)).toBeNull();
     }),
   );

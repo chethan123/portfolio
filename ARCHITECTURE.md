@@ -529,10 +529,12 @@ unsubscribed or unsignalled tab adopts it at one of those fallback points. Tabs 
 until their own intentional Show can revalidate a masked Holdings projection. Enhanced actions
 carry an explicit form marker and never repeat the client cookie write in a delayed response; an
 unmarked request remains the no-JavaScript server writer even where Fetch Metadata headers are
-absent. Display Settings uses the same split,
-plus an origin-local random intent token so success clears the override only if no later toggle won.
-Unavailable token storage preserves the cookie. Neither the channel nor the token contains private
-data.
+absent. The enhanced toggle reconciles an unchanged choice to the freshly loaded policy's lifetime;
+a session cookie covers the request, and a failed policy read leaves a session Hide. Display
+Settings uses the same split, plus an
+origin-local random intent token so success clears the override only if no later toggle won. Its
+session-only bridge remains when root revalidation fails. Unavailable token storage preserves the
+cookie. Neither the channel nor the token contains private data.
 
 A successful policy resolution is an explicit root-loader field. When the policy read fails, that
 field keeps the browser masked even if a pre-existing cookie says to show. The hook's server
@@ -2313,7 +2315,7 @@ still live in the current code:
 | `raw-string.ts` | The one line-ending rule a raw instrument string needs when a form posts it back, browser-safe because the instruments step's action and the alias screen's rows both apply it |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
-| `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). `resolveMasked`, `resolveBrowserMasked` and the cookie builders are pure; the same client-bundle module also owns the browser store, `BroadcastChannel`, listeners and `localStorage` ordering tokens |
 | `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and fail-closed outcome |
 | `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request, attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |

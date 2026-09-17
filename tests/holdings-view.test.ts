@@ -723,6 +723,35 @@ describe("the Holdings loader projection", () => {
     "valueIsNegative",
   ];
 
+  const SAFE_HOLDING_KEYS = [
+    "accountId",
+    "accountKind",
+    "accountName",
+    "accountNumberTail",
+    "assetClass",
+    "classification",
+    "institution",
+    "instrumentId",
+    "instrumentName",
+    "isPriced",
+    "isStale",
+    "ownerId",
+    "ownerName",
+    "quoteType",
+    "symbol",
+    "taxTreatment",
+    "unrealizedDirection",
+    "yieldOnValue",
+  ];
+
+  const SAFE_TOTAL_KEYS = [
+    "basisCoverage",
+    "unrealizedCoverage",
+    "unrealizedDirection",
+    "valueCoverage",
+    "valueIsNegative",
+  ];
+
   it("allows exactly the reviewed holding, total, and group fields into loader data", () => {
     const row = holding({
       quantity: "1.00000001",
@@ -765,6 +794,13 @@ describe("the Holdings loader projection", () => {
     expect(Object.keys(projectedGroup.total.valueCoverage).sort()).toEqual(["known", "total"]);
     expect(Object.keys(projectedGroup.total.basisCoverage).sort()).toEqual(["known", "total"]);
     expect(Object.keys(projectedGroup.total.unrealizedCoverage).sort()).toEqual(["known", "total"]);
+
+    for (const [key, value] of Object.entries(projectedGroup.holdings[0]!)) {
+      if (!SAFE_HOLDING_KEYS.includes(key)) expect([undefined, null]).toContain(value);
+    }
+    for (const [key, value] of Object.entries(projectedGroup.total)) {
+      if (!SAFE_TOTAL_KEYS.includes(key)) expect([undefined, null]).toContain(value);
+    }
   });
 
   it("omits known amounts while preserving unknowns and non-magnitude metadata", () => {

@@ -5,6 +5,7 @@ import { loader as rootLoader } from "../../app/root.tsx";
 import { createDatabase, withDb } from "~/lib/db.server";
 import { MASKED, MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { currentPosition } from "~/lib/positions.server";
+import { saveMaskingPolicy } from "~/lib/settings.server";
 
 import {
   TEST_DATABASE_URL,
@@ -42,7 +43,7 @@ const cookie = (value: string) => `${MASKING_COOKIE}=${value}`;
 
 describe("a correction on masked Holdings", () => {
   it(
-    "keeps exact amounts out of loader data and the first render until Show amounts completes",
+    "draws no inputs from redacted data even when the browser flag says unmasked",
     withDatabase(async (ctx) => {
       const { key } = await seedPosition(ctx);
       const path = `/holdings?edit=${key}`;
@@ -94,11 +95,11 @@ describe("a correction on masked Holdings", () => {
     "uses one fail-closed masking decision across root and Holdings loaders in the same request",
     withDatabase(async (ctx) => {
       const { key } = await seedPosition(ctx);
-      await ctx.db.updateTable("app_setting").set({ masking_policy: "masked" }).execute();
+      await saveMaskingPolicy({ maskingPolicy: "masked" }, ctx.db);
       const shared = args(get(`/holdings?edit=${key}`));
 
       expect((await rootLoader(shared)).masked).toBe(true);
-      await ctx.db.updateTable("app_setting").set({ masking_policy: "unmasked" }).execute();
+      await saveMaskingPolicy({ maskingPolicy: "unmasked" }, ctx.db);
 
       expect(JSON.stringify(await loader(shared))).not.toContain(QUANTITY);
     }),
@@ -108,7 +109,7 @@ describe("a correction on masked Holdings", () => {
     "shares a failed masking read rather than letting a child retry into an exact response",
     withDatabase(async (ctx) => {
       const { key } = await seedPosition(ctx);
-      await ctx.db.updateTable("app_setting").set({ masking_policy: "unmasked" }).execute();
+      await saveMaskingPolicy({ maskingPolicy: "unmasked" }, ctx.db);
       const shared = args(get(`/holdings?edit=${key}`));
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
 
@@ -188,7 +189,7 @@ describe("a correction on masked Holdings", () => {
   );
 
   it(
-    "reveals real defaults only for an unmasked request and removes the inputs immediately on re-mask",
+    "draws no inputs from exact data when the browser flag says masked",
     withDatabase(async (ctx) => {
       const { key } = await seedPosition(ctx);
       const path = `/holdings?edit=${key}`;

@@ -5,12 +5,11 @@ import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import {
   MASKING_POLICIES,
   MASKING_ENHANCED_FIELD,
+  adoptSavedMaskingPolicy,
   clearedMaskingCookie,
   browserMaskingIntentIsCurrent,
   captureBrowserMaskingIntent,
-  maskingCookie,
-  publishBrowserMaskingChange,
-  resolveMasked,
+  newMaskingIntent,
 } from "~/lib/masking";
 import { readMaskingPolicy, saveMaskingPolicy } from "~/lib/settings.server";
 
@@ -86,26 +85,7 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
     )?.value;
     if (policy === undefined) return;
 
-    void (async () => {
-      // Hold the new policy's answer in the cookie while root reloads it. This prevents a stale
-      // unmasked root snapshot from showing amounts between the successful save and revalidation.
-      document.cookie = maskingCookie(resolveMasked(policy, undefined), policy);
-      if (!browserMaskingIntentIsCurrent(submitted.masking)) {
-        document.cookie = maskingCookie(true, policy);
-        publishBrowserMaskingChange();
-        return;
-      }
-      publishBrowserMaskingChange();
-
-      await revalidator.revalidate();
-      if (!browserMaskingIntentIsCurrent(submitted.masking)) return;
-
-      document.cookie = clearedMaskingCookie();
-      if (!browserMaskingIntentIsCurrent(submitted.masking)) {
-        document.cookie = maskingCookie(true, policy);
-      }
-      publishBrowserMaskingChange();
-    })();
+    void adoptSavedMaskingPolicy(policy, submitted.masking, () => revalidator.revalidate());
   }, [actionData, revalidator]);
 
   return (
@@ -132,14 +112,7 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
             const enhanced = event.currentTarget.elements.namedItem(MASKING_ENHANCED_FIELD);
             if (enhanced instanceof HTMLInputElement) enhanced.value = "1";
             const request = event.currentTarget.elements.namedItem("maskingIntent");
-            let requestId: string;
-            try {
-              requestId = Array.from(crypto.getRandomValues(new Uint32Array(4)), (word) =>
-                word.toString(16).padStart(8, "0"),
-              ).join("");
-            } catch {
-              requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-            }
+            const requestId = newMaskingIntent();
             if (request instanceof HTMLInputElement) request.value = requestId;
             pending.current = { request: requestId, masking: captureBrowserMaskingIntent() };
           }}

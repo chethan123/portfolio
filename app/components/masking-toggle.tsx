@@ -5,6 +5,7 @@
  * a real form to `/masking` (JS off, story 29) and, with JS, an optimistic
  * direct cookie write — neither owns the cookie's shape, `masking.ts` does.
  */
+import { useEffect, useRef } from "react";
 import { useFetcher, useLocation, useRouteLoaderData } from "react-router";
 
 import { MaskedIcon, UnmaskedIcon } from "~/components/icons";
@@ -15,9 +16,10 @@ import {
   MASKING_FETCHER_KEY,
   MASKING_FIELD,
   UNMASKED,
-  maskingCookie,
-  notifyBrowserMaskingChange,
+  reconcileBrowserMaskingChoice,
   useMasked,
+  writeBrowserMaskingChoice,
+  type BrowserMaskingWrite,
 } from "~/lib/masking";
 
 import type { loader as rootLoader } from "../root.tsx";
@@ -28,6 +30,19 @@ export function MaskingToggle({ className }: { className?: string }) {
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
   const masked = useMasked();
   const location = useLocation();
+  const pending = useRef<{ write: BrowserMaskingWrite; started: boolean } | null>(null);
+
+  useEffect(() => {
+    if (pending.current === null) return;
+    if (fetcher.state !== "idle") {
+      pending.current.started = true;
+      return;
+    }
+    if (!pending.current.started || rootData === undefined) return;
+
+    reconcileBrowserMaskingChoice(pending.current.write, rootData);
+    pending.current = null;
+  }, [fetcher.state, rootData]);
 
   const next = masked ? UNMASKED : MASKED;
   const label = masked ? "Show amounts" : "Hide amounts";
@@ -44,8 +59,10 @@ export function MaskingToggle({ className }: { className?: string }) {
 
         // Optimistic write, so the flip survives a reload before the POST lands. Guarded on `document` for the server render.
         if (typeof document !== "undefined") {
-          document.cookie = maskingCookie(next === MASKED, rootData?.maskingPolicy ?? "masked");
-          notifyBrowserMaskingChange();
+          pending.current = {
+            write: writeBrowserMaskingChoice(next === MASKED),
+            started: false,
+          };
         }
       }}
     >

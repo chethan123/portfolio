@@ -114,7 +114,7 @@ function notifyVisibleMaskingSubscribers(): void {
   if (document.visibilityState === "visible") acceptExternalMaskingChange();
 }
 
-function newMaskingIntent(): string {
+export function newMaskingIntent(): string {
   try {
     const words = crypto.getRandomValues(new Uint32Array(4));
     return Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
@@ -236,6 +236,73 @@ export function publishBrowserMaskingChange(): void {
 export function notifyBrowserMaskingChange(): void {
   if (typeof window === "undefined") return;
   advanceBrowserMaskingIntent();
+  publishBrowserMaskingChange();
+}
+
+export type BrowserMaskingWrite = {
+  value: typeof MASKED | typeof UNMASKED;
+  intent: string | undefined;
+};
+
+/** Writes one enhanced toggle and records the ordering point its revalidation may reconcile. */
+export function writeBrowserMaskingChoice(
+  masked: boolean,
+): BrowserMaskingWrite {
+  const value = masked ? MASKED : UNMASKED;
+  // The policy in this tab may be stale. Extend to *as last left* only after revalidation.
+  document.cookie = maskingCookie(masked, "masked");
+  notifyBrowserMaskingChange();
+  return { value, intent: captureBrowserMaskingIntent() };
+}
+
+/** Applies the revalidated policy only while this toggle still owns the same browser choice. */
+export function reconcileBrowserMaskingChoice(
+  written: BrowserMaskingWrite,
+  fresh: MaskingLoaderState & { maskingPolicy: MaskingPolicy },
+): void {
+  if (readBrowserMaskingCookie() !== written.value) return;
+  if (written.intent !== undefined && !browserMaskingIntentIsCurrent(written.intent)) return;
+
+  const policy = written.intent === undefined ? "masked" : fresh.maskingPolicy;
+  document.cookie = fresh.maskingResolved
+    ? maskingCookie(written.value === MASKED, policy)
+    : maskingCookie(true, "masked");
+  publishBrowserMaskingChange();
+}
+
+/** Keeps a saved policy safe across root revalidation, then removes its temporary override. */
+export async function adoptSavedMaskingPolicy(
+  policy: MaskingPolicy,
+  intent: string | undefined,
+  revalidate: () => Promise<void>,
+): Promise<void> {
+  if (!browserMaskingIntentIsCurrent(intent)) return;
+
+  // Always session-only: this cookie exists only to cover one root revalidation.
+  document.cookie = maskingCookie(resolveMasked(policy, undefined), "masked");
+  if (!browserMaskingIntentIsCurrent(intent)) {
+    document.cookie = maskingCookie(true, "masked");
+    publishBrowserMaskingChange();
+    return;
+  }
+  publishBrowserMaskingChange();
+
+  try {
+    await revalidate();
+  } catch {
+    // Keep the session bridge. Clearing it could expose an older unmasked root answer.
+    return;
+  }
+
+  if (!browserMaskingIntentIsCurrent(intent)) {
+    // A newer choice landed after the bridge; it owns the cookie now.
+    return;
+  }
+
+  document.cookie = clearedMaskingCookie();
+  if (!browserMaskingIntentIsCurrent(intent)) {
+    document.cookie = maskingCookie(true, "masked");
+  }
   publishBrowserMaskingChange();
 }
 

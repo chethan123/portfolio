@@ -73,7 +73,11 @@ cookie here that carries more than a preference.]
 [The two-writer description now has a timing qualification. Client script marks its enhanced
 submission after writing the cookie, and that response does not repeat the write: an older Show
 response could otherwise overwrite a newer Hide from another tab. An unmarked form remains the
-no-JavaScript server writer, including where optional Fetch Metadata headers are absent.]
+no-JavaScript server writer, including where optional Fetch Metadata headers are absent. After the
+enhanced toggle starts with a session cookie, then gives its unchanged choice the freshly read
+policy's lifetime after revalidation. A failed policy read replaces an unchanged Show with a
+session Hide. An ordering token prevents that repair from changing a newer choice, and unavailable
+storage can shorten but never lengthen a same-value cookie.]
 
 The browser reads that cookie through an external-store subscription. A direct write publishes to
 all readers in its tab and sends a payload-free invalidation over one module-wide
@@ -91,9 +95,11 @@ Display Settings is a second cookie writer. Its enhanced action returns success 
 origin-local storage records intervening Hide and Show intents, including a Show-then-Hide ABA. If
 the token changed, or storage is unavailable, the successful older Settings action preserves the
 current cookie. While root reloads the saved policy, a temporary cookie carries that policy's safe
-answer; after revalidation the component clears it if the ordering token is still current. The token
-and channel message contain no amount, policy, or other private data. The no-JavaScript Settings
-POST still clears the cookie in its document response.
+answer. That bridge is session-only even under *as last left*. After successful revalidation the
+component clears it if the ordering token is still current; a failed revalidation leaves the bridge
+in place rather than exposing an older root answer. The token and channel message contain no amount,
+policy, or other private data. The no-JavaScript Settings POST still clears the cookie in its
+document response.
 
 Cookie precedence applies only after the server has resolved the masking policy. A failed policy
 read remains masked after hydration even if an older browser cookie says to show. The first render

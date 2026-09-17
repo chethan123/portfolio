@@ -7,6 +7,11 @@
  *   node docs/research/2026-09-13-product-qa-audit/harness/masked-correction-toggle-race.mjs
  *
  * Optional: MASKING_RACE_ACCOUNT, MASKING_RACE_SYMBOL (demo defaults below).
+ *
+ * To reproduce the failing main behavior, temporarily make `useMasked()` return the successful
+ * root loader's `masked` value instead of giving the current browser cookie precedence. A resolved
+ * `route.fulfill()` proves network delivery only; the MutationObserver below proves whether React
+ * Router committed and painted the stale exact payload after the newer Hide.
  */
 import assert from "node:assert/strict";
 
