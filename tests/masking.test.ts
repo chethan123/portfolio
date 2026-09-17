@@ -7,6 +7,7 @@ import {
   UNMASKED,
   clearedMaskingCookie,
   maskingCookie,
+  maskingRepairIsWarranted,
   readMaskingCookie,
   resolveBrowserMasked,
   resolveMasked,
@@ -118,5 +119,22 @@ describe("reading the cookie off a request", () => {
   it("does not mistake a cookie whose name merely ends in its own", () => {
     // "unmasked=1" contains "masked=1" — a substring match would silently misread it
     expect(readMaskingCookie(requestWith(`unmasked=${UNMASKED}`))).toBeUndefined();
+  });
+});
+
+describe("whether a settled toggle may repair its cookie lifetime", () => {
+  // Identity, not equality: a reload returns an equal object, and only a new one proves a reload.
+  const submitted = { masked: true, maskingPolicy: "as_last_left" };
+
+  it("wants root data the toggle did not already have when it submitted", () => {
+    expect(maskingRepairIsWarranted(submitted, { ...submitted })).toBe(true);
+  });
+
+  it("refuses the snapshot the toggle submitted against, which an errored action leaves untouched", () => {
+    expect(maskingRepairIsWarranted(submitted, submitted)).toBe(false);
+  });
+
+  it("refuses a missing snapshot rather than guessing the household's policy", () => {
+    expect(maskingRepairIsWarranted(submitted, undefined)).toBe(false);
   });
 });

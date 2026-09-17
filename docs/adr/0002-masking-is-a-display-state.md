@@ -101,9 +101,10 @@ answer. That bridge is session-only even under *as last left*. After successful 
 component clears it if the ordering token is still current; a failed revalidation leaves the bridge
 in place rather than exposing an older root answer. If another choice overlaps the cookie assignment
 after its token check, the detected overlap writes a session Hide; whichever tab assigns last leaves
-the newer choice or that Hide, never the stale assignment. The token and channel message contain no
-amount, policy, or other private data. The no-JavaScript Settings POST still clears the cookie in its
-document response.
+the newer choice or that Hide, never the stale assignment. That corrective Hide can land over a
+newer Show in another tab, so a deliberate reveal occasionally reverts. Reverting toward hidden is
+the accepted cost. The token and channel message contain no amount, policy, or other private data.
+The no-JavaScript Settings POST still clears the cookie in its document response.
 
 Cookie precedence applies only after the server has resolved the masking policy. A failed policy
 read remains masked after hydration even if an older browser cookie says to show. The first render

@@ -235,11 +235,23 @@ export const browserMaskingStore = {
 } as const;
 
 /** Cookie writes have no browser event; tell this tab and the browser's other tabs to reread it. */
-export function publishBrowserMaskingChange(): void {
+function publishBrowserMaskingChange(): void {
   if (typeof window === "undefined") return;
   browserMaskingSnapshotValue = readBrowserMaskingCookie();
   notifyMaskingSubscribers();
   maskingChannel?.postMessage("changed");
+}
+
+/**
+ * A settled toggle may repair its cookie's lifetime only against root data newer than the snapshot
+ * it submitted against. An idle fetcher is not that evidence: an errored action settles without
+ * reloading any loader, which would apply this tab's possibly stale policy to a year-long cookie.
+ */
+export function maskingRepairIsWarranted<T>(
+  submitted: T | undefined,
+  current: T | undefined,
+): current is T {
+  return current !== undefined && current !== submitted;
 }
 
 export type BrowserMaskingWrite = {
