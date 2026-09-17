@@ -16,6 +16,7 @@ import {
   MASKING_FETCHER_KEY,
   MASKING_FIELD,
   UNMASKED,
+  maskingRepairIsWarranted,
   reconcileBrowserMaskingChoice,
   useMasked,
   writeBrowserMaskingChoice,
@@ -43,9 +44,8 @@ export function MaskingToggle({ className }: { className?: string }) {
       return;
     }
     if (!pending.current.started) return;
-    if (rootData === undefined || rootData === pending.current.rootData) {
-      // Idle alone does not prove a new root snapshot. Keep the optimistic cookie session-scoped
-      // rather than applying a possibly stale policy lifetime.
+    if (!maskingRepairIsWarranted(pending.current.rootData, rootData)) {
+      // Abandoned, not deferred: the optimistic cookie stays session-scoped, which is the safe end.
       pending.current = null;
       return;
     }

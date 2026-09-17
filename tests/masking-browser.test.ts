@@ -533,15 +533,39 @@ describe("the browser masking store", () => {
     windowTarget.dispatchEvent(new Event("focus"));
     expect(subscriber).toHaveBeenCalledTimes(1);
 
-    jar.value = UNMASKED;
-    masking.publishBrowserMaskingChange();
+    // Back to showing through the real writer, then another tab's Hide lands in the shared jar.
+    writeBrowserMaskingChoice(false);
     jar.value = MASKED;
+
+    const beforeHidden = subscriber.mock.calls.length;
     jar.visibilityState = "hidden";
     jar.dispatchEvent(new Event("visibilitychange"));
-    expect(subscriber).toHaveBeenCalledTimes(2);
+    expect(subscriber).toHaveBeenCalledTimes(beforeHidden);
+
     jar.visibilityState = "visible";
     jar.dispatchEvent(new Event("visibilitychange"));
-    expect(subscriber).toHaveBeenCalledTimes(3);
+    expect(subscriber).toHaveBeenCalledTimes(beforeHidden + 1);
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
+    unsubscribe();
+  });
+
+  it("falls back to focus when the channel cannot be constructed", () => {
+    Object.defineProperty(globalThis, "BroadcastChannel", {
+      configurable: true,
+      value: class {
+        constructor() {
+          throw new DOMException("Blocked", "SecurityError");
+        }
+      },
+    });
+    jar.value = UNMASKED;
+    expect(masking.browserMaskingStore.getSnapshot()).toBe(UNMASKED);
+    const subscriber = vi.fn();
+    const unsubscribe = masking.browserMaskingStore.subscribe(subscriber);
+
+    jar.value = MASKED;
+    windowTarget.dispatchEvent(new Event("focus"));
+    expect(subscriber).toHaveBeenCalledTimes(1);
     expect(masking.browserMaskingStore.getSnapshot()).toBe(MASKED);
     unsubscribe();
   });
