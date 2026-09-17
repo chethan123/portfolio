@@ -76,8 +76,9 @@ response could otherwise overwrite a newer Hide from another tab. An unmarked fo
 no-JavaScript server writer, including where optional Fetch Metadata headers are absent. After the
 enhanced toggle starts with a session cookie, then gives its unchanged choice the freshly read
 policy's lifetime after revalidation. A failed policy read replaces an unchanged Show with a
-session Hide. An ordering token prevents that repair from changing a newer choice, and unavailable
-storage can shorten but never lengthen a same-value cookie.]
+session Hide. The ordering token skips the repair when a newer choice already won; if the token
+changes during the cookie assignment itself, a session Hide wins. Unavailable storage leaves the
+staged session cookie unchanged.]
 
 The browser reads that cookie through an external-store subscription. A direct write publishes to
 all readers in its tab and sends a payload-free invalidation over one module-wide

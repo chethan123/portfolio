@@ -152,6 +152,31 @@ describe("an enhanced masking toggle", () => {
     expect(jar.lastWrite).not.toMatch(/max-age/i);
   });
 
+  it("restores Hide when it wins between the ordering check and cookie rewrite", () => {
+    const staleShow = writeBrowserMaskingChoice(false);
+    const newerIntent = "newer-hide-intent";
+    let firstRead = true;
+    installStorage({
+      getItem() {
+        if (firstRead) {
+          firstRead = false;
+          jar.value = MASKED;
+          return staleShow.intent ?? null;
+        }
+        return newerIntent;
+      },
+    } as unknown as Storage);
+
+    reconcileBrowserMaskingChoice(staleShow, {
+      masked: false,
+      maskingPolicy: "as_last_left",
+      maskingResolved: true,
+    });
+
+    expect(jar.value).toBe(MASKED);
+    expect(jar.lastWrite).not.toMatch(/max-age/i);
+  });
+
   it("does not mistake a newer Show after Hide for the older Show", () => {
     const staleShow = writeBrowserMaskingChoice(false);
     writeBrowserMaskingChoice(true);
@@ -168,7 +193,7 @@ describe("an enhanced masking toggle", () => {
     expect(jar.lastWrite).toBe(newerWrite);
   });
 
-  it("still shortens an unmasked cookie when local storage is unavailable", () => {
+  it("leaves the staged session cookie alone when local storage is unavailable", () => {
     installStorage({
       getItem() {
         throw new Error("storage unavailable");
@@ -181,6 +206,7 @@ describe("an enhanced masking toggle", () => {
       },
     } as unknown as Storage);
     const written = writeBrowserMaskingChoice(false);
+    const writesBeforeRevalidation = jar.writes.length;
 
     reconcileBrowserMaskingChoice(written, {
       masked: false,
@@ -190,9 +216,10 @@ describe("an enhanced masking toggle", () => {
 
     expect(jar.value).toBe(UNMASKED);
     expect(jar.lastWrite).not.toMatch(/max-age/i);
+    expect(jar.writes).toHaveLength(writesBeforeRevalidation);
   });
 
-  it("never extends a same-value choice when storage cannot distinguish an ABA", () => {
+  it("does not reconcile a same-value choice when storage cannot distinguish an ABA", () => {
     installStorage({
       getItem() {
         throw new Error("storage unavailable");
@@ -207,6 +234,7 @@ describe("an enhanced masking toggle", () => {
     const staleShow = writeBrowserMaskingChoice(false);
     writeBrowserMaskingChoice(true);
     writeBrowserMaskingChoice(false);
+    const writesBeforeRevalidation = jar.writes.length;
 
     reconcileBrowserMaskingChoice(staleShow, {
       masked: true,
@@ -216,6 +244,7 @@ describe("an enhanced masking toggle", () => {
 
     expect(jar.value).toBe(UNMASKED);
     expect(jar.lastWrite).not.toMatch(/max-age/i);
+    expect(jar.writes).toHaveLength(writesBeforeRevalidation);
   });
 });
 

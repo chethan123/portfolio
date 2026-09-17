@@ -260,13 +260,16 @@ export function reconcileBrowserMaskingChoice(
   written: BrowserMaskingWrite,
   fresh: MaskingLoaderState & { maskingPolicy: MaskingPolicy },
 ): void {
+  if (written.intent === undefined) return;
   if (readBrowserMaskingCookie() !== written.value) return;
-  if (written.intent !== undefined && !browserMaskingIntentIsCurrent(written.intent)) return;
+  if (!browserMaskingIntentIsCurrent(written.intent)) return;
 
-  const policy = written.intent === undefined ? "masked" : fresh.maskingPolicy;
   document.cookie = fresh.maskingResolved
-    ? maskingCookie(written.value === MASKED, policy)
+    ? maskingCookie(written.value === MASKED, fresh.maskingPolicy)
     : maskingCookie(true, "masked");
+  if (!browserMaskingIntentIsCurrent(written.intent)) {
+    document.cookie = maskingCookie(true, "masked");
+  }
   publishBrowserMaskingChange();
 }
 
