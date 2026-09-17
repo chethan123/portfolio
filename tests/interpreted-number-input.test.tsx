@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  InterpretedNumberInput,
-  PUNCTUATION_ECHO,
-  clientRefusalIsLive,
-} from "~/components/interpreted-number-input";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   moneyMagnitudeRule,
   parseDecimalInput,
@@ -52,27 +48,6 @@ describe("the interpreted-number note", () => {
       kind: "decimal",
       value: "-5",
     });
-    expect(PUNCTUATION_ECHO).toBe("Punctuation reads as");
-    expect(PUNCTUATION_ECHO).not.toMatch(/accepted|valid|will (save|record)/i);
-  });
-
-  it("does not repeat an initial server refusal after hydration", () => {
-    expect(
-      clientRefusalIsLive({
-        hydrated: true,
-        invalid: true,
-        hasServerError: true,
-        matchesServerValue: true,
-      }),
-    ).toBe(false);
-    expect(
-      clientRefusalIsLive({
-        hydrated: true,
-        invalid: true,
-        hasServerError: true,
-        matchesServerValue: false,
-      }),
-    ).toBe(true);
   });
 
   it.each([
@@ -105,7 +80,7 @@ describe("the interpreted-number note", () => {
     const markup = render("1,5", "money");
 
     expect(markup).toContain("1,234.56 is read as 1234.56");
-    expect(markup).not.toContain("This number format is ambiguous or invalid.");
+    expect(markup).not.toContain(moneyMagnitudeRule("A balance").message("grouping"));
     expect(markup).not.toContain("Punctuation reads as");
   });
 

@@ -1,6 +1,8 @@
 // The form grammar for a typed decimal. It stays browser-safe so the preview and every server-side
 // financial field interpret and validate the same exact string without floating-point arithmetic.
 
+import { SHARE_SCALE, compareDecimal } from "./money.ts";
+
 export type DecimalInputReason =
   | "grouping"
   | "syntax"
@@ -49,21 +51,6 @@ function integerDigits(value: string): number {
 
 function decimalPlaces(value: string): number {
   return (value.split(".")[1] ?? "").length;
-}
-
-// Both values have already passed the decimal grammar. Comparing padded digit strings avoids a
-// Number conversion and therefore preserves every digit at the financial boundary.
-function decimalIsGreaterThan(value: string, maximum: string): boolean {
-  const [valueInteger = "0", valueFraction = ""] = value.replace(/^\+/, "").split(".");
-  const [maxInteger = "0", maxFraction = ""] = maximum.replace(/^\+/, "").split(".");
-  const leftInteger = valueInteger.replace(/^0+/, "") || "0";
-  const rightInteger = maxInteger.replace(/^0+/, "") || "0";
-
-  if (leftInteger.length !== rightInteger.length) return leftInteger.length > rightInteger.length;
-  if (leftInteger !== rightInteger) return leftInteger > rightInteger;
-
-  const scale = Math.max(valueFraction.length, maxFraction.length);
-  return valueFraction.padEnd(scale, "0") > maxFraction.padEnd(scale, "0");
 }
 
 export function parseDecimalInput(
@@ -144,7 +131,11 @@ export function parseDecimalInput(
   if (maxIntegerDigits !== undefined && integerDigits(decimal) > maxIntegerDigits) {
     return { kind: "invalid", reason: "size" };
   }
-  if (max !== undefined && !negative && decimalIsGreaterThan(decimal, max)) {
+  if (
+    max !== undefined &&
+    !negative &&
+    compareDecimal(decimal, max, Math.max(decimalPlaces(decimal), decimalPlaces(max))) > 0
+  ) {
     return { kind: "invalid", reason: "range" };
   }
 
@@ -216,7 +207,7 @@ export function perShareAmountRule(label: string, maxIntegerDigits = 16): Decima
   };
 }
 
-export function percentRateRule(label: string, decimals = 6): DecimalInputRule {
+export function percentRateRule(label: string, decimals = SHARE_SCALE): DecimalInputRule {
   return {
     label,
     options: {

@@ -16,9 +16,9 @@ type Props = Omit<ComponentProps<"input">, "onChange"> & {
   shape: "money" | "quantity" | "percentage";
 };
 
-export const PUNCTUATION_ECHO = "Punctuation reads as";
+const PUNCTUATION_ECHO = "Punctuation reads as";
 
-export function clientRefusalIsLive({
+function clientRefusalIsLive({
   hydrated,
   invalid,
   hasServerError,

@@ -242,14 +242,23 @@ describe("a correction on masked Holdings", () => {
       expect((await currentPosition(account.id, instrument.id, ctx.db))?.quantity).toBe(QUANTITY);
 
       const invalid = await action(
-        args(post(path, { quantity: "not a quantity", costBasisPerShare: BASIS }, cookie(UNMASKED))),
+        args(post(path, { quantity: "1,5", costBasisPerShare: "9,2" }, cookie(UNMASKED))),
       );
       const data = await loader(args(get(path, cookie(UNMASKED))));
       const markup = renderRoute(Holdings, path, data, { masked: false, actionData: invalid });
 
-      expect(markup).toContain('name="quantity" value="not a quantity"');
-      expect(markup).toContain(`name="costBasisPerShare" value="${BASIS}"`);
-      expect(markup).toMatch(/quantity must be a number/i);
+      expect(markup).toContain('name="quantity" value="1,5"');
+      expect(markup).toContain('name="costBasisPerShare" value="9,2"');
+      expect(markup).toContain('<p id="revise-error-quantity" class="field-error" role="alert">');
+      expect(markup).toContain(
+        '<p id="revise-error-costBasisPerShare" class="field-error" role="alert">',
+      );
+      expect(markup).toMatch(
+        /<input(?=[^>]*id="revise-quantity")(?=[^>]*aria-describedby="[^"]*revise-error-quantity[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
+      );
+      expect(markup).toMatch(
+        /<input(?=[^>]*id="revise-cost-basis")(?=[^>]*aria-describedby="[^"]*revise-error-costBasisPerShare[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
+      );
     }),
   );
 

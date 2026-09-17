@@ -10,7 +10,6 @@ import {
   signedQuantityRule,
   type DecimalInputRule,
 } from "./decimal-input.ts";
-import { SHARE_SCALE } from "./money.ts";
 
 // Key for a message belonging to the submission as a whole, not one field.
 export const FORM_ERROR = "form";
@@ -186,5 +185,4 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
 // Typed, asked, printed and stored as a percentage (23.8, not 0.238) — conversion to a
 // multiplier happens only where the multiplying does. "23.8%" pasted equals "23.8" typed;
 // negative isn't a generosity extended (a negative rate isn't a rate). No Number() (§4.1).
-export const percentRate = (label: string, decimals = SHARE_SCALE) =>
-  decimalText(percentRateRule(label, decimals), true);
+export const percentRate = (label: string) => decimalText(percentRateRule(label), true);
