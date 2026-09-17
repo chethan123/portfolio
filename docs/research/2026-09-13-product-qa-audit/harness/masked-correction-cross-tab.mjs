@@ -62,6 +62,17 @@ async function maskingCookie(context) {
   return (await context.cookies(base)).find(({ name }) => name === "masked")?.value;
 }
 
+async function waitForMaskingCookie(context, predicate, label) {
+  const deadline = Date.now() + 2_000;
+  let cookie;
+  do {
+    cookie = (await context.cookies(base)).find(({ name }) => name === "masked");
+    if (predicate(cookie)) return cookie;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out waiting for ${label}; last cookie ${JSON.stringify(cookie)}.`);
+}
+
 async function buttonLabel(page) {
   return page.getByRole("banner").locator("button.masking-toggle span").first().textContent();
 }
@@ -106,6 +117,36 @@ try {
   const policyEditor = await lifetime.newPage();
   await stalePolicy.goto(`${base}${path}`, { waitUntil: "networkidle" });
   await policyEditor.goto(`${base}/settings/display`, { waitUntil: "networkidle" });
+  await stalePolicy.getByRole("button", { name: "Show amounts", exact: true }).first().click();
+  await stalePolicy.locator(inputs).first().waitFor();
+  await stalePolicy.waitForLoadState("networkidle");
+  const rememberedShow = (await lifetime.cookies(base)).find(({ name }) => name === "masked");
+  assert.equal(rememberedShow?.value, "0");
+  assert.ok(
+    (rememberedShow?.expires ?? -1) > Date.now() / 1000,
+    "An as-last-left Show must become persistent after fresh policy revalidation.",
+  );
+  const rememberedHideAction = stalePolicy.waitForResponse(
+    (response) =>
+      response.url().includes("/masking.data") && response.request().method() === "POST",
+  );
+  const rememberedHideLoader = stalePolicy.waitForResponse((response) =>
+    response.url().includes("/holdings.data"),
+  );
+  await stalePolicy.getByRole("button", { name: "Hide amounts", exact: true }).first().click();
+  await stalePolicy.locator(inputs).first().waitFor({ state: "detached" });
+  await Promise.all([rememberedHideAction, rememberedHideLoader]);
+  await stalePolicy.waitForLoadState("networkidle");
+  const rememberedHide = await waitForMaskingCookie(
+    lifetime,
+    (cookie) => cookie?.value === "1" && cookie.expires > Date.now() / 1000,
+    "the as-last-left Hide lifetime repair",
+  );
+  assert.equal(rememberedHide?.value, "1");
+  assert.ok(
+    (rememberedHide?.expires ?? -1) > Date.now() / 1000,
+    "An as-last-left Hide must become persistent after fresh policy revalidation.",
+  );
   const fixedPolicySaved = policyEditor.waitForResponse(
     (response) =>
       response.url().includes("/settings/display.data") &&

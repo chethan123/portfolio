@@ -155,10 +155,12 @@ export function browserMaskingIntentIsCurrent(intent: string | undefined): boole
   return intent !== undefined && readBrowserMaskingIntent() === intent;
 }
 
-function advanceBrowserMaskingIntent(): void {
+function advanceBrowserMaskingIntent(): string | undefined {
+  const intent = newMaskingIntent();
   try {
-    localStorage.setItem(MASKING_INTENT_STORAGE, newMaskingIntent());
+    localStorage.setItem(MASKING_INTENT_STORAGE, intent);
     maskingIntentReliable = true;
+    return intent;
   } catch {
     maskingIntentReliable = false;
     // Remove an old token where storage permits it. Otherwise the local reliability flag still
@@ -168,6 +170,7 @@ function advanceBrowserMaskingIntent(): void {
     } catch {
       // Storage is wholly unavailable; Settings preserves the existing cookie.
     }
+    return undefined;
   }
 }
 
@@ -232,13 +235,6 @@ export function publishBrowserMaskingChange(): void {
   maskingChannel?.postMessage("changed");
 }
 
-/** Publishes a new user masking intent and advances the cross-tab ordering token. */
-export function notifyBrowserMaskingChange(): void {
-  if (typeof window === "undefined") return;
-  advanceBrowserMaskingIntent();
-  publishBrowserMaskingChange();
-}
-
 export type BrowserMaskingWrite = {
   value: typeof MASKED | typeof UNMASKED;
   intent: string | undefined;
@@ -249,10 +245,14 @@ export function writeBrowserMaskingChoice(
   masked: boolean,
 ): BrowserMaskingWrite {
   const value = masked ? MASKED : UNMASKED;
+  const intent = advanceBrowserMaskingIntent();
   // The policy in this tab may be stale. Extend to *as last left* only after revalidation.
   document.cookie = maskingCookie(masked, "masked");
-  notifyBrowserMaskingChange();
-  return { value, intent: captureBrowserMaskingIntent() };
+  if (intent !== undefined && !browserMaskingIntentIsCurrent(intent)) {
+    document.cookie = maskingCookie(true, "masked");
+  }
+  publishBrowserMaskingChange();
+  return { value, intent };
 }
 
 /** Applies the revalidated policy only while this toggle still owns the same browser choice. */

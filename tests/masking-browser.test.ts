@@ -40,19 +40,33 @@ class MemoryStorage implements Storage {
 class CookieJar {
   value: string | undefined;
   writes: string[] = [];
+  beforeWrite: (() => void) | undefined;
+  afterWrite: (() => void) | undefined;
+  nextRead: string | undefined;
 
   get cookie() {
+    if (this.nextRead !== undefined) {
+      const cookie = this.nextRead;
+      this.nextRead = undefined;
+      return cookie;
+    }
     return this.value === undefined ? "" : `masked=${this.value}`;
   }
 
   set cookie(cookie: string) {
+    const beforeWrite = this.beforeWrite;
+    this.beforeWrite = undefined;
+    beforeWrite?.();
     this.writes.push(cookie);
     if (/^masked=;/.test(cookie) && /max-age=0/i.test(cookie)) {
       this.value = undefined;
-      return;
+    } else {
+      const match = /^masked=([^;]+)/.exec(cookie);
+      if (match !== null) this.value = match[1];
     }
-    const match = /^masked=([^;]+)/.exec(cookie);
-    if (match !== null) this.value = match[1];
+    const afterWrite = this.afterWrite;
+    this.afterWrite = undefined;
+    afterWrite?.();
   }
 
   get lastWrite() {
@@ -98,6 +112,15 @@ afterEach(() => {
 });
 
 describe("an enhanced masking toggle", () => {
+  it("keeps a newer Hide when it completes between an older Show intent and cookie write", () => {
+    jar.beforeWrite = () => writeBrowserMaskingChoice(true);
+
+    writeBrowserMaskingChoice(false);
+
+    expect(jar.value).toBe(MASKED);
+    expect(jar.lastWrite).not.toMatch(/max-age/i);
+  });
+
   it("keeps a Show session-scoped when a stale tab learns the fresh fixed policy", () => {
     const written = writeBrowserMaskingChoice(false);
     expect(jar.lastWrite).not.toMatch(/max-age/i);
@@ -172,6 +195,25 @@ describe("an enhanced masking toggle", () => {
       maskingPolicy: "as_last_left",
       maskingResolved: true,
     });
+
+    expect(jar.value).toBe(MASKED);
+    expect(jar.lastWrite).not.toMatch(/max-age/i);
+  });
+
+  it("linearizes a new Hide before an older reconciliation can restore Show", () => {
+    const staleShow = writeBrowserMaskingChoice(false);
+    jar.afterWrite = () => {
+      // The old reconciliation read Show immediately before this tab assigned Hide. Its next
+      // operation observes the ordering token; the cookie getter returns that prior read once.
+      jar.nextRead = `masked=${UNMASKED}`;
+      reconcileBrowserMaskingChoice(staleShow, {
+        masked: false,
+        maskingPolicy: "as_last_left",
+        maskingResolved: true,
+      });
+    };
+
+    writeBrowserMaskingChoice(true);
 
     expect(jar.value).toBe(MASKED);
     expect(jar.lastWrite).not.toMatch(/max-age/i);
