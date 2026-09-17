@@ -176,8 +176,9 @@ browser and credential provider. [Lock guide](docs/guide/passkeys.md).
   <img alt="The overview with every amount replaced by a run of dots: the net worth headline, the chart's axis figures, the amount in the chart's readout and every account balance are hidden, while the trend line, the readout's date, the allocation bars, the account names and the dates are unchanged" src="docs/screenshots/overview-masked-light.png">
 </picture>
 
-Hide amounts when someone can see your screen. Masking is display only. Amounts remain in page
-data, and anyone using the browser can reveal them.
+Hide amounts when someone can see your screen. Masking remains a display control, and anyone using
+the browser can reveal amounts. Most screens keep amounts in page data for an instant toggle;
+Holdings omits them while masked so opening a correction cannot expose exact input defaults.
 [Display settings](docs/guide/settings.md#display).
 
 ### On a phone

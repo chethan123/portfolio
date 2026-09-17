@@ -495,6 +495,14 @@ correction should require a deliberate reveal with clear copy.
 The ordinary cells use the masking-aware `Amount`, while the raw defaults are placed directly into
 inputs at `app/routes/holdings.tsx:727-731,761-806`.
 
+**Regression harness:**
+[`masked-correction-toggle-race.mjs`](2026-09-13-product-qa-audit/harness/masked-correction-toggle-race.mjs)
+holds overlapping Show/Hide loader responses in the unsafe order and separately fails a Hide request;
+correction inputs must remain absent in both cases.
+[`masked-correction-cross-tab.mjs`](2026-09-13-product-qa-audit/harness/masked-correction-cross-tab.mjs)
+checks that Hide reaches another open editor, sibling Show stays behind its local reveal gate, and
+older Show or Display Settings responses cannot replace the newer shared cookie.
+
 **Recommendation:** Gate editor values behind the same masking state. A focused reveal can be scoped
 to that row, but it must be intentional, announced, and automatically re-hidden when correction
 ends.
