@@ -207,6 +207,8 @@ what changes how you run and write things.
   redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo` are how
   a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a route's
   middleware chain the way the framework would, the seam for `chartRangeMiddleware`.
+  A Holdings correction test must model the reveal that makes its form available by sending the
+  `masked=0` cookie; `tests/routes/holdings.test.ts`'s `correct()` helper carries that precondition.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing

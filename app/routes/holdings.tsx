@@ -1,8 +1,16 @@
+import { useState } from "react";
 import { Form, Link, redirect } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
-import { Amount, Delta } from "~/components/amount";
+import {
+  Amount,
+  Delta,
+  OmittedAmount,
+  OmittedDelta,
+  type AmountShape,
+} from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   NarrowedTo,
   OwnerFilterControl,
@@ -10,8 +18,13 @@ import {
   holdsNothing,
 } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { isNegative, joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
+import {
+  DECIMAL_FORMAT_HINT,
+  perShareAmountRule,
+  signedQuantityRule,
+} from "~/lib/decimal-input";
+import { joinWords } from "~/lib/format";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -26,9 +39,11 @@ import {
   formatQuantity,
   groupHoldings,
   holdingNote,
-  holdingYield,
   parseQuery,
   parseRowKey,
+  projectGroup,
+  projectHolding,
+  projectTotal,
   rowKey,
   sortHoldings,
   summarise,
@@ -43,6 +58,9 @@ import {
 } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
+import { useMasked } from "~/lib/masking";
+import { maskingForRequest } from "~/lib/masking.server";
+import type { DeltaDirection } from "~/lib/money";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import { PriceFreshness, type FreshnessView } from "../components/price-freshness.tsx";
@@ -56,7 +74,7 @@ export function meta() {
   return [{ title: "Holdings · Portfolio" }];
 }
 
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, context }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const query = parseQuery(url.searchParams);
 
@@ -83,9 +101,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Canonical view, no row open, no receipt — every Cancel goes here.
   const view = link(owners);
 
-  const [household, freshness] = await Promise.all([
+  const [household, freshness, amountsAvailable] = await Promise.all([
     currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
+    maskingForRequest(request, context).then(({ masked }) => !masked),
   ]);
 
   // Narrowed in SQL via the same predicate every screen reads through — not by filtering `household` here, a second implementation free to disagree.
@@ -106,6 +125,13 @@ export async function loader({ request }: Route.LoaderArgs) {
             holding.accountId === saved.accountId && holding.instrumentId === saved.instrumentId,
         ) ?? null);
 
+  const groups =
+    query.group === null
+      ? null
+      : groupHoldings(visible, query.group, query.sort, query.direction);
+  const rows = query.group === null ? sortHoldings(visible, query.sort, query.direction) : null;
+  const total = summarise(visible);
+
   return {
     freshness,
     ...owner,
@@ -123,12 +149,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     group: query.group,
     sort: query.sort,
     direction: query.direction,
-    groups:
-      query.group === null
-        ? null
-        : groupHoldings(visible, query.group, query.sort, query.direction),
-    rows: query.group === null ? sortHoldings(visible, query.sort, query.direction) : null,
-    total: summarise(visible),
+    groups: groups?.map((group) => projectGroup(group, amountsAvailable)) ?? null,
+    rows: rows?.map((holding) => projectHolding(holding, amountsAvailable)) ?? null,
+    total: projectTotal(total, amountsAvailable),
+    amountsAvailable,
     view,
     editing: open === null ? null : rowKey(open),
     // Read back from the database, not echoed from the submitted form.
@@ -139,7 +163,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             key: rowKey(written),
             instrumentName: written.instrumentName,
             accountName: written.accountName,
-            quantity: written.quantity,
+            quantity: amountsAvailable ? written.quantity : undefined,
           },
     // Via `effectiveDate`, same as the write path — a statement can be dated tomorrow.
     asOf:
@@ -150,13 +174,21 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /** Restates one position; positions.server.ts owns what lands (§5.4). Row id comes from the URL, not a hidden field submitted alongside it. */
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, context }: Route.ActionArgs) {
   const url = new URL(request.url);
   const target = parseRowKey(url.searchParams.get("edit"));
 
   if (target === null) {
     // No form to re-render — a POST with no row named is a mangled address, not a bad figure.
     throw new Response("A correction has to name the row it corrects.", { status: 400 });
+  }
+
+  if ((await maskingForRequest(request, context)).masked) {
+    // Privacy guard for a stale tab or no-JavaScript form whose cookie changed, not authorization.
+    return {
+      errors: { form: "Show amounts before correcting a position." },
+      values: undefined,
+    };
   }
 
   const values = formFields(await request.formData());
@@ -209,6 +241,26 @@ const COLUMNS: ReadonlyArray<Column> = [
 
 const FIGURES = 4;
 
+function PrivateAmount({
+  value,
+  shape = "money",
+}: {
+  value: string | null | undefined;
+  shape?: AmountShape;
+}) {
+  return value === undefined ? <OmittedAmount shape={shape} /> : <Amount value={value} shape={shape} />;
+}
+
+function PrivateDelta({
+  amount,
+  direction,
+}: {
+  amount: string | undefined;
+  direction: DeltaDirection;
+}) {
+  return amount === undefined ? <OmittedDelta direction={direction} /> : <Delta amount={amount} />;
+}
+
 /** Owner/account grouping hides its own column — repeating the heading on every row wastes width. */
 function columnsFor(group: DimensionId | null): ReadonlyArray<Column> {
   if (group === "owner") return COLUMNS.filter((column) => column.key !== "owner");
@@ -241,6 +293,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     groups,
     rows,
     total,
+    amountsAvailable,
     view,
     editing,
     written,
@@ -260,6 +313,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     written,
     asOf,
     view,
+    amountsAvailable,
     errors: actionData?.errors,
     values: actionData?.values,
   };
@@ -614,25 +668,29 @@ function Figures({ total }: { total: Total }) {
     <>
       <td className="is-numeric" role="cell" data-label="Value">
         <div>
-          <Amount value={total.value} />
+          <PrivateAmount value={total.value} />
           {note(total.valueCoverage)}
         </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Cost basis">
         <div>
-          <Amount value={total.costBasis} />
+          <PrivateAmount value={total.costBasis} />
           {note(total.basisCoverage)}
         </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Unrealized">
         <div>
-          {total.unrealized === null ? "—" : <Delta amount={total.unrealized} />}
+          {total.unrealized === null ? (
+            "—"
+          ) : (
+            <PrivateDelta amount={total.unrealized} direction={total.unrealizedDirection ?? "flat"} />
+          )}
           {note(total.unrealizedCoverage)}
         </div>
       </td>
       {/* No caption: rate coalesces to zero, complete by construction. No weighted yield either — that's Income's figure to show. */}
       <td className="is-numeric" role="cell" data-label="Annual dividend">
-        <Amount value={total.annualDividend} />
+        <PrivateAmount value={total.annualDividend} />
       </td>
     </>
   );
@@ -695,6 +753,7 @@ type Editor = {
   written: Route.ComponentProps["loaderData"]["written"];
   asOf: string | null;
   view: string;
+  amountsAvailable: boolean;
   errors?: Readonly<Record<string, string>>;
   values?: Record<string, string>;
 };
@@ -715,6 +774,17 @@ function Row({
   const key = rowKey(holding);
   const open = editor.editing === key;
   const { errors, values } = editor;
+  const masked = useMasked();
+  const [quantityErrorActive, setQuantityErrorActive] = useState(errors?.quantity !== undefined);
+  const [basisErrorActive, setBasisErrorActive] = useState(
+    errors?.costBasisPerShare !== undefined,
+  );
+  const canEdit =
+    open &&
+    editor.amountsAvailable &&
+    !masked &&
+    holding.quantity !== undefined &&
+    holding.costBasisPerShare !== undefined;
 
   // Collected here, not per-box — a message in a narrow column would wrap or shift figures.
   const messages =
@@ -722,16 +792,24 @@ function Row({
       ? []
       : (["form", "quantity", "costBasisPerShare"] as const)
           .map((field) => [field, errors[field]] as const)
-          .filter((entry): entry is readonly [(typeof entry)[0], string] => entry[1] !== undefined);
+          .filter(
+            (entry): entry is readonly [(typeof entry)[0], string] =>
+              entry[1] !== undefined &&
+              (entry[0] === "form" ||
+                (entry[0] === "quantity" && quantityErrorActive) ||
+                (entry[0] === "costBasisPerShare" && basisErrorActive)),
+          );
 
   // Typed value wins over stored, so a refusal never costs the entry.
-  const typedQuantity = values?.quantity ?? formatQuantity(holding.quantity);
+  const typedQuantity =
+    canEdit && holding.quantity !== undefined
+      ? (values?.quantity ?? formatQuantity(holding.quantity))
+      : undefined;
   const typedBasis =
-    values?.costBasisPerShare ??
-    (holding.costBasisPerShare === null ? "" : formatQuantity(holding.costBasisPerShare));
-
-  // Null, not 0%: unpriceable or zero-value holding would otherwise divide by zero.
-  const yieldOnValue = holdingYield(holding);
+    canEdit && holding.costBasisPerShare !== undefined
+      ? (values?.costBasisPerShare ??
+        (holding.costBasisPerShare === null ? "" : formatQuantity(holding.costBasisPerShare)))
+      : undefined;
 
   return (
     <>
@@ -759,8 +837,8 @@ function Row({
         ) : null}
         {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
         <td className="is-numeric" role="cell" data-label="Quantity">
-          {open ? (
-            <input
+          {canEdit ? (
+            <InterpretedNumberInput
               id="revise-quantity"
               form={EDITOR}
               name="quantity"
@@ -770,24 +848,29 @@ function Row({
               inputMode="decimal"
               className="cell-input"
               aria-label={`Quantity of ${holding.instrumentName}`}
-              aria-invalid={errors?.quantity ? true : undefined}
-              aria-describedby={errors?.quantity ? "revise-error-quantity" : undefined}
+              aria-describedby="revise-quantity-format revise-number-format"
               autoComplete="off"
               autoFocus
+              compact
+              noteId="revise-quantity-format"
+              onServerErrorActiveChange={setQuantityErrorActive}
+              rule={signedQuantityRule("A quantity")}
+              serverErrorId={errors?.quantity ? "revise-error-quantity" : undefined}
+              shape="quantity"
             />
           ) : (
-            <Amount value={holding.quantity} shape="quantity" />
+            <PrivateAmount value={holding.quantity} shape="quantity" />
           )}
         </td>
         <td className="is-numeric" role="cell" data-label="Price">
-          <Amount value={holding.price} />
+          <PrivateAmount value={holding.price} />
         </td>
         <td className="is-numeric" role="cell" data-label="Value">
-          <Amount value={holding.value} />
+          <PrivateAmount value={holding.value} />
         </td>
         <td className="is-numeric" role="cell" data-label="Cost basis">
-          {open ? (
-            <input
+          {canEdit ? (
+            <InterpretedNumberInput
               id="revise-cost-basis"
               form={EDITOR}
               name="costBasisPerShare"
@@ -798,25 +881,37 @@ function Row({
               // Column shows whole-position basis, this box per-share — stated in the label since they won't match.
               aria-label={`Cost basis per share of ${holding.instrumentName}`}
               placeholder="per share"
-              aria-invalid={errors?.costBasisPerShare ? true : undefined}
-              aria-describedby={
+              aria-describedby="revise-cost-basis-format revise-number-format"
+              autoComplete="off"
+              compact
+              noteId="revise-cost-basis-format"
+              onServerErrorActiveChange={setBasisErrorActive}
+              rule={perShareAmountRule("A cost basis")}
+              serverErrorId={
                 errors?.costBasisPerShare ? "revise-error-costBasisPerShare" : undefined
               }
-              autoComplete="off"
+              shape="money"
             />
           ) : (
-            <Amount value={holding.costBasis} />
+            <PrivateAmount value={holding.costBasis} />
           )}
         </td>
         <td className="is-numeric" role="cell" data-label="Unrealized">
-          {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
+          {holding.unrealized === null ? (
+            "—"
+          ) : (
+            <PrivateDelta
+              amount={holding.unrealized}
+              direction={holding.unrealizedDirection ?? "flat"}
+            />
+          )}
         </td>
         {/* $0, not a dash: `quote` can't tell "pays nothing" from "nobody asked" (§14 limitation 9). Plain `Amount`, not `Delta` — a payout isn't a movement. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
-            <Amount value={holding.annualDividend} />
-            {yieldOnValue === null ? null : (
-              <span className="cell-sub u-data">{formatShare(yieldOnValue)}</span>
+            <PrivateAmount value={holding.annualDividend} />
+            {holding.yieldOnValue === null ? null : (
+              <span className="cell-sub u-data">{formatShare(holding.yieldOnValue)}</span>
             )}
           </div>
         </td>
@@ -840,41 +935,70 @@ function Row({
           <td colSpan={span} role="cell" data-label="">
             <div className="row-editor">
               <div>
-                {messages.length > 0 ? (
-                  messages.map(([field, message]) => (
-                    <p
-                      key={field}
-                      id={`revise-error-${field}`}
-                      className="field-error"
-                      role="alert"
-                    >
-                      {message}
+                {!canEdit ? (
+                  <>
+                    {errors?.form === undefined ? null : (
+                      <p id="revise-error-form" className="field-error" role="alert">
+                        {errors.form}
+                      </p>
+                    )}
+                    <p className="form-note">
+                      Use <b>Show amounts</b> in the navigation to reveal and edit this position.
                     </p>
-                  ))
+                  </>
                 ) : (
-                  // Said before the click — "Save" files a whole new statement, not a single overwrite.
-                  <p className="form-note">
-                    Saving records a new statement for {holding.accountName}
-                    {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
-                    other position in it forward unchanged. The current one is kept on its own
-                    date, so nothing already recorded moves.
-                  </p>
+                  <>
+                    <p id="revise-number-format" className="form-note">
+                      {DECIMAL_FORMAT_HINT}
+                    </p>
+                    {messages.length > 0 ? (
+                      messages.map(([field, message]) => (
+                        <p
+                          key={field}
+                          id={`revise-error-${field}`}
+                          className="field-error"
+                          role="alert"
+                        >
+                          {message}
+                        </p>
+                      ))
+                    ) : (
+                      // Said before the click — "Save" files a whole new statement, not a single overwrite.
+                      <p className="form-note">
+                        Saving records a new statement for {holding.accountName}
+                        {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
+                        other position in it forward unchanged. The current one is kept on its own
+                        date, so nothing already recorded moves.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
 
-              <Form
-                id={EDITOR}
-                method="post"
-                action={`/holdings${withRow(editor.view, "edit", holding)}`}
-                className="row-actions"
-              >
-                <button type="submit" className="button button--quiet">
-                  Save
-                </button>
-                <Link className="button button--text" to={editor.view === "" ? "." : editor.view}>
-                  Cancel
-                </Link>
-              </Form>
+              {canEdit ? (
+                <Form
+                  id={EDITOR}
+                  method="post"
+                  action={`/holdings${withRow(editor.view, "edit", holding)}`}
+                  className="row-actions"
+                >
+                  <button type="submit" className="button button--quiet">
+                    Save
+                  </button>
+                  <Link
+                    className="button button--text"
+                    to={editor.view === "" ? "." : editor.view}
+                  >
+                    Cancel
+                  </Link>
+                </Form>
+              ) : (
+                <div className="row-actions">
+                  <Link className="button button--text" to={editor.view === "" ? "." : editor.view}>
+                    Cancel
+                  </Link>
+                </div>
+              )}
             </div>
           </td>
         </tr>
@@ -886,7 +1010,7 @@ function Row({
             <p className="form-note" role="status">
               Recorded. {editor.written.accountName} now reads{" "}
               <b className="u-data">
-                <Amount value={editor.written.quantity} shape="quantity" />
+                <PrivateAmount value={editor.written.quantity} shape="quantity" />
               </b>{" "}
               of{" "}
               {editor.written.instrumentName}.
@@ -930,9 +1054,7 @@ function Coverage({ total, grouped }: { total: Total; grouped: boolean }) {
   return (
     <p className="coverage-note">
       {notes.join(" ")}
-      {total.value !== null && isNegative(total.value)
-        ? " The total is net of liabilities."
-        : null}
+      {total.valueIsNegative ? " The total is net of liabilities." : null}
     </p>
   );
 }

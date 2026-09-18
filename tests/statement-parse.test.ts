@@ -113,6 +113,30 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.asOfDate).toBe("2026-07-31");
   });
 
+  it("refuses the two blank ticker rows worth $58,692.68 in the 401k export", () => {
+    const { rows } = readCsv(fixture("401k.csv"));
+    const parsed = parseStatement(
+      rows,
+      mapping({
+        columns: {
+          instrument: "Ticker",
+          name: "Investment",
+          quantity: "Units",
+          asOf: "As Of",
+        },
+      }),
+    );
+
+    expect(parsed.problems).toHaveLength(2);
+    expect(parsed.problems).toEqual([
+      expect.objectContaining({ row: 1, column: "Ticker", code: "blank-instrument" }),
+      expect.objectContaining({ row: 2, column: "Ticker", code: "blank-instrument" }),
+    ]);
+    expect(parsed.positions).toHaveLength(1);
+    expect(parsed.positions[0]?.instrument).toBe("VBTIX");
+    expect(parsed.skipped).toEqual([]);
+  });
+
   it("combines the lot-level export's three rows for one fund, and says so", () => {
     const { rows } = readCsv(fixture("lot-level.csv"));
     const parsed = parseStatement(
@@ -257,10 +281,156 @@ describe("the mapping itself", () => {
 describe("row handling", () => {
   const columns = { instrument: "Symbol", quantity: "Qty" };
 
-  it("skips a row whose instrument cell is empty, as a footer or spacer", () => {
+  it.each([
+    {
+      label: "quantity",
+      columns: { instrument: "Symbol", quantity: "Qty" },
+      header: ["Symbol", "Qty"],
+      row: ["", "139.153103"],
+      populated: "Qty",
+    },
+    {
+      label: "cost basis",
+      columns: { instrument: "Symbol", quantity: "Qty", costBasis: "Basis" },
+      header: ["Symbol", "Qty", "Basis"],
+      row: [" ", "", "108.2561"],
+      populated: "Basis",
+    },
+  ])("refuses a blank instrument with a populated mapped $label cell", ({
+    columns: mapped,
+    header,
+    row,
+    populated,
+  }) => {
     const parsed = parseStatement(
-      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"], ["   ", "2"], [""]],
-      mapping({ columns }),
+      [header, ["VTI", "282.144455"], row],
+      mapping({ columns: mapped }),
+    );
+
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.positions).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({
+      row: 2,
+      column: "Symbol",
+      code: "blank-instrument",
+    });
+    expect(parsed.problems[0]?.message).toContain("Line 3");
+    expect(parsed.problems[0]?.message).toContain(`"${populated}"`);
+    expect(parsed.problems[0]?.message).toContain("fix the source file and start a new upload");
+    expect(parsed.problems[0]?.message).not.toContain(
+      row.find((cell) => cell.trim() !== "") ?? "",
+    );
+  });
+
+  it.each(["0", "not a number"])(
+    "treats a quantity spelling of %j as populated after numeric normalisation",
+    (quantity) => {
+      const parsed = parseStatement(
+        [
+          ["Symbol", "Qty"],
+          ["", quantity],
+        ],
+        mapping({ columns }),
+      );
+
+      expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+      expect(parsed.problems[0]?.message).toContain('"Qty"');
+    },
+  );
+
+  it.each(["", "-", "--", "—", "n/a", "N/A"])(
+    "ignores a blank instrument row whose financial cells contain the absence spelling %j",
+    (absence) => {
+      const parsed = parseStatement(
+        [
+          ["Symbol", "Qty", "Basis"],
+          ["", absence, absence],
+        ],
+        mapping({
+          columns: { instrument: "Symbol", quantity: "Qty", costBasis: "Basis" },
+        }),
+      );
+
+      expect(parsed.problems).toEqual([]);
+      expect(parsed.positions).toEqual([]);
+    },
+  );
+
+  it("names two populated financial columns without an Oxford comma", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "Basis"],
+        ["", "0", "not a number"],
+      ],
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty", costBasis: "Basis" } }),
+    );
+
+    expect(parsed.problems[0]?.message).toContain('mapped "Qty" and "Basis" cells have content');
+    expect(parsed.problems[0]?.message).not.toContain('"Qty", and "Basis"');
+  });
+
+  it("refuses a ragged row whose missing instrument cell accompanies mapped data", () => {
+    const parsed = parseStatement(
+      [
+        ["Qty", "Symbol"],
+        ["0"],
+      ],
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty" } }),
+    );
+
+    expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(/Line 2.*"Qty"/);
+  });
+
+  it.each([
+    { label: "as-of date", header: "As Of", value: "2026-09-13", column: "asOf" as const },
+    {
+      label: "account number",
+      header: "Account",
+      value: "Z12-345678",
+      column: "accountNumber" as const,
+    },
+  ])("ignores a blank instrument row populated only by its mapped $label", ({
+    header,
+    value,
+    column,
+  }) => {
+    const parsed = parseStatement(
+      [
+        [header, "Symbol", "Qty"],
+        [value],
+      ],
+      mapping({
+        columns: {
+          instrument: "Symbol",
+          quantity: "Qty",
+          [column]: header,
+        },
+      }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.positions).toEqual([]);
+  });
+
+  it("ignores empty spacers and footer text outside mapped financial and account columns", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "Basis", "As Of", "Account", "Name", "Other"],
+        ["VTI", "1", "", "", "", "Vanguard", ""],
+        [],
+        ["   ", "  ", "", "\t", "", "Footer heading", "disclosure text"],
+      ],
+      mapping({
+        columns: {
+          instrument: "Symbol",
+          quantity: "Qty",
+          costBasis: "Basis",
+          asOf: "As Of",
+          accountNumber: "Account",
+          name: "Name",
+        },
+      }),
     );
 
     expect(parsed.problems).toEqual([]);

@@ -26,7 +26,8 @@ import type { Route } from "./+types/review";
  * Step four — the diff, then the commit (ingest brief §6), the flow's only
  * write. §5.2: a missing row means sold, so every removal is listed in
  * full, and removing more than half needs a ticked confirmation. Read-only
- * plus date and tick — a wrong figure is fixed by walking back to columns.
+ * plus date and tick — mapping errors go back to Columns; source-file errors
+ * need a corrected upload because a draft's bytes never change.
  */
 export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
@@ -50,8 +51,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       latestAsOf: latestRecordableDate(),
     };
   } catch (error) {
-    // An earlier step not genuinely passed redirects there, not an error.
     if (error instanceof DraftNotReadyError) {
+      if (error.blocked !== null) {
+        return {
+          steps: {
+            current: 4,
+            draftId: error.blocked.draftId,
+            instrumentsSkipped: error.blocked.instrumentsSkipped,
+          } satisfies UploadStepsData,
+          diff: null,
+          blocked: error.blocked,
+          earliestAsOf: earliestRecordableDate(),
+          latestAsOf: latestRecordableDate(),
+        };
+      }
+
       const stale = url.searchParams.get("stale") === "true" ? "?stale=true" : "";
       return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
     }
@@ -129,6 +143,9 @@ export async function action({ params, request }: Route.ActionArgs) {
           diff = await reviewForDraft(params.draftId, values.asOf ?? "");
         } catch (reviewError) {
           if (reviewError instanceof DraftNotReadyError) {
+            if (reviewError.blocked !== null) {
+              return redirect(`/upload/${params.draftId}/review`);
+            }
             const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
             return redirect(`/upload/${params.draftId}/${reviewError.step}${stale}`);
           }
@@ -160,6 +177,9 @@ export async function action({ params, request }: Route.ActionArgs) {
       };
     }
     if (error instanceof DraftNotReadyError) {
+      if (error.blocked !== null) {
+        return redirect(`/upload/${params.draftId}/review`);
+      }
       const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
       return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
     }
@@ -206,6 +226,52 @@ function GroupHeading({ label }: { label: string }) {
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
   const { earliestAsOf, latestAsOf } = loaderData;
+
+  // Fresh loader state wins over carried action data: if a saved draft has become invalid, an
+  // earlier refused diff must not put its removal comparison and Record button back on screen.
+  if (loaderData.diff === null) {
+    const { blocked } = loaderData;
+
+    return (
+      <section className="panel">
+        <header className="panel-header">
+          <h2 className="panel-title">This statement cannot be reviewed yet</h2>
+        </header>
+
+        <div className="panel-body form-intro">
+          <p>
+            <strong>{blocked.filename}</strong> · {blocked.accountName}
+            {blocked.accountNumberTail ? ` ${blocked.accountNumberTail}` : ""} — owned by{" "}
+            {blocked.ownerName}
+          </p>
+          {blocked.problems.map((problem, index) => (
+            <p
+              key={`${problem.row ?? "mapping"}-${problem.column ?? "mapping"}-${index}`}
+              className="form-error"
+              role="alert"
+            >
+              {problem.message}
+            </p>
+          ))}
+          <p>
+            Go back to change the column mapping if the instrument is in another column. If the
+            instrument is missing from the source row, edit the CSV outside Portfolio and upload
+            the corrected file. This draft keeps the original file.
+          </p>
+        </div>
+
+        <div className="panel-form">
+          <Link className="button" to={`/upload/${blocked.draftId}/columns`}>
+            Back to columns
+          </Link>
+          <Link className="button button--text" to={`/upload?account=${blocked.accountId}`}>
+            Upload corrected file
+          </Link>
+        </div>
+      </section>
+    );
+  }
+
   // The refusal's own diff when there was one (#181) — the loader can hold the earlier account
   // state the commit just refused against.
   const diff: UploadDiff = actionData?.diff ?? loaderData.diff;

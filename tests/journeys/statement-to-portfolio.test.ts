@@ -99,6 +99,7 @@ async function reviewPage(draftId: string, search = "") {
       `Expected the review screen, but the draft was sent to ${outcome.headers.get("Location")}.`,
     );
   }
+  if (outcome.diff === null) throw new Error("Expected a diffable review, and the draft was blocked.");
   return outcome;
 }
 
@@ -148,6 +149,7 @@ describe("a first statement, from the drop screen to the account page", () => {
       expect(toReview).toBe(`/upload/${draftId}/review`);
 
       const review = await reviewPage(draftId);
+      if (review.diff === null) throw new Error("The valid statement was blocked.");
       expect(review.diff.added.map((row) => row.symbol).sort()).toEqual(["FZROX", "VTI"]);
       // No date column in this export, so the screen must ask for one.
       expect(review.diff.asOf.source).not.toBe("file");
@@ -260,6 +262,7 @@ describe("the same brokerage's next statement", () => {
       // instrumentsSkipped is the only surviving trace once aliases are indistinguishable from any other vocabulary (brief §7.5).
       const review = await reviewPage(draftId, "?asOf=2026-02-28");
       expect(review.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
+      if (review.diff === null) throw new Error("The valid statement was blocked.");
 
       expect(review.diff.added).toEqual([]);
       expect(review.diff.removed).toEqual([]);

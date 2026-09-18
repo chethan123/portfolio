@@ -3,12 +3,12 @@
 // preselects resolving by position instead of column name would map quantity onto cost basis and read as correct.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { loader } from "../../app/routes/upload/columns.tsx";
+import { action, loader } from "../../app/routes/upload/columns.tsx";
 import { NOT_IN_FILE } from "~/lib/column-mapping.server";
 import { rememberMapping } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
-import { args, get } from "../support/routes.ts";
+import { args, get, post } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
@@ -143,6 +143,55 @@ describe("the preselected columns", () => {
 
       // Named — the reader's next move (remap, or mark not-in-file) depends on knowing the column disappeared.
       expect(missingColumns).toEqual(["Symbol", "Quantity", "Cost Basis"]);
+    }),
+  );
+});
+
+describe("saving a mapping", () => {
+  it(
+    "stays on Columns and names a blank-instrument row's populated mapped cells",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "brokerage" });
+      const draft = await ctx.seedUploadDraft({
+        account,
+        filename: "blank-instrument.csv",
+        bytes: encode(
+          [
+            "Instrument,Quantity,Cost Basis,As Of,Account",
+            "VTI,282.144455,165.4961,2026-09-13,Z12-345678",
+            ",139.153103,108.2561,2026-09-13,Z12-345678",
+          ].join("\n"),
+        ),
+      });
+
+      const result = await action(
+        args(
+          post(`/upload/${draft.id}/columns`, {
+            headerRow: "0",
+            instrument: "Instrument",
+            quantity: "Quantity",
+            costBasis: "Cost Basis",
+            asOf: "As Of",
+            accountNumber: "Account",
+            costBasisIs: "per_share",
+          }),
+          { draftId: draft.id },
+        ),
+      );
+
+      if (result instanceof Response) throw new Error("The invalid mapping left Columns.");
+      expect(result.problems).toHaveLength(1);
+      expect(result.problems[0]).toMatch(/Line 3/);
+      expect(result.problems[0]).toMatch(/"Quantity" and "Cost Basis"/);
+      expect(result.problems[0]).not.toMatch(/"As Of"|"Account"/);
+      expect(result.problemFields).toEqual(["instrument"]);
+
+      const stored = await ctx.db
+        .selectFrom("upload_draft")
+        .select(["mapping", "had_first_sightings"])
+        .where("id", "=", draft.id)
+        .executeTakeFirstOrThrow();
+      expect(stored).toEqual({ mapping: null, had_first_sightings: null });
     }),
   );
 });

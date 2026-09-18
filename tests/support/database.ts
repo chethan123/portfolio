@@ -20,6 +20,10 @@ export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
 
+/** Refused immediately, which is how a database outage arrives in fail-closed route tests. */
+export const UNREACHABLE_DATABASE_URL =
+  "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
+
 let pool: Pool | undefined;
 let db: Kysely<Database> | undefined;
 let migrated: Promise<void> | undefined;

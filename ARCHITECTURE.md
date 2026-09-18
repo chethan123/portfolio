@@ -400,6 +400,7 @@ table with a single grep. They come in three tiers.
 | Everything read off a closed vocabulary: an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind, one for which kinds hold their whole position in one number and one for which run negative, are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data, because the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 | Settling the owner-filter reading: the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading`, what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it. For the chart's reads they name it to the module that makes them, which §6.3 sets out. Either way, whose money a loader reads stays visible in review rather than hidden inside this one. |
+| Resolving masking for one request | `app/lib/masking.server.ts:maskingForRequest` | Root and Holdings call this helper with React Router's request context, so parallel loaders share one deferred policy-and-cookie read and one fail-closed result. Nothing else calls `resolveMasked` while serving a screen. The `/masking` action reads the policy only to choose the cookie lifetime, and Settings reads it to draw and save the policy itself. |
 | Appending to an account's history, and closing the account | `app/lib/accounts.server.ts` | `withAccountLock` takes `select … for no key update` on the account row inside one transaction and hands the writer the row it locked. The obligation is on every writer that inserts a `position_set`, and on `closeAccount`: run inside it from the read decided on to the insert, and thread its transaction through every query on the way. A writer that reads the latest set outside it reintroduces #283 (§7.2). |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
@@ -423,11 +424,11 @@ table with a single grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:460` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `valueAt` in `uploads.server.ts` computes `quantity × price` **in JavaScript**, for the review
   diff's Value column, because a row the account does not hold yet has no `holding_valued` row to
-  compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
-  zero) and is never summed into a total. This is the one place a valuation figure is produced outside
-  the view, and it is worth watching.
+  compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴,
+  half away from zero) and is never summed into a total. This is the one place a valuation figure
+  is produced outside the view, and it is worth watching.
 - `valuation.server.ts:417` (`readSessionSeries`) values holdings from `price_observation` rather
   than through `holding_valued`, the 1D chart's line and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
@@ -488,6 +489,7 @@ sequenceDiagram
     L->>H: availableFilters / applyFilters / groupHoldings / summarise
     Note right of H: Pure functions over the array that<br/>already exists. Rows, groups and totals<br/>all come from it, so they cannot disagree.
     H-->>L: rows + groups + totals
+    L->>L: if masked, omit amount fields after all calculations
     L-->>B: SSR HTML (hydrates to client routing)
 ```
 
@@ -509,6 +511,38 @@ Three properties of this path are deliberate:
    will be filed under.
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
+
+Holdings is the one read path whose masked projection does not carry those decimal strings to the
+browser. `masking.server.ts` places one deferred policy-and-cookie resolution in React Router's
+per-request `RouterContextProvider`; the root and Holdings loaders obtain the same promise even when
+they start in parallel. The Holdings loader does every calculation against `ValuedHolding[]`, then
+replaces known amounts with omitted properties. Null remains null so an unknown figure stays a dash;
+direction and ratios are projected separately. The global masking fetcher revalidates route loaders
+after its action (React Router 7.18.2), so showing amounts obtains a fresh exact projection before
+correction inputs mount.
+
+The cookie is also a browser external store through React 19's `useSyncExternalStore`. The toggle
+publishes its synchronous write locally and sends one payload-free invalidation through the
+module's single `BroadcastChannel`; focus, visibility, and the next store snapshot are the fallback.
+A live tab receiving the invalidation rereads the cookie and adopts Hide immediately; an
+unsubscribed or unsignalled tab adopts it at one of those fallback points. Tabs do not adopt Show
+until their own intentional Show can revalidate a masked Holdings projection. Enhanced actions
+carry an explicit form marker and never repeat the client cookie write in a delayed response; an
+unmarked request remains the no-JavaScript server writer even where Fetch Metadata headers are
+absent. The enhanced toggle reconciles an unchanged choice to the freshly loaded policy's lifetime;
+a session cookie covers the request, a failed policy read leaves a session Hide, and unavailable
+token storage skips the lifetime repair. Display Settings uses the same split, plus an origin-local
+random intent token so success clears the override only if no later toggle won before the clear. A
+detected overlap during the clear writes a session Hide; the last assignment leaves either the
+newer choice or that Hide, never the stale clear. Its session-only bridge remains when root
+revalidation fails. Unavailable token storage preserves the cookie. Neither the channel nor the
+token contains private data.
+
+A successful policy resolution is an explicit root-loader field. When the policy read fails, that
+field keeps the browser masked even if a pre-existing cookie says to show. The hook's server
+snapshot remains the root loader value, so hydration has no module-global request state. During
+either transition the editor requires both unmasked state and an exact projection, keeping stale
+exact data or a placeholder out of form defaults.
 
 ### 4.5 Write paths
 
@@ -806,7 +840,7 @@ the account lock (§7.2) began its transaction before the set it then copies for
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping
 at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1131`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` in `uploads.server.ts` needs the
 *predecessor* of a given set, "what did this account hold before this upload landed", which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -984,8 +1018,8 @@ That is what makes a reload, the back button and a bookmarked half-finished uplo
 it is why the mapping records its own delimiter rather than letting a second sniff reach a different
 verdict.
 
-**Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `uploads.server.ts`'s `assembleDiff` folds
+**Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so
+three tax-lot rows of one fund collapse into one position. `assembleDiff` in `uploads.server.ts` folds
 again by the *resolved instrument*, so two spellings of one fund, `FCASH` and `CASH & CASH
 INVESTMENTS`, collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -1015,8 +1049,13 @@ Problems present means the file must not be committed. Whether anything is still
 what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
 so the screen has something to show beside the complaint. A problem with the **mapping itself**, a
 required column not named or a column name the header row does not carry, returns no positions at all
-(`statement.ts:192`), because nothing below it could be trusted. The second case is the ordinary
-one: a saved mapping meeting a renamed column.
+(`parseStatement` in `statement.ts`), because nothing below it could be trusted. The second case is
+the ordinary one: a saved mapping meeting a renamed column.
+
+A row with no instrument is ignored only when its mapped quantity and cost-basis cells use the
+shared absence spellings. Normalisation keeps zero and malformed text as evidence of a source row,
+while a dash or `n/a` remains an absence everywhere. The problem points at the instrument mapping
+and names the source line and populated column labels; it never repeats their values.
 
 #### The step machine
 
@@ -1031,7 +1070,8 @@ stateDiagram-v2
 
     Instruments --> Review: resolveAll() — answers written on<br/>the draft; vocabulary waits for commit
 
-    Review --> Columns: mapping no longer parses —<br/>DraftNotReadyError, resume where the answer is
+    Review --> Columns: mapping/header or another parse rule fails —<br/>DraftNotReadyError, resume where the answer is
+    Review --> Review: saved mapping exposes a blank-instrument data row —<br/>show the source problem, no diff or commit
     Review --> Instruments: a first sighting reappeared
     Review --> Review: guards refuse — see the commit flowchart
     Review --> Committed: commitUpload() — one transaction
@@ -1054,9 +1094,9 @@ be a fifth step nobody asked to stand on.
 **A dead draft is one page, not four.** Swept, already committed, mistyped and
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
 next move, starting again from `/upload`, is the same in every case. The one variation is
-deliberate: a re-POSTed review knows which account the statement already landed in, so the review
-action throws `data({ accountId }, { status: 404 })` and that rendering adds a second link to the
-account. Every other step throws a plain-string 404 and gets the single link.
+deliberate: a re-POSTed review knows which account the statement already landed in, so it throws
+`data({ accountId }, { status: 404 })` (`action` in `review.tsx`) and that rendering adds a second
+link to the account. Every other step throws a plain-string 404 and gets the single link.
 
 #### Column mapping: how a brokerage is remembered
 
@@ -1624,15 +1664,19 @@ Three base error types and two upload-specific refinements, with the layer each 
 | `RefusedUpload` | `uploads.server.ts` | the freshly assembled dated diff and whether its baseline moved, as well as the `ValidationError` messages | the review action | the same review re-rendered once with every applicable baseline, filed-behind and removal refusal, and both confirmations cleared |
 | `StaleReviewError` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` message | the review action | the same review re-rendered with its current diff and both confirmations cleared; only `DraftNotReadyError` redirects to an earlier step |
 | `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: the `upload/review.tsx` action throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
-| `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
+| `DraftNotReadyError` | `uploads.server.ts` | the step still owed and, when Review must block, only its display fields, step state and source-row problems | the upload routes | a redirect to that step; Review instead renders the narrow blocked payload |
 
 **A refusal is an ordinary outcome of a form submission, never a 500.** That rule is what keeps
 routes thin: a route reads the form, hands the raw fields to a domain function, and renders whatever
 comes back. It never imports Zod, and it never states a rule that a second caller could then get a
 different answer for.
 
-`DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. The reader's next
-move is an earlier step, so the error names that step and the routes translate it into a redirect.
+`DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. Usually the reader's
+next move is an earlier step, so the error names that step and the routes translate it into a
+redirect. The domain instead supplies a narrow blocked payload when a mapping saved before the
+blank-instrument rule exposes a financial row. Review renders those source-row problems at the
+bookmarked URL, with no diff or commit, and links to Columns. Draft bytes and mapping never ride on
+the error.
 
 **One deliberate inversion of this table:** `app/lib/owner-reading.server.ts`'s `ownerReading` throws
 the redirect `Response` itself, rather than a domain error for a route to translate, because settling
@@ -1660,7 +1704,8 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
 | A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock. Its `update` does queue behind a writer holding the account row, but the read it decided on may predate that writer; what the gap can cost is a label briefly disagreeing with the rows, never a row, because `setBalance` re-reads the rows under the lock | `accounts.server.ts:189` |
+| A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:190`; [#311](https://github.com/chethan123/portfolio/issues/311) |
+| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:190`; [#312](https://github.com/chethan123/portfolio/issues/312) |
 | An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:268` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
@@ -2278,6 +2323,7 @@ still live in the current code:
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
 | `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
+| `decimal-input.ts` | The browser-safe exact-string rules shared by every typed financial field and its live interpretation: grouping, sign, scale, storage width and percentage range are decided once without floating point; commas and non-line-breaking whitespace group thousands only in threes, while the legacy leading `+` and trailing point remain valid |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
@@ -2288,7 +2334,8 @@ still live in the current code:
 | `raw-string.ts` | The one line-ending rule a raw instrument string needs when a form posts it back, browser-safe because the instruments step's action and the alias screen's rows both apply it |
 | `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
-| `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). `resolveMasked`, `resolveBrowserMasked` and the cookie builders are pure; the same client-bundle module also owns the browser store, `BroadcastChannel`, listeners and `localStorage` ordering tokens |
+| `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and fail-closed outcome |
 | `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request, attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
@@ -2324,7 +2371,7 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
 | `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
 | `upload/instruments.tsx` | Step three: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
-| `upload/review.tsx` | Step four: the dated diff, then the commit, the flow's only history write. An undated file starts with today authorized; **Review this date** authorizes an edited date and redraws its baseline and confirmations without recording. Every removal is listed in full, a majority removal demands a tick, and a wrong figure is fixed back on the columns step |
+| `upload/review.tsx` | Step four: the dated diff, then the commit, the flow's only history write. An undated file starts with today authorized; **Review this date** authorizes an edited date and redraws its baseline and confirmations without recording. Every removal is listed in full, and a majority removal demands a tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping or upload a corrected file against the same account. A wrong figure is fixed back on Columns |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
 | `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
 | `settings/index.tsx` | What Settings holds and what it will hold, since naming the unbuilt tabs is the honest version of a fresh install |
@@ -2338,7 +2385,7 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here. This route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
 | `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript, since there is no progressive-enhancement path for a passkey check |
 | `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie, posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
-| `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
+| `masking.ts` | The masking toggle's no-JavaScript cookie writer and enhanced-form revalidation target, with an explicit form marker distinguishing the two; `lib/masking.ts` owns the cookie name, vocabulary, lifetime, cross-tab invalidation and intent ordering |
 | `refresh.ts` | The one way a person spends a provider request on demand, a resource route like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Those two alone decide the 200/503. Carries a `pricing` object beside them (spec 0021) which never changes that status: a live `worker` probe over the socket, and `scheduler`/`quotes`/`ok` read passively off the poller's own slot. Still never checks the provider, still never requires authentication (§7.4). A thin composer: `lib/health-response.ts` builds the body, `lib/price-health.ts` derives the categories |
 
@@ -2352,6 +2399,7 @@ also export pure helpers for testing.
 | File | Role |
 |---|---|
 | `amount.tsx` | **The one component that renders an amount** (spec 0007, ADR-0002): every absolute figure comes through here and every ratio does not. One component rather than a flag on the formatters, because the guarantee is only as good as its narrowest point; `masking-boundary.test.ts` asserts the import boundary in place of a linter. `Delta` lives here and asks it for the figure rather than being a second renderer |
+| `interpreted-number-input.tsx` | The progressive form control for the shared decimal rules: the fixed interpretation rule is in server markup, then a masking-aware punctuation-normalization echo follows generic-valid input after hydration without promising a contextual write will succeed. A server refusal stays visible, invalid and described only while the box still carries its returned value; editing makes the current client state authoritative, and a new failed submit activates its new refusal |
 | `masking-toggle.tsx` | The control that hides every amount, in the chrome, labelled with what it will do rather than what is true. Two writers, one click: a real form to `/masking` for scripting-off, and a direct cookie write so the flip happens at the speed of a hand |
 | `lock-now-control.tsx` | The chrome's other control (ticket 06, docs/adr/0012): a real `<form method="post">` to `/lock-now`, drawn only while the household holds a passkey at all. Beside `MaskingToggle` and never mistakable for it: that one dots the amounts on a screen you are reading, while this one ends the reading outright, on this browser, right now |
 | `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable, because a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |

@@ -2,7 +2,14 @@
 // (error type, parse helper, field shapes, phrase-builder) so routes never import Zod.
 import { z } from "zod";
 
-import { SHARE_SCALE, compareDecimal } from "./money.ts";
+import {
+  moneyMagnitudeRule,
+  parseDecimalInput,
+  percentRateRule,
+  perShareAmountRule,
+  signedQuantityRule,
+  type DecimalInputRule,
+} from "./decimal-input.ts";
 
 // Key for a message belonging to the submission as a whole, not one field.
 export const FORM_ERROR = "form";
@@ -81,44 +88,29 @@ export function formFields(form: FormData): Record<string, string> {
   return fields;
 }
 
-// Digits and point, extracted from how a person writes a figure. Shared by every number field
-// so there's one answer to "is `1 234.5` a number", not a subtly different one per field.
-const bareDecimal = (value: string): string =>
-  value
-    .replace(/^\+/, "")
-    // U+00A0 (copy-pasted statement) and U+2009 (thousands separator some brokerages use).
-    .replace(/[$\s ,]/g, "")
-    // ".50"/"50." complete rather than refuse; lookarounds keep a bare "." from becoming "0"
-    // (a stray keystroke would otherwise read as the whole position sold).
-    .replace(/^\.(?=\d)/, "0.")
-    .replace(/(?<=\d)\.$/, "");
+// Parse and validate once. The same browser-safe rule drives the live interpretation note, so it
+// cannot present a sign, scale, size or range that this boundary then refuses.
+const decimalText = (rule: DecimalInputRule, required = false) =>
+  z
+    .string(required ? { message: `${rule.label} is required.` } : undefined)
+    .transform((value, ctx) => {
+      const parsed = parseDecimalInput(value, rule.options);
+      if (parsed.kind === "invalid") {
+        ctx.addIssue({ code: "custom", message: rule.message(parsed.reason) });
+        return z.NEVER;
+      }
+      if (required && parsed.value === "") {
+        ctx.addIssue({ code: "custom", message: `${rule.label} is required.` });
+        return z.NEVER;
+      }
+      return parsed.value;
+    });
 
 // Unsigned decimal string, as a person types one ($14,500.00 / 14,500 / 14500 all valid).
 // No sign: direction comes from account kind (§2), not a second source of truth. No Number():
 // output stays typed digits as text (§4.1). maxIntegerDigits default 12 = numeric(20,8)'s room.
 export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    .transform(bareDecimal)
-    .superRefine((value, ctx) => {
-      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
-
-      if (value === "") {
-        refuse(`${label} is required.`);
-      } else if (/^[-−]/.test(value)) {
-        refuse(
-          `${label} is entered as a plain amount, without a minus sign — ` +
-            "whether it counts for or against you follows from the kind of account it is.",
-        );
-      } else if (!/^\d+(\.\d+)?$/.test(value)) {
-        refuse(`${label} must be an amount in dollars, like 1,250.00.`);
-      } else if ((value.split(".")[1] ?? "").length > 2) {
-        refuse(`${label} is recorded to the cent, so it takes at most two decimal places.`);
-      } else if ((value.split(".")[0] ?? "").replace(/^0+/, "").length > maxIntegerDigits) {
-        refuse(`${label} is larger than this application can store.`);
-      }
-    });
+  decimalText(moneyMagnitudeRule(label, maxIntegerDigits), true);
 
 // USD's seeded close is dated 1970-01-01, and holding_valued_at carries closes forward only —
 // a set dated earlier is unpriced cash. Exported so a date control's boundary is stated once.
@@ -172,40 +164,12 @@ export const recordedDate = (label: string) =>
       }
     });
 
-// numeric(20, 8)'s scale.
-const QUANTITY_DECIMALS = 8;
-
-// numeric(20, 4)'s scale.
-const PER_SHARE_DECIMALS = 4;
-
 // Signed, unlike moneyMagnitude: this box reopens containing the quantity already on the row
 // (e.g. a loan showing "−8,000"), so it must round-trip formatQuantity's output — U+2212 and
 // thousands separators both need to come back in. "−0" isn't a thing: a debt of nothing
 // shouldn't print as though it were something.
 export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    // U+2212 in (table's true minus), ASCII "-" out (what the driver takes) — converted once, here.
-    .transform((value) => bareDecimal(value).replace(/^−/, "-"))
-    .superRefine((value, ctx) => {
-      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
-
-      if (value === "" || value === "-") {
-        refuse(`${label} is required.`);
-      } else if (!/^-?\d+(\.\d+)?$/.test(value)) {
-        refuse(`${label} must be a number, like 120.5 — or −8,000 for something owed.`);
-      } else if ((value.split(".")[1] ?? "").length > QUANTITY_DECIMALS) {
-        refuse(
-          `${label} is recorded to ${QUANTITY_DECIMALS} decimal places, which is finer than any ` +
-            "brokerage reports a fractional share.",
-        );
-      } else if (
-        (value.split(".")[0] ?? "").replace(/^-/, "").replace(/^0+/, "").length > maxIntegerDigits
-      ) {
-        refuse(`${label} is larger than this application can store.`);
-      }
-    })
+  decimalText(signedQuantityRule(label, maxIntegerDigits), true)
     // After the checks: "−0.00" refused for being zero (normalised), not for its sign.
     .transform((value) => (/^-0+(\.0+)?$/.test(value) ? value.slice(1) : value));
 
@@ -213,28 +177,7 @@ export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
 // places (numeric(20,4)) so a box prefilled from cost_basis_per_share accepts what it printed.
 // Blank -> null, never 0: a zero basis would claim the shares were free.
 export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
-  z
-    .string()
-    .trim()
-    .transform(bareDecimal)
-    .superRefine((value, ctx) => {
-      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
-
-      if (value === "") return;
-
-      if (/^[-−]/.test(value)) {
-        refuse(
-          `${label} is what one share cost, which is never negative — a position held short or ` +
-            "owed carries its sign in the quantity instead.",
-        );
-      } else if (!/^\d+(\.\d+)?$/.test(value)) {
-        refuse(`${label} must be an amount in dollars, like 92.4150.`);
-      } else if ((value.split(".")[1] ?? "").length > PER_SHARE_DECIMALS) {
-        refuse(`${label} is recorded to ${PER_SHARE_DECIMALS} decimal places, and no further.`);
-      } else if ((value.split(".")[0] ?? "").replace(/^0+/, "").length > maxIntegerDigits) {
-        refuse(`${label} is larger than this application can store.`);
-      }
-    })
+  decimalText(perShareAmountRule(label, maxIntegerDigits))
     .transform((value) => (value === "" ? null : value))
     .nullish()
     .transform((value) => value ?? null);
@@ -242,24 +185,4 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
 // Typed, asked, printed and stored as a percentage (23.8, not 0.238) — conversion to a
 // multiplier happens only where the multiplying does. "23.8%" pasted equals "23.8" typed;
 // negative isn't a generosity extended (a negative rate isn't a rate). No Number() (§4.1).
-export const percentRate = (label: string, decimals = SHARE_SCALE) =>
-  z
-    .string({ message: `${label} is required.` })
-    .trim()
-    .transform((value) => bareDecimal(value.replace(/%$/, "")))
-    .superRefine((value, ctx) => {
-      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
-
-      if (value === "") {
-        refuse(`${label} is required.`);
-      } else if (/^[-−]/.test(value)) {
-        refuse(`${label} cannot be negative.`);
-      } else if (!/^\d+(\.\d+)?$/.test(value)) {
-        refuse(`${label} must be a percentage, like 23.8.`);
-      } else if ((value.split(".")[1] ?? "").length > decimals) {
-        refuse(`${label} takes at most ${decimals} decimal places.`);
-      } else if (compareDecimal(value, "100", decimals) > 0) {
-        // Compared on the digits, not Number(value) > 100 — the float this module avoids elsewhere.
-        refuse(`${label} cannot be more than 100%.`);
-      }
-    });
+export const percentRate = (label: string) => decimalText(percentRateRule(label), true);

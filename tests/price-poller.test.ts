@@ -17,7 +17,12 @@ import { createPool } from "../server/db.ts";
 
 import { action as refreshAction } from "../app/routes/refresh.ts";
 
-import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
+import {
+  TEST_DATABASE_URL,
+  UNREACHABLE_DATABASE_URL,
+  closeTestDatabase,
+  withDatabase,
+} from "./support/database.ts";
 import { args, post } from "./support/routes.ts";
 
 import type { Kysely, KyselyPlugin } from "kysely";
@@ -27,9 +32,6 @@ import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
 
 // getConfig() memoises its first read — set before any test runs, as the container does before serving
 process.env.DATABASE_URL = TEST_DATABASE_URL;
-
-// refused immediately — how "the database went away" arrives here
-const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
 // seeded refresh cadence the timer is first armed with; no tick re-arms it
 const INTERVAL_MS = 15 * 60 * 1000;
