@@ -32,8 +32,8 @@ You do not have to tidy a file up first.
   break and doubled quotes.
 - **Any line ending.** Windows, Unix or old Mac.
 - **Preamble and footer rows.** "Account Summary", a date stamp, a blank line, a disclaimer at the
-  foot: rows above the header are never read, and a row with nothing in the instrument column is
-  passed over.
+  foot: rows above the header are never read, and a row with no instrument and no quantity or cost
+  basis is passed over.
 - **Ragged rows.** Rows shorter or longer than the header do not break the read.
 
 ## The account and the file
@@ -121,7 +121,11 @@ for households ahead of the server's time zone.
 
 ## What happens to your rows
 
-- **A row with a blank instrument is skipped silently.** That is a spacer or a footer.
+- **A blank instrument is skipped only when mapped quantity and cost basis state no figure.** Zero
+  and malformed text count as content, so Columns refuses the mapping and names the source line and
+  populated columns. A blank, a dash or `n/a` remains an absence. Choose a different instrument
+  column if the mapping is wrong; if the source row is wrong, fix the external file and start a new
+  upload.
 - **A row that names something but whose quantity is an absence marker is skipped and listed on the
   review**, by line number. A blank, a dash or `n/a` in the quantity column is the usual case: a
   "Cash & Cash Investments" heading, a subtotal. It is named rather than dropped quietly, because a
@@ -179,6 +183,11 @@ account currently holds. Missing rows mean sold. More than half removed requires
 A statement dated behind the account's current one is filed behind: recording it still rewrites
 history between its date and the next statement recorded after it, but changes nothing the account
 reports today, and committing it needs its own acknowledgement, separate from a removal tick.
+
+A draft saved before the blank-instrument check may reach Review with one of these invalid rows.
+Review names the line and populated mapped columns, shows no removal diff, and offers no record
+button. Return to Columns to change the mapping, or edit the CSV outside Portfolio and use the link
+to upload the corrected file against the same account. The draft's original file does not change.
 
 Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
 cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
