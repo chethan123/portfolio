@@ -608,6 +608,28 @@ describe("the 1D range on an account", () => {
   );
 });
 
+describe("a refused balance without JavaScript", () => {
+  it(
+    "links the returned field error to the invalid balance input",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
+      const path = `/accounts/${account.id}`;
+      const refused = await action(
+        args(post(path, { amount: "1,5", asOf: today() }), { accountId: account.id }),
+      );
+      const data = await loader(args(get(path), { accountId: account.id }));
+      const markup = renderRoute(Account, path, data, { actionData: refused });
+
+      expect(markup).toContain(
+        '<p id="set-balance-amount-error" class="field-error" role="alert">',
+      );
+      expect(markup).toMatch(
+        /<input(?=[^>]*id="set-balance-amount")(?=[^>]*aria-describedby="[^"]*set-balance-amount-error[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
+      );
+    }),
+  );
+});
+
 describe("the receipt a balance write redirects to", () => {
   it(
     "keeps what the submitting page was reading",

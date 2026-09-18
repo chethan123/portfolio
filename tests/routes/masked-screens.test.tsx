@@ -34,6 +34,9 @@ const VALUE = "58,388.03";
 
 // Cost basis below price, so the row carries an unrealized gain — the one figure that keeps something while masked.
 const COST_BASIS = "300.0000";
+const WHOLE_BASIS = "41,100.00";
+const UNREALIZED = "17,288.03";
+const DIVIDEND = "0.00";
 
 /** The uploaded file's quantity — must differ from QUANTITY or there's no diff. */
 const UPLOADED_QUANTITY = "241";
@@ -103,20 +106,34 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
     "Holdings — every value, cost basis, gain and share quantity at once",
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
-      const data = await holdingsLoader(args(get("/holdings")));
+      const maskedData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${MASKED}`)),
+      );
+      const shownData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${UNMASKED}`)),
+      );
 
-      if (data instanceof Response) throw new Error("The loader redirected instead of rendering.");
+      if (maskedData instanceof Response || shownData instanceof Response) {
+        throw new Error("The loader redirected instead of rendering.");
+      }
 
-      const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
-      const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
+      const masked = renderRoute(Holdings, "/holdings", maskedData, { masked: true });
+      // Hide is optimistic: exact loader data remains mounted until its redacted revalidation lands.
+      const hiding = renderRoute(Holdings, "/holdings", shownData, { masked: true });
+      const shown = renderRoute(Holdings, "/holdings", shownData, { masked: false });
 
-      expect(shown).toContain(VALUE);
-      expect(masked).not.toContain(VALUE);
+      for (const amount of [VALUE, WHOLE_BASIS, UNREALIZED, DIVIDEND]) {
+        expect(shown).toContain(amount);
+        expect(masked).not.toContain(amount);
+        expect(hiding).not.toContain(amount);
+      }
       expect(masked).not.toMatch(MONEY_ANYWHERE);
+      expect(hiding).not.toMatch(MONEY_ANYWHERE);
 
       // Story 12: quantity carries no currency mark, so a $-only mask would leave it — and a reader with the price could rebuild the value.
       expect(shown).toContain(QUANTITY);
       expect(masked).not.toContain(`>${QUANTITY}<`);
+      expect(hiding).not.toContain(`>${QUANTITY}<`);
 
       // Story 13: the row is still findable.
       expect(masked).toContain("Vanguard Total Stock");
@@ -227,11 +244,19 @@ describe("how a masked figure is announced", () => {
     "keeps a gain's sign and its arrow, and loses only its size",
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
-      const data = await holdingsLoader(args(get("/holdings")));
-      if (data instanceof Response) throw new Error("The loader redirected instead of rendering.");
+      const maskedData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${MASKED}`)),
+      );
+      const shownData = await holdingsLoader(
+        args(get("/holdings", `${MASKING_COOKIE}=${UNMASKED}`)),
+      );
+      if (maskedData instanceof Response || shownData instanceof Response) {
+        throw new Error("The loader redirected instead of rendering.");
+      }
 
-      const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
-      const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
+      const masked = renderRoute(Holdings, "/holdings", maskedData, { masked: true });
+      const hiding = renderRoute(Holdings, "/holdings", shownData, { masked: true });
+      const shown = renderRoute(Holdings, "/holdings", shownData, { masked: false });
 
       // Asserted against the unmasked render, not a literal, so a fixture that stopped producing a gain fails here instead of passing vacuously.
       expect(shown).toContain("delta--gain");
@@ -239,10 +264,14 @@ describe("how a masked figure is announced", () => {
       // §12: gain/loss never by colour alone — dropping the sign while masked would leave hue as the only direction channel.
       expect(masked).toContain("delta--gain");
       expect(masked).toMatch(/\+(<!-- -->)?\$(<!-- -->)?•{6}/); // sign kept: +$••••••, never bare $••••••
+      expect(hiding).toContain("delta--gain");
+      expect(hiding).toMatch(/\+(<!-- -->)?\$(<!-- -->)?•{6}/);
       // Arrow kept, asserted as the same drawing as the unmasked row rather than literal path data (not pinned to the icon set).
       expect(arrowIn(masked)).toBe(arrowIn(shown));
+      expect(arrowIn(hiding)).toBe(arrowIn(shown));
       expect(arrowIn(masked)).not.toBe("");
       expect(masked).not.toMatch(MONEY_ANYWHERE); // size gone
+      expect(hiding).not.toMatch(MONEY_ANYWHERE);
     }),
   );
 });

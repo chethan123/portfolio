@@ -81,6 +81,11 @@ the instrument the preview was drawn against.
 Set the household rate used by Analysis for its potential-tax estimate. This is a projection,
 not a tax calculation for filing. See [Analysis](analysis.md#the-rate-is-yours).
 
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three; `1,5`
+and `1,00,0` are refused as ambiguous rather than read as different rates. A leading plus sign and
+a trailing point are allowed, so `+5` and `5.` both read as 5%. With scripting on, the field also
+echoes how it normalizes the rate's punctuation while you type.
+
 ## Prices
 
 ![The refresh cadence, and the holdings whose price history does not reach back far enough](images/settings-prices.png)

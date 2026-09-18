@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { formatQuantity } from "~/lib/holdings-view";
+import { perShareAmountRule } from "~/lib/decimal-input";
 import { ValidationError, parseInput, perShareAmount, signedQuantity } from "~/lib/input.server";
 
 const quantity = z.object({ quantity: signedQuantity("A quantity") });
@@ -59,6 +60,10 @@ describe("signedQuantity", () => {
     ["+120.5", "120.5"],
     ["1,234.5", "1234.5"],
     ["$1,234.5", "1234.5"],
+    ["12 345.67", "12345.67"],
+    ["1 000", "1000"],
+    ["12 345.67", "12345.67"],
+    ["−12 345.67", "-12345.67"],
     [".5", "0.5"],
     ["120.", "120"],
     ["-0", "0"],
@@ -75,12 +80,22 @@ describe("signedQuantity", () => {
     expect(parseInput(quantity, { quantity: "5." }).quantity).toBe("5");
   });
 
+  it.each(["1,5", "1,00,0", "12,34", "123,45.67", "1 5", "1,234 567"])(
+    "refuses ambiguous grouping in %o",
+    (typed) => {
+      expect(refusal(quantity, { quantity: typed }, "quantity")).toMatch(
+        /ambiguous or invalid.*group thousands in threes/i,
+      );
+    },
+  );
+
   it("keeps a negative quantity negative, because that is where the sign lives", () => {
     expect(parseInput(quantity, { quantity: "-8000" }).quantity).toBe("-8000");
   });
 
   it("refuses a negative zero, which is a debt of nothing written as though it were something", () => {
     expect(parseInput(quantity, { quantity: "-0.00" }).quantity).toBe("0.00");
+    expect(parseInput(quantity, { quantity: "-0,000.00" }).quantity).toBe("0000.00");
   });
 
   it.each([
@@ -104,6 +119,12 @@ describe("signedQuantity", () => {
       "-0000000000000000120.5",
     );
   });
+
+  it("accepts the column's widest quantity at its full precision", () => {
+    expect(
+      parseInput(quantity, { quantity: "999999999999.99999999" }).quantity,
+    ).toBe("999999999999.99999999");
+  });
 });
 
 describe("perShareAmount", () => {
@@ -122,14 +143,30 @@ describe("perShareAmount", () => {
   it.each([
     ["$92.41", "92.41"],
     ["1,092.4150", "1092.4150"],
+    ["1 092.4150", "1092.4150"],
     ["  92.41  ", "92.41"],
+    ["5.", "5"],
+    ["+5", "5"],
   ])("reads %j as %j", (typed, stored) => {
     expect(parseInput(basis, { costBasisPerShare: typed }).costBasisPerShare).toBe(stored);
   });
 
+  it.each(["1,5", "1,00,0", "12,34", "123,45.67", "1 5", "1,234 567"])(
+    "refuses ambiguous grouping in %o",
+    (typed) => {
+      expect(refusal(basis, { costBasisPerShare: typed }, "costBasisPerShare")).toMatch(
+        /ambiguous or invalid.*group thousands in threes/i,
+      );
+    },
+  );
+
   it.each([
     ["-92.41", /never negative/],
     ["−92.41", /never negative/],
+    ["-$1,234", /never negative/],
+    ["$", /must be an amount in dollars/],
+    ["+", /must be an amount in dollars/],
+    ["$ +", /must be an amount in dollars/],
     [".", /must be an amount in dollars/],
     ["ninety", /must be an amount in dollars/],
     ["92.41599", /4 decimal places/],
@@ -138,8 +175,23 @@ describe("perShareAmount", () => {
   });
 
   it("says the sign belongs to the quantity, since that is where a reader must put it", () => {
-    expect(refusal(basis, { costBasisPerShare: "-92.41" }, "costBasisPerShare")).toMatch(
-      /carries its sign in the quantity/,
+    expect(refusal(basis, { costBasisPerShare: "-92.41" }, "costBasisPerShare")).toBe(
+      perShareAmountRule("A cost basis").message("sign"),
     );
+  });
+
+  it("uses the preview rule's scale refusal at the server boundary", () => {
+    expect(refusal(basis, { costBasisPerShare: "92.41599" }, "costBasisPerShare")).toBe(
+      perShareAmountRule("A cost basis").message("scale"),
+    );
+  });
+
+  it("accepts the column's widest basis at full precision and refuses one more integer digit", () => {
+    expect(
+      parseInput(basis, { costBasisPerShare: "9999999999999999.9999" }).costBasisPerShare,
+    ).toBe("9999999999999999.9999");
+    expect(
+      refusal(basis, { costBasisPerShare: "10000000000000000" }, "costBasisPerShare"),
+    ).toMatch(/larger than this application can store/);
   });
 });

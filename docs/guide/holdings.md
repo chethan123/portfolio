@@ -161,8 +161,15 @@ Both are explained in [prices.md](prices.md).
 A statement arrives quarterly and a position changes weekly. Rather than run the whole upload for
 "the 401k contribution added eleven units", correct the row here.
 
-**To do it:** click the pencil at the end of a row. The Quantity and Cost basis cells become
-boxes. Type, then **Save**. **Cancel** closes without writing.
+**To do it:** click the pencil at the end of a row. If amounts are showing, the Quantity and Cost
+basis cells become boxes. Type, then **Save**. **Cancel** closes without writing.
+
+If amounts are hidden, opening the row keeps every figure hidden and shows no boxes. Press **Show
+amounts** in the navigation to load the exact defaults and begin editing. Pressing **Hide amounts**
+while a correction is open removes the boxes here at once. Other open tabs hide too, at the latest
+when you return to them. A Show in another tab does not fetch exact defaults into this one in the
+background; press **Show amounts** here when you intend to load them. Save and Cancel both close the
+editor; the global amount setting stays as you left it.
 
 On a phone the row is already a card. The whole table reflows to one below 768px, the asset name
 as its heading and every other column a labelled line underneath. Open for correction, that gives
@@ -175,6 +182,12 @@ Two things to know before you type:
   share" until you type in it.
 - **Price, Value and Unrealized keep showing the stored figures** while the row is open. They are
   what you are checking your correction against.
+
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three. The
+editor accepts `1 000`, `5.`, and `+5`, and refuses ambiguous forms such as `1,5` and `1,00,0`.
+With scripting on, it also echoes how it normalizes each number's punctuation while you type. The
+echo does not promise that Save will accept the correction: account-specific rules still prevent a
+cash balance finer than cents, a change between held and owed, or a value too large to store.
 
 ### What saving actually does
 

@@ -78,7 +78,7 @@ It goes when you navigate away.
 
 ![A bank account showing the Set balance form](images/set-balance.png)
 
-![The same account on a phone: Upload statement above Set balance and Edit details, sharing the row beneath it](images/set-balance-mobile.png)
+![The Set balance form on a phone, with number-format guidance before recording](images/set-balance-mobile.png)
 
 Bank and loan accounts offer a form for recording a single USD balance. Any open account can also
 receive a CSV upload. Securities accounts have no Set balance form because one cash row would
@@ -92,8 +92,11 @@ Type a **plain positive amount**. The app applies the direction from the kind of
 - On a loan it is captioned **Amount owed**, and what you type counts against the household. You
   never type the minus sign, and typing one is refused.
 
-Dollar signs and thousands separators are fine. Cents are the limit. A third decimal place is
-refused rather than rounded.
+Use a point for decimals. Commas or spaces may separate thousands only in groups of three, so
+`1,234.56` and `1 000` are accepted while `1,5`, `1,00,0`, and `1 5` are refused as ambiguous. A
+leading plus sign and a trailing point are allowed: `+5` and `5.` both read as `5`. Dollar signs are
+fine. With scripting on, the form also echoes how it normalizes the number's punctuation while you
+type. Cents are the limit. A third decimal place is refused rather than rounded.
 
 The box opens **empty** rather than pre-filled. The figure it is replacing is stated beside it
 instead, so re-recording a stale number is never one click.

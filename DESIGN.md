@@ -411,6 +411,24 @@ grouping and sort control closes the editor for free. §8.1's screen has no Reac
 not introduce any. It works with JavaScript off, survives a reload, and is the same grammar the
 rest of the screen is built from.
 
+**A masked editor contains no financial defaults.** Holdings completes its sort, grouping, totals
+and ratios before projecting loader data, then omits every amount while the request is masked. An
+open row therefore shows a prompt rather than quantity and per-share basis inputs. The global **Show
+amounts** control deliberately revalidates the route before those inputs appear; **Hide amounts**
+removes them immediately, and Cancel or Save ends the correction. Unknown markers, coverage counts,
+ratio strings and gain/loss direction remain because none reveals the exact input defaults. ADR-0002
+records this exception for Holdings.
+
+The root and Holdings loaders share one masking decision in the request context because route
+loaders run in parallel. A Hide cookie is published across tabs through a payload-free invalidation;
+each receiver rereads the cookie and removes exact inputs immediately. Show stays local until that
+tab intentionally revalidates, because a masked Holdings projection has no exact values to reveal.
+Enhanced toggle responses never repeat their optimistic cookie write, so an older Show action
+cannot overwrite a newer Hide from another tab. Display Settings likewise clears its override only
+after success and only when a browser-wide, amount-free intent token proves no later toggle won. A
+failed policy read has no browser precedence: an explicit resolution marker keeps the hydrated app
+masked regardless of an older cookie.
+
 > **Accepted limitation.** The Holdings editor cannot choose a past date. A same-date CSV reupload
 > or bank/loan balance entry can supersede an earlier snapshot without deleting it. Removing a bad
 > stored snapshot still requires operator SQL; there is no delete interface.
@@ -795,6 +813,9 @@ that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the spl
 deliberately weak guarantee under it. Masking defends against being read over the shoulder, and the
 gate in front of the instance (§10) keeps a *person* out while the lock
 (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) keeps a *browser* out.
+Holdings' correction is the narrow payload exception: a masked Holdings loader omits amounts until
+this same global control shows them, because an editor cannot safely receive its exact defaults and
+then pretend they are absent.
 
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments

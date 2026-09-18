@@ -7,7 +7,9 @@ import {
   UNMASKED,
   clearedMaskingCookie,
   maskingCookie,
+  maskingRepairIsWarranted,
   readMaskingCookie,
+  resolveBrowserMasked,
   resolveMasked,
   type MaskingPolicy,
 } from "~/lib/masking";
@@ -50,6 +52,25 @@ describe("resolving whether a screen is masked", () => {
     // a corrupted value isn't a vote; reading it as anything but "no answer" could show balances
     expect(resolveMasked("masked", "")).toBe(true);
     expect(resolveMasked("unmasked", "yes")).toBe(false);
+  });
+});
+
+describe("the browser decision after hydration", () => {
+  it("keeps a failed policy read masked even when an existing cookie says to show", () => {
+    expect(
+      resolveBrowserMasked({ masked: true, maskingResolved: false }, UNMASKED),
+    ).toBe(true);
+  });
+
+  it("lets a valid browser cookie override every successful loader answer", () => {
+    expect(resolveBrowserMasked({ masked: false, maskingResolved: true }, MASKED)).toBe(true);
+    expect(resolveBrowserMasked({ masked: true, maskingResolved: true }, UNMASKED)).toBe(false);
+  });
+
+  it("fails closed without root data and uses successful root data without a valid cookie", () => {
+    expect(resolveBrowserMasked(undefined, UNMASKED)).toBe(true);
+    expect(resolveBrowserMasked({ masked: true, maskingResolved: true }, undefined)).toBe(true);
+    expect(resolveBrowserMasked({ masked: false, maskingResolved: true }, "invalid")).toBe(false);
   });
 });
 
@@ -98,5 +119,22 @@ describe("reading the cookie off a request", () => {
   it("does not mistake a cookie whose name merely ends in its own", () => {
     // "unmasked=1" contains "masked=1" — a substring match would silently misread it
     expect(readMaskingCookie(requestWith(`unmasked=${UNMASKED}`))).toBeUndefined();
+  });
+});
+
+describe("whether a settled toggle may repair its cookie lifetime", () => {
+  // Identity, not equality: a reload returns an equal object, and only a new one proves a reload.
+  const submitted = { masked: true, maskingPolicy: "as_last_left" };
+
+  it("wants root data the toggle did not already have when it submitted", () => {
+    expect(maskingRepairIsWarranted(submitted, { ...submitted })).toBe(true);
+  });
+
+  it("refuses the snapshot the toggle submitted against, which an errored action leaves untouched", () => {
+    expect(maskingRepairIsWarranted(submitted, submitted)).toBe(false);
+  });
+
+  it("refuses a missing snapshot rather than guessing the household's policy", () => {
+    expect(maskingRepairIsWarranted(submitted, undefined)).toBe(false);
   });
 });

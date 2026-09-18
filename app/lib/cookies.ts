@@ -1,8 +1,5 @@
 // Matches the whole cookie name, never a substring (`unmasked=1` ends in `masked=1`).
-export function readCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.get("Cookie");
-  if (header === null) return undefined;
-
+export function readCookieHeader(header: string, name: string): string | undefined {
   for (const pair of header.split(";")) {
     const separator = pair.indexOf("=");
     if (separator === -1) continue;
@@ -13,4 +10,9 @@ export function readCookie(request: Request, name: string): string | undefined {
   }
 
   return undefined;
+}
+
+export function readCookie(request: Request, name: string): string | undefined {
+  const header = request.headers.get("Cookie");
+  return header === null ? undefined : readCookieHeader(header, name);
 }

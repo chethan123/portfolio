@@ -35,6 +35,21 @@ export function render(units: bigint, scale: number): string {
   return `${negative ? "-" : ""}${digits.slice(0, point)}.${digits.slice(point)}`;
 }
 
+export type DeltaDirection = "gain" | "loss" | "flat";
+
+// Sign follows the rounded figure actually printed. A stored -0.0040 must not label $0.00 a loss.
+export function printedSign(amount: string): string {
+  const shown = toUnits(amount, 2);
+
+  if (shown === 0n) return "";
+  return shown < 0n ? "−" : "+";
+}
+
+export function deltaDirection(amount: string): DeltaDirection {
+  const sign = printedSign(amount);
+  return sign === "" ? "flat" : sign === "−" ? "loss" : "gain";
+}
+
 // Rounds half away from zero without forming a fraction: remainder*2 >= denominator
 // asks whether the dropped part is at least half a place.
 export function divide(numerator: bigint, denominator: bigint, scale: number): bigint {
