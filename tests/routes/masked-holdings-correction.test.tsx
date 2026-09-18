@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import Holdings, { action, loader } from "../../app/routes/holdings.tsx";
 import { loader as rootLoader } from "../../app/root.tsx";
 import { createDatabase, withDb } from "~/lib/db.server";
+import { DECIMAL_FORMAT_HINT } from "~/lib/decimal-input";
 import { MASKED, MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { currentPosition } from "~/lib/positions.server";
 import { saveMaskingPolicy } from "~/lib/settings.server";
@@ -79,6 +80,8 @@ describe("a correction on masked Holdings", () => {
       expect(firstPaint).not.toContain(BASIS);
       expect(firstPaint).not.toContain('name="quantity"');
       expect(firstPaint).not.toContain('name="costBasisPerShare"');
+      expect(firstPaint).not.toContain(DECIMAL_FORMAT_HINT);
+      expect(firstPaint).not.toContain('id="revise-number-format"');
       expect(firstPaint).toMatch(/Show amounts.*reveal and edit/s);
 
       // The optimistic toggle may say unmasked before revalidation returns. Redacted loader data
@@ -201,6 +204,10 @@ describe("a correction on masked Holdings", () => {
       const revealed = renderRoute(Holdings, path, data, { masked: false });
       expect(revealed).toContain(`name="quantity" value="${QUANTITY}"`);
       expect(revealed).toContain(`name="costBasisPerShare" value="${BASIS}"`);
+      expect(revealed).toContain(DECIMAL_FORMAT_HINT);
+      expect(revealed).toContain('id="revise-number-format"');
+      expect(revealed).toContain('id="revise-quantity-format"');
+      expect(revealed).toContain('id="revise-cost-basis-format"');
 
       // `useMasked()` changes before the route loader revalidates. Old exact loader data may still
       // exist briefly, but it must leave the DOM with the editor inputs in the same render.
@@ -209,6 +216,8 @@ describe("a correction on masked Holdings", () => {
       expect(hiding).not.toContain('name="costBasisPerShare"');
       expect(hiding).not.toContain(QUANTITY);
       expect(hiding).not.toContain(BASIS);
+      expect(hiding).not.toContain(DECIMAL_FORMAT_HINT);
+      expect(hiding).not.toContain('id="revise-number-format"');
     }),
   );
 
@@ -233,14 +242,23 @@ describe("a correction on masked Holdings", () => {
       expect((await currentPosition(account.id, instrument.id, ctx.db))?.quantity).toBe(QUANTITY);
 
       const invalid = await action(
-        args(post(path, { quantity: "not a quantity", costBasisPerShare: BASIS }, cookie(UNMASKED))),
+        args(post(path, { quantity: "1,5", costBasisPerShare: "9,2" }, cookie(UNMASKED))),
       );
       const data = await loader(args(get(path, cookie(UNMASKED))));
       const markup = renderRoute(Holdings, path, data, { masked: false, actionData: invalid });
 
-      expect(markup).toContain('name="quantity" value="not a quantity"');
-      expect(markup).toContain(`name="costBasisPerShare" value="${BASIS}"`);
-      expect(markup).toMatch(/quantity must be a number/i);
+      expect(markup).toContain('name="quantity" value="1,5"');
+      expect(markup).toContain('name="costBasisPerShare" value="9,2"');
+      expect(markup).toContain('<p id="revise-error-quantity" class="field-error" role="alert">');
+      expect(markup).toContain(
+        '<p id="revise-error-costBasisPerShare" class="field-error" role="alert">',
+      );
+      expect(markup).toMatch(
+        /<input(?=[^>]*id="revise-quantity")(?=[^>]*aria-describedby="[^"]*revise-error-quantity[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
+      );
+      expect(markup).toMatch(
+        /<input(?=[^>]*id="revise-cost-basis")(?=[^>]*aria-describedby="[^"]*revise-error-costBasisPerShare[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
+      );
     }),
   );
 

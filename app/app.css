@@ -2285,6 +2285,30 @@ label {
   line-height: 20px;
 }
 
+.interpreted-number-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.interpreted-number-input--compact {
+  width: 7.5rem;
+}
+
+.interpreted-number-input > input {
+  width: 100%;
+}
+
+.interpreted-number-input > .field-note {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.panel-form > div > label + .interpreted-number-input {
+  margin-top: var(--space-xs);
+}
+
 /* The checkbox/radio carve-out (ingest brief §10): the shared rule sizes
  * every input at --control-h — right for a typing box, absurd for a tick.
  * These keep intrinsic size and native drawing, accented from the one solid
@@ -3379,7 +3403,7 @@ code {
 /* Leading padding to zero rather than both to 8px: the figures are
  * right-aligned, so the trailing side is the one that has to keep a gap for them
  * to line up on. */
-.data-table td:has(> .cell-input) {
+.data-table td:has(> .interpreted-number-input > .cell-input) {
   padding-left: 0;
   padding-right: var(--space-base);
 }
@@ -3624,19 +3648,23 @@ code {
    * edge (`.is-numeric`'s right-align serves a column that no longer
    * exists). Padding restated: the desktop rule gives the cell's trailing
    * 8px to the box for column alignment, and there is no column here. */
-  .data-table--holdings tbody tr.row-editing td:has(> .cell-input) {
+  .data-table--holdings tbody tr.row-editing td:has(> .interpreted-number-input > .cell-input) {
     display: block;
     padding: 0;
     text-align: left;
   }
 
-  .data-table--holdings tbody tr.row-editing td:has(> .cell-input)::before {
+  .data-table--holdings tbody tr.row-editing td:has(> .interpreted-number-input > .cell-input)::before {
     display: block;
     margin-bottom: 2px;
   }
 
   .cell-input {
     text-align: left;
+  }
+
+  .data-table--holdings .interpreted-number-input--compact {
+    width: 100%;
   }
 
   /* The note is the card's own last line, not a row of its own: at 390px

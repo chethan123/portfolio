@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Form, Link, redirect } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
@@ -9,6 +10,7 @@ import {
   type AmountShape,
 } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   NarrowedTo,
   OwnerFilterControl,
@@ -16,8 +18,13 @@ import {
   holdsNothing,
 } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
+import {
+  DECIMAL_FORMAT_HINT,
+  perShareAmountRule,
+  signedQuantityRule,
+} from "~/lib/decimal-input";
+import { joinWords } from "~/lib/format";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -768,6 +775,10 @@ function Row({
   const open = editor.editing === key;
   const { errors, values } = editor;
   const masked = useMasked();
+  const [quantityErrorActive, setQuantityErrorActive] = useState(errors?.quantity !== undefined);
+  const [basisErrorActive, setBasisErrorActive] = useState(
+    errors?.costBasisPerShare !== undefined,
+  );
   const canEdit =
     open &&
     editor.amountsAvailable &&
@@ -781,7 +792,13 @@ function Row({
       ? []
       : (["form", "quantity", "costBasisPerShare"] as const)
           .map((field) => [field, errors[field]] as const)
-          .filter((entry): entry is readonly [(typeof entry)[0], string] => entry[1] !== undefined);
+          .filter(
+            (entry): entry is readonly [(typeof entry)[0], string] =>
+              entry[1] !== undefined &&
+              (entry[0] === "form" ||
+                (entry[0] === "quantity" && quantityErrorActive) ||
+                (entry[0] === "costBasisPerShare" && basisErrorActive)),
+          );
 
   // Typed value wins over stored, so a refusal never costs the entry.
   const typedQuantity =
@@ -821,7 +838,7 @@ function Row({
         {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
         <td className="is-numeric" role="cell" data-label="Quantity">
           {canEdit ? (
-            <input
+            <InterpretedNumberInput
               id="revise-quantity"
               form={EDITOR}
               name="quantity"
@@ -831,10 +848,15 @@ function Row({
               inputMode="decimal"
               className="cell-input"
               aria-label={`Quantity of ${holding.instrumentName}`}
-              aria-invalid={errors?.quantity ? true : undefined}
-              aria-describedby={errors?.quantity ? "revise-error-quantity" : undefined}
+              aria-describedby="revise-quantity-format revise-number-format"
               autoComplete="off"
               autoFocus
+              compact
+              noteId="revise-quantity-format"
+              onServerErrorActiveChange={setQuantityErrorActive}
+              rule={signedQuantityRule("A quantity")}
+              serverErrorId={errors?.quantity ? "revise-error-quantity" : undefined}
+              shape="quantity"
             />
           ) : (
             <PrivateAmount value={holding.quantity} shape="quantity" />
@@ -848,7 +870,7 @@ function Row({
         </td>
         <td className="is-numeric" role="cell" data-label="Cost basis">
           {canEdit ? (
-            <input
+            <InterpretedNumberInput
               id="revise-cost-basis"
               form={EDITOR}
               name="costBasisPerShare"
@@ -859,11 +881,16 @@ function Row({
               // Column shows whole-position basis, this box per-share — stated in the label since they won't match.
               aria-label={`Cost basis per share of ${holding.instrumentName}`}
               placeholder="per share"
-              aria-invalid={errors?.costBasisPerShare ? true : undefined}
-              aria-describedby={
+              aria-describedby="revise-cost-basis-format revise-number-format"
+              autoComplete="off"
+              compact
+              noteId="revise-cost-basis-format"
+              onServerErrorActiveChange={setBasisErrorActive}
+              rule={perShareAmountRule("A cost basis")}
+              serverErrorId={
                 errors?.costBasisPerShare ? "revise-error-costBasisPerShare" : undefined
               }
-              autoComplete="off"
+              shape="money"
             />
           ) : (
             <PrivateAmount value={holding.costBasis} />
@@ -919,25 +946,32 @@ function Row({
                       Use <b>Show amounts</b> in the navigation to reveal and edit this position.
                     </p>
                   </>
-                ) : messages.length > 0 ? (
-                  messages.map(([field, message]) => (
-                    <p
-                      key={field}
-                      id={`revise-error-${field}`}
-                      className="field-error"
-                      role="alert"
-                    >
-                      {message}
-                    </p>
-                  ))
                 ) : (
-                  // Said before the click — "Save" files a whole new statement, not a single overwrite.
-                  <p className="form-note">
-                    Saving records a new statement for {holding.accountName}
-                    {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
-                    other position in it forward unchanged. The current one is kept on its own
-                    date, so nothing already recorded moves.
-                  </p>
+                  <>
+                    <p id="revise-number-format" className="form-note">
+                      {DECIMAL_FORMAT_HINT}
+                    </p>
+                    {messages.length > 0 ? (
+                      messages.map(([field, message]) => (
+                        <p
+                          key={field}
+                          id={`revise-error-${field}`}
+                          className="field-error"
+                          role="alert"
+                        >
+                          {message}
+                        </p>
+                      ))
+                    ) : (
+                      // Said before the click — "Save" files a whole new statement, not a single overwrite.
+                      <p className="form-note">
+                        Saving records a new statement for {holding.accountName}
+                        {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
+                        other position in it forward unchanged. The current one is kept on its own
+                        date, so nothing already recorded moves.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
 
