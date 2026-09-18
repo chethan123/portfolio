@@ -182,7 +182,8 @@ describe("saving a mapping", () => {
       if (result instanceof Response) throw new Error("The invalid mapping left Columns.");
       expect(result.problems).toHaveLength(1);
       expect(result.problems[0]).toMatch(/Line 3/);
-      expect(result.problems[0]).toMatch(/"Quantity", "Cost Basis", "As Of", and "Account"/);
+      expect(result.problems[0]).toMatch(/"Quantity" and "Cost Basis"/);
+      expect(result.problems[0]).not.toMatch(/"As Of"|"Account"/);
       expect(result.problemFields).toEqual(["instrument"]);
 
       const stored = await ctx.db

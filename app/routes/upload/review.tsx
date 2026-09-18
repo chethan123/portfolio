@@ -45,32 +45,15 @@ export async function loader({ params }: Route.LoaderArgs) {
     };
   } catch (error) {
     if (error instanceof DraftNotReadyError) {
-      // A parser rule added after this draft saved its mapping must be visible at the
-      // bookmarked Review URL. No diff is safe to show while a source row is invalid.
-      if (
-        error.step === "columns" &&
-        error.problems.some((problem) => problem.code === "blank-instrument") &&
-        error.draft !== undefined
-      ) {
-        const { draft } = error;
+      if (error.blocked !== null) {
         return {
           steps: {
             current: 4,
-            draftId: draft.id,
-            instrumentsSkipped: draft.hadFirstSightings === false,
+            draftId: error.blocked.draftId,
+            instrumentsSkipped: error.blocked.instrumentsSkipped,
           } satisfies UploadStepsData,
           diff: null,
-          blocked: {
-            draftId: draft.id,
-            filename: draft.filename,
-            accountId: draft.accountId,
-            accountName: draft.accountName,
-            ownerName: draft.ownerName,
-            accountNumberTail: draft.accountNumberTail,
-            problems: error.problems.filter(
-              (problem) => problem.code === "blank-instrument",
-            ),
-          },
+          blocked: error.blocked,
           today: new Date().toISOString().slice(0, 10),
           earliestAsOf: earliestRecordableDate(),
           latestAsOf: latestRecordableDate(),
@@ -114,10 +97,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       return { errors: fieldErrors, formError: formError ?? null, values, diff, baselineMoved };
     }
     if (error instanceof DraftNotReadyError) {
-      if (
-        error.step === "columns" &&
-        error.problems.some((problem) => problem.code === "blank-instrument")
-      ) {
+      if (error.blocked !== null) {
         return redirect(`/upload/${params.draftId}/review`);
       }
       return redirect(`/upload/${params.draftId}/${error.step}`);

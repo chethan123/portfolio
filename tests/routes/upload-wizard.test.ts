@@ -241,6 +241,7 @@ describe("a review over a draft that is not ready for one", () => {
       const page = await reviewPage(draft.id);
       if (page.diff !== null) throw new Error("The invalid draft rendered a removal diff.");
       expect(page.blocked.accountId).toBe(account.id);
+      expect(page.blocked.instrumentsSkipped).toBe(true);
       expect(page.blocked).not.toHaveProperty("bytes");
       expect(page.blocked).not.toHaveProperty("mapping");
       const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
@@ -258,8 +259,7 @@ describe("a review over a draft that is not ready for one", () => {
       expect(markup).toContain("Line 3");
       expect(markup).toContain("Quantity");
       expect(markup).toContain("Cost Basis");
-      expect(markup).toContain("As Of");
-      expect(markup).toContain("Account");
+      expect(markup).not.toContain("As Of");
       expect(markup).not.toContain("139.153103");
       expect(markup).not.toContain("108.2561");
       expect(markup).not.toContain("REMOVED");

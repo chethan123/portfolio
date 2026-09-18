@@ -12,7 +12,7 @@ import {
   render,
   toUnits,
 } from "./money.ts";
-import { recordedDate } from "./input.server.ts";
+import { listSentence, recordedDate } from "./input.server.ts";
 
 import type { Delimiter } from "./csv.ts";
 
@@ -178,8 +178,8 @@ type RowRecord = {
 };
 
 // Applies a mapping to a file's rows (spec 0004 step 02): rows above the header are
-// preamble; blank-instrument rows are ignored only when every mapped financial/account cell
-// is empty; an absent-quantity row is skipped and reported; a nonsense or over-precise
+// preamble; blank-instrument rows are ignored only when mapped quantity and cost basis cells
+// are absent; an absent-quantity row is skipped and reported; a nonsense or over-precise
 // quantity/basis refuses the file naming the row, never rounds; duplicate instrument rows
 // combine (summed, quantity-weighted) when the mapping allows it, else refuse — a position
 // set holds one row per instrument.
@@ -268,25 +268,22 @@ export function parseStatement(
     const line = row + 1;
 
     if (instrument.trim() === "") {
-      // Read raw cells before numeric normalisation: zero, "n/a" and malformed figures all
-      // say this is a data row. Name is descriptive, not financial; footer copy there is harmless.
+      // The shared absence grammar keeps spacers and broker footers harmless. Zero and malformed
+      // figures still speak: either could be a position that would otherwise become a removal.
       const populated = [
         { index: quantityIndex, name: columns.quantity },
         { index: costBasisIndex, name: columns.costBasis },
-        { index: asOfIndex, name: columns.asOf },
-        { index: accountNumberIndex, name: columns.accountNumber },
       ].flatMap(({ index, name }) =>
-        index !== null && typeof name === "string" && (cells[index] ?? "").trim() !== ""
+        index !== null &&
+        typeof name === "string" &&
+        normaliseFigure(cells[index] ?? "").kind !== "absent"
           ? [name]
           : [],
       );
 
       if (populated.length > 0) {
         const named = populated.map((name) => `"${name}"`);
-        const cellsNamed =
-          named.length === 1
-            ? named[0]
-            : `${named.slice(0, -1).join(", ")}, and ${named.at(-1)}`;
+        const cellsNamed = listSentence(named);
         problems.push({
           row,
           column: columns.instrument,

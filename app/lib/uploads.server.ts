@@ -338,23 +338,48 @@ export async function parseDraft(
   return { step: null, parsed, mapping: saved.data };
 }
 
-// Not a refusal, not a 404. Routes usually redirect to the owed step; Review uses carried
-// blank-instrument problems and the exact checked draft to render its legacy-draft block.
+export type BlockedDraft = {
+  draftId: string;
+  filename: string;
+  accountId: string;
+  accountName: string;
+  ownerName: string;
+  accountNumberTail: string | null;
+  instrumentsSkipped: boolean;
+  problems: ParseProblem[];
+};
+
+function instrumentsStepSkipped(draft: UploadDraft): boolean {
+  return draft.hadFirstSightings === false;
+}
+
+function blockedDraftFor(draft: UploadDraft, problems: ParseProblem[]): BlockedDraft | null {
+  const blocking = problems.filter((problem) => problem.code === "blank-instrument");
+  if (blocking.length === 0) return null;
+
+  return {
+    draftId: draft.id,
+    filename: draft.filename,
+    accountId: draft.accountId,
+    accountName: draft.accountName,
+    ownerName: draft.ownerName,
+    accountNumberTail: draft.accountNumberTail,
+    instrumentsSkipped: instrumentsStepSkipped(draft),
+    problems: blocking,
+  };
+}
+
+// Not a refusal, not a 404. Routes redirect to the owed step unless the domain supplies the
+// narrow display payload Review needs to explain why no safe diff exists.
 export class DraftNotReadyError extends Error {
   override readonly name = "DraftNotReadyError";
   readonly step: "columns" | "instruments";
-  readonly problems: ParseProblem[];
-  readonly draft: UploadDraft | undefined;
+  readonly blocked: BlockedDraft | null;
 
-  constructor(
-    step: "columns" | "instruments",
-    problems: ParseProblem[] = [],
-    draft?: UploadDraft,
-  ) {
+  constructor(step: "columns" | "instruments", blocked: BlockedDraft | null) {
     super(`This draft has not passed the ${step} step.`);
     this.step = step;
-    this.problems = problems;
-    this.draft = draft;
+    this.blocked = blocked;
   }
 }
 
@@ -507,8 +532,7 @@ async function assembleDiff(
   if (result.step !== null) {
     throw new DraftNotReadyError(
       result.step,
-      result.step === "columns" ? result.problems : [],
-      draft,
+      result.step === "columns" ? blockedDraftFor(draft, result.problems) : null,
     );
   }
   const { parsed } = result;
@@ -753,7 +777,7 @@ async function assembleDiff(
         parsed.asOfDate !== null
           ? { source: "file", date: parsed.asOfDate }
           : { source: "asked", date: asOfResolved },
-      instrumentsSkipped: draft.hadFirstSightings === false,
+      instrumentsSkipped: instrumentsStepSkipped(draft),
       baselineSetId,
       baselineAsOf,
       filedBehind,

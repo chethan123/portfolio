@@ -423,7 +423,7 @@ describe("diffForDraft", () => {
 
 describe("commitUpload", () => {
   it(
-    "cannot commit a legacy blank-instrument row through majority confirmation, then accepts its repair",
+    "keeps an invalid legacy draft and records a corrected file only through a new draft",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -480,7 +480,14 @@ describe("commitUpload", () => {
         else throw error;
       }
       expect(refusal?.step).toBe("columns");
-      expect(refusal?.problems[0]).toMatchObject({ row: 2, column: "Instrument" });
+      expect(refusal?.blocked?.problems[0]).toMatchObject({
+        row: 2,
+        column: "Instrument",
+      });
+      expect(refusal?.blocked).not.toHaveProperty("bytes");
+      expect(refusal?.blocked).not.toHaveProperty("mapping");
+      expect(refusal).not.toHaveProperty("draft");
+      expect(refusal).not.toHaveProperty("problems");
       expect((await lastRecorded(account.id, db))?.id).toBe(before.id);
       expect(await requireDraft(draft.id, db)).toMatchObject({ id: draft.id });
       expect(
@@ -491,28 +498,34 @@ describe("commitUpload", () => {
           .execute(),
       ).toHaveLength(1);
 
-      await db
-        .updateTable("upload_draft")
-        .set({
-          raw_file: Buffer.from(invalidCsv.replace("\n,139.153103", "\nAAPL,139.153103")),
-        })
-        .where("id", "=", draft.id)
-        .execute();
-      const remapped = await rememberMapping(draft.id, legacyMapping, db);
-      expect(remapped).toEqual({ nextStep: "review" });
-      const repaired = await diffForDraft(draft.id, db);
+      const correctedDraftId = await stage(
+        ctx,
+        account,
+        invalidCsv.replace("\n,139.153103", "\nAAPL,139.153103"),
+        {
+          columns: {
+            instrument: "Instrument",
+            quantity: "Quantity",
+            costBasis: "Basis",
+            asOf: "As Of",
+            accountNumber: "Account",
+          },
+        },
+      );
+      const corrected = await diffForDraft(correctedDraftId, db);
 
       const written = await commitUpload(
-        draft.id,
+        correctedDraftId,
         {
           accountId: account.id,
-          baselineSetId: repaired.baselineSetId ?? "",
+          baselineSetId: corrected.baselineSetId ?? "",
           confirmRemovals: "true",
         },
         db,
       );
       expect(written.counts).toEqual({ added: 0, updated: 0, unchanged: 2, removed: 1 });
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+      expect(await requireDraft(draft.id, db)).toMatchObject({ id: draft.id });
     }),
   );
 
