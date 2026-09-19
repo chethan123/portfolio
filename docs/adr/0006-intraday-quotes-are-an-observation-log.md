@@ -15,8 +15,8 @@ range chips" decision in `docs/design/pricing-ui-brief.md` §8; the mutual-funds
 argument there remains true and is accepted as a caveat, not a blocker.
 
 **Revised in part** by [0014](0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md).
-A chart range of at most 92 days now draws every day inside it but the first from this log, at a
-grain set by its span, so of the three costs named under "Past-navigable intraday is deferred"
+A chart range of at most 92 days now draws every observed day inside it but the first from this
+log, at a grain set by its span, so of the three costs named under "Past-navigable intraday is deferred"
 below, the instant-parameterised reader and the day-and-hour axis have been paid. The vocabulary
 and control to choose an older session as 1D have not, and that remains deferred. Nothing else here
 is rewritten.

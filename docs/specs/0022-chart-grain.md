@@ -56,8 +56,9 @@ contributes its close only, so the line starts where the change figure beside th
 
 On a grained line the chart gives every calendar day the same width and lays a day's session
 across its slot, from the open at the left edge to the close at the right; a finished-day point
-sits at its slot's right edge. Ticks name days. A readout names the date and, for an instant, the
-time on the market clock.
+sits at its slot's right edge, so the window's first day contributes only that edge and the days
+after it share the width. Ticks name days. A readout names the date and, for an instant, the time
+on the market clock.
 
 One reader, `readGrainedSeries` in `valuation.server.ts`, one query per window, beside the 1D
 reader and shaped like the one that reader replaced, bounded now by the grain rather than the
@@ -129,11 +130,13 @@ export function grainFor(spanDays: number): GrainMinutes | undefined;
   strings. The flag, not the string's shape, says which kind a computed point is; the module's
   comment on `ChartPoint` already refuses inference there, and now names the third form.
 - `export function dayOf(point: ChartPoint, session: SessionAxis | null): IsoDate`: the calendar
-  day a point belongs to. A point with no session, a dated point, and a hand-typed point are
-  their `date`; an instant is `marketDateOf(new Date(point.date), session.timeZone)`. The chart's
-  readout and axis, and the Overview's manual-prefix rule, all need this one answer, so it lives
-  once, in the pure module both already import; `chart-range.ts` may import `market-hours.ts`,
-  which is pure too.
+  day a point belongs to. A point with no session and a dated point are their `date`; an instant
+  is `marketDateOf(new Date(point.date), session.timeZone)`. A hand-typed point is a date too, and
+  arrives at `dayOf` flagged `dated` by the chart, below; a bare `YYYY-MM-DD` run through
+  `marketDateOf` parses as UTC midnight, the previous evening in New York, and comes back a day
+  early. The chart's readout and axis, and the Overview's manual-prefix rule, all need this one
+  answer, so it lives once, in the pure module both already import; `chart-range.ts` may import
+  `market-hours.ts`, which is pure too.
 - `rangeDescription`, `isRangeDisabled`, the cookie, `rangeSearch` and `chartRangeMiddleware` do not
   change. Nothing in the control changes; a preset does not know its grain.
 
@@ -172,8 +175,8 @@ one per step; across an outage, none, so the line runs straight from the last ob
 next (ADR-0014, "gaps"). A day's last point is its last observation, so a session ends on its
 close or on the NAV after it.
 
-**The dated points.** The window's first day always, and every other day with no observation under
-its `market_date`, contributes one point valued exactly as the daily line values it: the aggregate
+**The dated points.** The window's first day always, and every other day no step found an
+observation on, contributes one point valued exactly as the daily line values it: the aggregate
 `readSeries` takes over `holding_valued_at(d)` (`valuation.server.ts:344-378`), narrowed inside the
 lateral on `v.owner_id` or `v.account_id` for the same reason it is there today. Its `at` is the
 calendar date. The first day is dated even when it has observations, so the line starts at
@@ -222,11 +225,13 @@ instants as (
   where m.at is not null
 ),
 dated as (
-  -- The window's first day, and any day nothing was observed on: the spine's close for that date.
+  -- The window's first day, and any day no step found an observation on: the spine's close for that
+  -- date. Read off `instants`, never the log again: a probe of price_observation per day is planned
+  -- as a sequential scan (review, 512 ms of a 640 ms 3M), and one definition of "observed" is enough.
   select dy.d
   from days dy
   where dy.ord = 1
-     or not exists (select 1 from price_observation o where o.market_date = dy.d)
+     or not exists (select 1 from instants i where i.d = dy.d)
 ),
 held as (
   -- Positions in force on each plotted day, one row per (day, holding); narrowed here, never in an outer WHERE.
@@ -286,35 +291,40 @@ order by day, at
   lateral with its inside narrowing is `holding_valued_at`'s one sanctioned use. One statement,
   one round trip, one `order by`.
 - **The instant branch is the instants × holdings shape spec 0016 retired for 1D**, bounded now
-  by the grain rather than the cadence: at most 28 steps a day at 15 minutes, 9 at an hour, 4 at
-  three hours, so a 1W window is about 140 points, 1M about 185, 3M about 285, and at 97 holdings
-  3M is of the order of 27,000 (instant, holding) pairs. The research note measured the 1D lateral
-  at about 21 µs a pair with two probes and a `latest_position_set` call per instant per account
-  (`docs/research/2026-09-01-overview-1d-latency.md`); here the second probe runs only when the
-  first finds nothing (`coalesce` is lazy) and `latest_position_set` runs once per account per
-  plotted day, so the expectation is a few hundred milliseconds for 3M, against the 1Y line's
-  measured 185 ms. The reader's header says this is that shape and why it is acceptable here, so
-  the next reader of the research note does not take it for a regression. The 1D running total is
-  named as the fallback and its cost stated honestly: it reads every observation of a held
-  instrument inside the window, which a finer cadence multiplies, so it is not the default.
+  by the grain rather than the cadence: at most 27 steps a session at 15 minutes, 8 at an hour, 3
+  at three hours, one more with an evening NAV, so a 1W window is about 140 points, 1M about 185,
+  3M about 225, and at 100 holdings 3M is of the order of 20,000 (instant, holding) pairs. The
+  research note measured the 1D lateral at about 21 µs a pair with two probes and a
+  `latest_position_set` call per instant per account (`docs/research/2026-09-01-overview-1d-latency.md`);
+  here the second probe runs only when the first finds nothing (`coalesce` is lazy) and
+  `latest_position_set` runs once per account per plotted day. The review ran the statement on a
+  harness-sized log, 100 feed instruments at the seeded cadence over 92 days, 20 accounts and 100
+  holdings: 3M at grain 180 in about 110 ms and 1W at grain 15 in about 65 ms, against about
+  70 ms for `readSeries` over 180 dates on the same seed. The reader's header says this is that
+  shape and why it is acceptable here, so the next reader of the research note does not take it
+  for a regression. The 1D running total is named as the fallback and its cost stated honestly:
+  it reads every observation of a held instrument inside the window, which a finer cadence
+  multiplies, so it is not the default.
 - **Measure before wiring.** Ticket 02 runs the statement as hand-written SQL on the harness shape
-  (`docs/research/2026-09-01-overview-1d-latency/harness/`, `scale-shape.sql` then
-  `scale-observations.sql -v days=92`, which already seeds that many weekday sessions) for a
-  92-day window at grain 180 and a 7-day window at grain 15, with `EXPLAIN (ANALYZE, BUFFERS)`,
-  and records both figures and the plan's shape for `ARCHITECTURE.md` §10. A 3M figure above
-  500 ms stops the ticket and is reported, with the plan, before the reader is wired; the rewrite
-  is a decision, not a step.
+  (`docs/research/2026-09-01-overview-1d-latency/harness/README.md`'s recipe: a demo seed in a
+  bench database, `scale-shape.sql`, then `scale-observations.sql -v cadence=15 -v days=92`, which
+  seeds the weekday sessions inside that many calendar days) for a 92-day window at grain 180 and
+  a 7-day window at grain 15, with `EXPLAIN (ANALYZE, BUFFERS)`, and records both figures and the
+  plan's shape for `ARCHITECTURE.md` §10. A 3M figure above 500 ms stops the ticket and is
+  reported, with the plan, before the reader is wired; the rewrite is a decision, not a step.
 - **`at` crosses as a `Date`** and is stringified in the mapper with `toISOString()`, as the 1D
   reader's is, for an instant; `day` crosses as text and is the point's `at` when `dated`;
   `amount` is a `numeric(20, 4)` string; `known` and `total` are `int8` strings turned into numbers
   in the mapper. The mapper sets `dated: true` on a dated row and leaves the key absent otherwise,
   so `toEqual` assertions on instants do not carry it.
 - **No migration, no schema object, no index.** `price_observation_market_date_idx` serves the
-  per-step maximum and the per-day existence check; `price_observation_pkey` serves the per-holding
-  lookup; `price_daily_pkey` the fallback close; `position_set_account_as_of_idx` the position set.
-  `holding_valued_at` is reached unchanged. The step bounds reach the lateral as outer references
-  of a nested loop, which the planner turns into index conditions; the joined-CTE trap spec 0016
-  found is not present, and the ticket's `EXPLAIN` confirms no sequential scan of the log.
+  per-step maximum, one backward index step per (day, step); `price_observation_pkey` serves the
+  per-holding lookup; `price_daily_pkey` the fallback close; `position_set_account_as_of_idx` the
+  position set. `holding_valued_at` is reached unchanged. The step bounds reach the lateral as
+  outer references of a nested loop, which the planner turns into index conditions; the
+  joined-CTE trap spec 0016 found is not present. The log is touched by those two index probes
+  and nothing else, which the ticket's `EXPLAIN` confirms: a `not exists` probe of the log per
+  day, the shape the first draft had, is planned as a sequential scan and cost half a second.
 
 ### The seam picks the reader off the window, as it does for 1D
 
@@ -330,28 +340,37 @@ coverage rule does not move.
 
 `net-worth-chart.tsx`:
 
-- **`buildScale` gains a grained branch.** With `session.grained`, a point's position is
-  `dayIndex + fraction`: `dayIndex` counts calendar days from the earliest `dayOf` among the points
-  to the point's own, and `fraction` is where the instant sits in the regular session,
-  `(minutes since SESSION_OPENS) / (SESSION_CLOSES − SESSION_OPENS)` on the market clock,
-  clamped to `[0, 1]`; a dated point and a hand-typed point are `1`. Positions are normalised
-  from their minimum to their maximum across the box, as times are today. `market-hours.ts`
-  exports `SESSION_OPENS` and `SESSION_CLOSES` for it; they are the regular session's minutes and
-  not the holiday calendar, so nothing about that module's trust rule changes. Without a grain the
-  scale is the wall-time one it is today, so 1D and the daily line do not move. A close print at
-  `16:00:03` and an evening NAV both sit at the slot's right edge; a segment of zero width is what
-  a same-instant pair already draws.
+- **The chart flags its hand-typed points.** Where `NetWorthChart` joins `manual` and `computed`
+  into one array (`:222`), every hand-typed point is marked `dated: true`: it is a calendar date,
+  and the scale, `dayOf` and the readout must not run it through `marketDateOf`. The loader's
+  `manual` array and the assertions on it do not change; the flag is the chart's.
+- **`buildScale(points, session = null)` gains a grained branch.** With `session.grained`, a
+  point's position is `dayIndex + fraction`: `dayIndex` counts calendar days, `Date.parse` on
+  `YYYY-MM-DDT00:00:00Z`, from the earliest `dayOf` among the points to the point's own, and
+  `fraction` is `1` for a dated point and otherwise where the instant sits in the regular session,
+  `(minutes since SESSION_OPENS) / (SESSION_CLOSES − SESSION_OPENS)` from `marketTimeOf` on the
+  market clock, clamped to `[0, 1]`. Positions are computed once, with the flags in hand, into a
+  map keyed by the point's `date`, and `x(date)` is the lookup, so `Scale.x` keeps its signature
+  and every call site, which all pass a `date` from that same array, is untouched. Positions are
+  normalised from their minimum to their maximum across the box, as times are today, which is
+  why the first day contributes only its right edge. `market-hours.ts` exports `SESSION_OPENS`
+  and `SESSION_CLOSES` for it; they are the regular session's minutes and not the holiday calendar,
+  so nothing about that module's trust rule changes. The default `null` keeps every existing
+  one-argument caller. Without a grain the scale is the wall-time one it is today, so 1D and the
+  daily line do not move. A close print at `16:00:03` and an evening NAV both sit at the slot's
+  right edge; a segment of zero width is what a same-instant pair already draws.
 - `tickLabel` (`:160`) names the time of day only for a session that is not grained. On a grained
   axis the three ticks name the day at the left edge, the middle and the right edge, read off the
-  scale's day positions, with `MONTHS` as now.
-- `readoutDate` (`:171`) takes the point. The day is `dayOf(point, session)`; the time is appended
-  only with a session and only for a point that is not dated. The `aria-label`'s "ending on …"
-  clause uses the same function.
+  scale's day positions rather than the millisecond interpolation the tick block at `:246-250`
+  does today, with `MONTHS` as now.
+- `readoutDate` (`:171`) takes the point, at both call sites (`:192`, `:242`). The day is
+  `dayOf(point, session)`; the time is appended only with a session and only for a point that is
+  not dated. The `aria-label`'s "ending on …" clause is the second call site.
 - `ChartEmptyNote` (`:365`) renders the "two observed moments" sentence only for a session that is
   not grained; a grained window with fewer than two points gets the caller's own sentence, the way a
   dated window does.
 - `hitTargets`, the polyline, the area and the marker do not change: each reads `scale.x`.
-- The pre-rendered readout count is now bounded by the grain tiers, about 290 at 3M, rather than
+- The pre-rendered readout count is now bounded by the grain tiers, about 225 at 3M, rather than
   by `SAMPLE_BUDGET`'s 180. Nothing in the component or `app/app.css` assumes the smaller number
   (`.chart-hit` widths are percentages), and the loader payload is under 20 KB; ADR-0004 gains a
   note saying which bound now holds.
@@ -361,9 +380,10 @@ coverage rule does not move.
 `overview.tsx`'s manual-prefix rule (`:111-119`) keeps a hand-typed point that is before the first
 computed point, comparing `point.date < firstComputed`. On a grained window the first computed
 point may be an instant, and DESIGN §7 rule 2, computed wins on an overlapping date, must still
-hold, so the comparison becomes `point.date < dayOf(firstComputed, controls.session)`. Under 1D
-the prefix is `[]` before the comparison runs, and without a session `dayOf` is the date, so the
-daily line's behaviour is unchanged. `manualWithheld` keys on `resolved.session` and does not
+hold, so the comparison becomes `first === undefined || point.date < dayOf(first, controls.session)`
+with `first` the first computed point; the `undefined` guard is what keeps the whole reachable
+prefix when nothing is computed, as today. Under 1D the prefix is `[]` before the comparison
+runs, and without a session `dayOf` is the date, so the daily line's behaviour is unchanged. `manualWithheld` keys on `resolved.session` and does not
 change. `account.tsx` does not change.
 
 ### The demo seeds five sessions, not one
@@ -395,7 +415,7 @@ Each of these states something that stops being true, and each is part of the ch
   after the opening paragraph, the shape ADR-0011's "Superseded in part" note takes, pointing at
   ADR-0014 and saying which costs are paid. The body is not rewritten.
 - `ADR-0004`, "bounded by the sampling budget ADR-0003 introduced": a bold-led note that on a
-  grained range the bound is the grain tiers (ADR-0014), about 290 points at 3M.
+  grained range the bound is the grain tiers (ADR-0014), about 225 points at 3M.
 - `ARCHITECTURE.md` §4.2, the "Valuing holdings" row (`:411`) and its bullet naming
   `readSessionSeries` as the one valuation outside the two SQL objects (`:432-437`, which also
   cites a stale line number): the grained reader is the second.
@@ -433,7 +453,7 @@ not this slice's.
 
 ### Tests this change makes false
 
-Three existing tests encode the daily line for a range that is now grained, and are rewritten
+Two existing tests encode the daily line for a range that is now grained, and are rewritten
 rather than left to fail (ticket 04):
 
 - `tests/routes/overview.test.ts:864-875`, "tells the chart it is drawing a session, and tells it
@@ -443,10 +463,10 @@ rather than left to fail (ticket 04):
   before", loads `?range=1m`, seeds observations on `daysAgo(1)`, and asserts the line is
   unchanged. That is the claim this slice reverses for a range of at most 92 days; it is rewritten
   against `?range=1y`, where it still holds and is now the property worth pinning.
-- `tests/routes/overview.test.ts:493-512`, the two-series overlap test on `?range=3m`, asserts
-  `computed`'s dates contain `daysAgo(0)` and intersects the two series' dates. On a grained window
-  the computed points are instants and dated days; it compares days via `dayOf`, or moves to
-  `?range=1y`.
+
+Every other test that loads a range of at most 92 days seeds no observation, so each of its
+computed points is dated and its assertions hold; the overlap test at `overview.test.ts:493-512`
+is one of them and is left alone.
 
 ## Testing Decisions
 
@@ -477,7 +497,8 @@ instant and a winter evening NAV crosses it (`tests/support/fixtures.ts:405`).
   - a full-array `toEqual` across Friday's instants, Saturday, Sunday and Monday's instants, pinning
     the order a dated day takes among instants;
   - a day observed only for an instrument nobody holds still yields a point, as a cash-only
-    account's flat line under 1D;
+    account's flat line under 1D, each held instrument at its own latest observation on any
+    earlier day, else its close strictly before the day;
   - a statement dated inside the window changes the holdings from that day's points on, and not
     before;
   - an account closed inside the window counts on the days it was open, on the daily line's terms;
@@ -502,9 +523,10 @@ instant and a winter evening NAV crosses it (`tests/support/fixtures.ts:405`).
   without a time, masks as every other range does, and falls through to the caller's empty
   sentence. A wall-time scale still places a point by its date when there is no grain.
 - **The routes.** 1W on the Overview returns `session: { timeZone: "America/New_York", grained: true }`
-  and a `computed` that is the first day dated, dated days where nothing was observed, and instants
-  on the seeded session, asserted by kind and amount, never by a literal `Z` string derived from
-  `daysAgo`, which the change of clocks would break; 1Y returns `null`; a hand-typed point dated the
+  and a `computed` that is dated days from the first day the seed holds a position set for, the
+  seeded session's instants at the seeded amounts, and today dated, asserted by kind, day and
+  amount, never by a literal `Z` string derived from `daysAgo`, which the change of clocks would
+  break; 1Y returns `null`; a hand-typed point dated the
   first computed day is dropped and one dated before it is drawn ahead; the account page's 1W
   returns the same shape narrowed to its account. The existing 1D tests do not change.
 
@@ -555,8 +577,8 @@ wall-time axis for the grained line; a migration-defined reader.
 ## Acceptance
 
 - [ ] 1W, 1M and 3M on the Overview and on an account page draw one point per step inside each
-      observed day at 15 minutes, an hour and three hours, each day as wide as any other, dated
-      closes on the other days, and the first day's close first
+      observed day at 15 minutes, an hour and three hours, every day after the first as wide as
+      any other, dated closes on the other days, and the first day's close first
 - [ ] 1Y, 5Y, All and 1D are unchanged, to the character, on the same data
 - [ ] The dated points of a grained line equal the daily line's points for those dates
 - [ ] A gap inside a session is a straight bridge; a weekend is a flat stretch two days wide

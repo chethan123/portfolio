@@ -23,8 +23,9 @@ was down and dates before the log began, contributes the spine's close, exactly 
 draws, as a calendar date. The window's first date contributes its close only, whether or not the
 log covers it, so the line starts where the change figure beside the headline reads; it is the one
 day the spine answers for a logged day, on purpose. A step nothing was observed in is not a point,
-so an outage is a straight bridge and never a flat run. The chart gives every calendar day the same
-width and lays a day's session across its slot. The reader is a series reader of totals per point
+so an outage is a straight bridge and never a flat run. The chart gives every calendar day after
+the first the same width and lays a day's session across its slot; the first day contributes only
+its close, at the left edge. The reader is a series reader of totals per point
 in `valuation.server.ts` beside the 1D reader, not a migration-defined sibling of
 `holding_valued_at`. Spec 0022 has the definitions.
 
@@ -99,19 +100,26 @@ holding's row.
 - DESIGN §14 limitation 13 shrinks to that, and limitation 2's "holds today's positions constant"
   becomes a statement about 1D alone.
 - The grained reader is the instants × holdings shape spec 0016 retired for 1D, taken back on
-  purpose: the grain bounds the instants, at most 28 a day at 15 minutes and 4 at three hours, so
-  the refresh cadence does not move the cost, which the 1D running total's would (it reads every
-  observation of a held instrument in the window). A 3M window on the measured household is of the
-  order of 27,000 (instant, holding) pairs, one primary-key probe each in the common case. The
-  figure is measured before the reader is wired and recorded in ARCHITECTURE §10; the running
-  total partitioned by day is the named fallback if it measures slow.
+  purpose: the grain bounds the instants, at most 27 a session at 15 minutes and 3 at three hours,
+  one more with an evening NAV, so the refresh cadence does not move the cost, which the 1D running
+  total's would (it reads every observation of a held instrument in the window). A 3M window on a
+  harness-sized household is of the order of 20,000 (instant, holding) pairs, one primary-key
+  probe each in the common case; the review measured the statement at about 110 ms for 3M and
+  65 ms for 1W on that shape, and found that deciding which days are observed by probing the log
+  per day rather than reading the steps already computed is planned as a sequential scan and
+  costs half a second, so the reader defines "observed" once. The figure is measured again before
+  the reader is wired and recorded in ARCHITECTURE §10; the running total partitioned by day is the
+  named fallback if it measures slow.
 - A chart point now has a kind. A grained line carries finished-day points, whose `date` is a
   calendar date, among instants, and the readout and the axis must know which is which, so
   `ChartPoint` carries a `dated` flag and the axis a `grained` one. A consumer that infers the kind
   from the string's shape is wrong, as the type's comment already said.
 - The pre-rendered readout (ADR-0004) is bounded on a grained range by the grain tiers, about 140
-  points at 1W, 185 at 1M and 290 at 3M, rather than by ADR-0003's 180-date budget. Nothing in the
+  points at 1W, 185 at 1M and 225 at 3M, rather than by ADR-0003's 180-date budget. Nothing in the
   chart assumes the smaller number; ADR-0004 carries a note.
+- A hand-typed point on a grained axis is a calendar date among instants, and the chart flags it
+  as one before it places or reads it out; a bare date run through the market clock comes back a
+  day early.
 - The invariant that a past date's valuation never reads an observation has a third reader to hold
   it against, and holds by construction: the grained reader values a date from the spine or a day
   from the log, never one day from both.

@@ -31,17 +31,23 @@ beside it; `tests/dashboard-queries.test.ts` "the 1D series" for how the 1D read
 
 **Measure first**
 
-- [ ] On the throwaway Postgres, build the harness shape: `scale-shape.sql`, then
-      `scale-observations.sql -v days=92` (it already seeds that many weekday sessions; read its
-      header for the cadence variable). Write the spec's statement as `harness/grained.sql` on the
-      pattern of `session-rewrite.sql` (its `\if :{?prefix}` for `explain (analyze, buffers)`),
-      parameterised by a date array, a grain and a zone, and run it for the last 92 days at 180 and
-      the last 7 days at 15
-- [ ] Record both wall times and confirm the plan: index scans on `price_observation_market_date_idx`
-      inside the `instants` lateral, `price_observation_pkey` and `price_daily_pkey` inside the
-      per-holding lateral, no sequential scan of `price_observation`. Put the figures and the plan
-      shape in the pull request description and in `docs/research/README.md`'s entry for the
-      latency note, for ticket 05 to carry into `ARCHITECTURE.md` §10
+- [ ] On the throwaway Postgres, follow `harness/README.md`'s recipe: a demo seed into a bench
+      database, `scale-shape.sql`, then `scale-observations.sql -v cadence=15 -v days=92`, which
+      seeds the weekday sessions inside 92 calendar days (about 66; `cadence` has no default and an
+      unset variable is a syntax error under `ON_ERROR_STOP`). Write the spec's statement as
+      `harness/grained.sql` on the pattern of `session-rewrite.sql` (its `\if :{?prefix}` for
+      `explain (analyze, buffers)`), parameterised by a date array, a grain and a zone, and run it
+      for the last 92 days at 180 and the last 7 days at 15. The review measured about 110 ms and
+      65 ms on that shape; a figure far from those is a sign the shape drifted
+- [ ] Record both wall times and confirm the plan: `Index Only Scan Backward` on
+      `price_observation_market_date_idx` inside the `instants` lateral, `Index Scan Backward` on
+      `price_observation_pkey` inside the per-holding lateral with the `price_daily_pkey` fallback
+      "never executed" in the common case, `latest_position_set` evaluated once per account per
+      plotted day, and **no sequential scan of `price_observation` anywhere**: the `dated` CTE reads
+      `instants`, never the log, because a per-day `not exists` on the log is planned as a
+      sequential scan and cost half a second at 3M. Put the figures and the plan shape in the pull
+      request description and in `docs/research/README.md`'s entry for the latency note, for
+      ticket 05 to carry into `ARCHITECTURE.md` §10
 - [ ] If the 92-day figure is above 500 ms, stop here and report it with the plan; the rewrite
       (spec 0016's running total partitioned by day) is a decision for the person driving the
       slice, not a step of this ticket
@@ -52,8 +58,8 @@ beside it; `tests/dashboard-queries.test.ts` "the 1D series" for how the 1D read
 - [ ] The window's first day (`dates[0]`) contributes exactly one point, dated, valued as
       `holding_valued_at(d)` aggregated the way `readSeries` aggregates it, even when that day has
       observations
-- [ ] Every other day with no observation under its `market_date` contributes one dated point on
-      the same terms
+- [ ] Every other day no step found an observation on contributes one dated point on the same
+      terms; "observed" is defined once, by the steps CTE, and the dated CTE reads it
 - [ ] Every other day with observations contributes one point per step of the grain from that
       day's midnight on the market clock, at the last observation with that `market_date` whose
       `as_of` lies in `[start, start + grain)`, from the whole log; a step with none contributes
@@ -100,8 +106,9 @@ were seeded; every `seedObservation` passes `marketDate`. Seed with the builders
       counted twice
 - [ ] A full-array `toEqual` across Friday's instants, Saturday, Sunday and Monday's instants, in
       that order, dated days as dates among instants
-- [ ] A day observed only for an instrument nobody holds still yields points, valued at the held
-      instruments' closes strictly before the day
+- [ ] A day observed only for an instrument nobody holds still yields points, each held instrument
+      priced at its own latest observation on any earlier day, else at its close strictly before
+      the day (seed the held instrument with no observation at all to see the close)
 - [ ] Uses the position set in force on the point's day: a statement dated mid-window changes the
       quantities from that day's points on and not before
 - [ ] Counts an account closed inside the window (`seedAccount({ closedAt })`) on the days it was

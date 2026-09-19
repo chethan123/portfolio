@@ -58,8 +58,11 @@ grain is a function of the span".
       third form
 - [ ] `export function dayOf(point: ChartPoint, session: SessionAxis | null): IsoDate`: the
       calendar day a point belongs to. With no session, or for a dated point, it is `point.date`;
-      for an instant it is `marketDateOf(new Date(point.date), session.timeZone)`. One comment:
-      the readout, the per-day axis and the Overview's manual-prefix rule all need this one answer
+      for an instant it is `marketDateOf(new Date(point.date), session.timeZone)`. Two comments:
+      the readout, the per-day axis and the Overview's manual-prefix rule all need this one
+      answer; and a hand-typed point arrives flagged `dated` by the chart, because a bare
+      `YYYY-MM-DD` through `marketDateOf` parses as UTC midnight and comes back a day early in
+      New York
 - [ ] `chartWindow` sets `controls.session` to `{ timeZone }` when `resolved.session` is defined,
       to `{ timeZone, grained: true }` when `resolved.grain` is defined, and `null` otherwise, in
       that order; `ChartControls.session`'s comment "Null on every range but 1D" becomes "Null
