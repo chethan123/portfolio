@@ -49,6 +49,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; implemented) |
 | [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (implemented) |
 | [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (implemented) |
+| [0022](0022-chart-grain.md) | A chart range of at most 92 days drawn at a grain from the observation log, on a per-day axis (ADR-0014) |
 
 ## The ticket directories
 
@@ -58,8 +59,8 @@ the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-g
 [`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009),
 [`owner-filter/`](owner-filter/) (0013), [`dump/`](dump/) (0014),
 [`price-backfill/`](price-backfill/) (0017), [`price-worker/`](price-worker/) (0018),
-[`lock/`](lock/) (0019), [`lock-hardening/`](lock-hardening/) (0020), and
-[`price-health/`](price-health/) (0021).
+[`lock/`](lock/) (0019), [`lock-hardening/`](lock-hardening/) (0020),
+[`price-health/`](price-health/) (0021), and [`chart-grain/`](chart-grain/) (0022).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's

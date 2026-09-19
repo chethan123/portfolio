@@ -23,6 +23,7 @@ carry no guard and can be pointed at any database whose 1D line is in doubt.
 | `scale-observations.sql` | regenerates the observation log at `:cadence` minutes over `:days` sessions, each instrument carrying its own seconds on `as_of` |
 | `session-current.sql` | the 1D series as `readSessionSeries` computed it at `46d65df`, before spec 0016, `:'session'` as the parameter |
 | `session-rewrite.sql` | the same series as the running total spec 0016 approves |
+| `grained.sql` | the grained-window series `readGrainedSeries` computes (spec 0022), `:'until'`, `:days`, `:grain` and `:'zone'` as the parameters, the same optional `prefix` |
 | `compare.sql` | both into temporary tables, `except` both ways |
 | `time-overview.ts` | every query the Overview loader runs, in the loader's two waves, timed |
 

@@ -2,6 +2,9 @@
  * Every lock rule; the only importer of `@simplewebauthn/server` (docs/adr/0012). Challenges are
  * in-memory: a restart loses every outstanding one. A verified assertion is not proof of a fresh
  * prompt — an already-unlocked vault answers without one, and WebAuthn carries no freshness signal.
+ *
+ * The two `@simplewebauthn` pins diverge on purpose. The packages are published independently and
+ * the server has patches the browser never got, so lockstep here is major.minor, not patch.
  */
 import { randomBytes, randomFillSync } from "node:crypto";
 

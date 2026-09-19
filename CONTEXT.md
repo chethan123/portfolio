@@ -85,6 +85,14 @@ observed instant to its last. It may be older than the latest market session whe
 It is not a trailing twenty-four-hour window.
 _Avoid_: today, intraday range, last 24 hours, daily chart.
 
+**Grain**:
+How far apart a chart range's points are. A long range has daily grain, one finished-day close per
+date; a short range has a grain on the market clock inside each session, set by the range's span,
+with days that have no observations keeping their daily close. 1D has no grain: every observation
+is a point.
+_Avoid_: resolution (spec 0009's word for how many dates the sampler picks), interval, frequency,
+granularity, sampling rate, tick size.
+
 **Range end value**:
 The value at the last plotted point in the chosen chart range. It uses that point's price source
 and can differ from current net worth, even when the range ends today.

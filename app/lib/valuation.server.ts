@@ -396,10 +396,12 @@ export async function accountSeries(
 }
 
 export type SessionPoint = {
-  // ISO instant, not a date — hence "at". The chart is told which it is drawing (ChartPoint).
+  // ISO instant, not a date — hence "at" — unless dated, when it is the calendar date instead.
   at: string;
   amount: string;
   coverage: Coverage;
+  // Set on a finished-day point among instants (spec 0022); absent, never false, on an instant.
+  dated?: true;
 };
 
 // Off the log, not the calendar (ADR-0006) — market_date is stamped when a close is filed.
@@ -548,6 +550,159 @@ export async function accountSessionSeries(
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
   return readSessionSeries(db, session, isAccount("a.id", accountId));
+}
+
+export type GrainedWindow = { dates: IsoDate[]; grainMinutes: number; timeZone: string };
+
+// Two narrowings, not one: the dated branch reads holding_valued_at, narrowed the way readSeries
+// narrows it (v.*); the instant branch reads holding directly, narrowed the way readSessionSeries
+// narrows it (a.*). "Off" is `true` on both, never undefined — substituted in the callers below,
+// so this function never sees a missing narrowing to guard against.
+type GrainedNarrowing = { instant: RawBuilder<SqlBool>; dated: RawBuilder<SqlBool> };
+
+// The instants x holdings shape spec 0016 retired for 1D (ADR-0014), bounded here by the grain
+// rather than the refresh cadence: at most 27 steps a session at 15 minutes, 8 at an hour, 3 at
+// three hours, one more for an evening NAV. A day no step found an observation on — the window's
+// first day always — falls back to holding_valued_at(d), the same close the daily line draws, as
+// a dated point. The 1D running total (readSessionSeries) is the fallback shape if this ever
+// measures slow: it reads every observation of a held instrument in the window, a cost the grain
+// does not pay because the grain, not the cadence, bounds the instants. Steps are absolute
+// arithmetic from local midnight, so a zone whose clock change fell on a weekday would leave a
+// day's last hour uncovered; no New York session reaches it.
+async function readGrainedSeries(
+  db: Kysely<Database>,
+  window: GrainedWindow,
+  narrowing: GrainedNarrowing,
+): Promise<SessionPoint[]> {
+  const { dates, grainMinutes, timeZone } = window;
+  if (dates.length === 0) return [];
+
+  const rows = await sql<{
+    day: string;
+    at: Date | null;
+    dated: boolean;
+    amount: string;
+    known: string;
+    total: string;
+  }>`
+    with days as (
+      select d, ord from unnest(${dates}::date[]) with ordinality as t(d, ord)
+    ),
+
+    steps as (
+      -- The day cut into steps of the grain from its midnight on the market clock; never the
+      -- window's first day, which is dated below, not stepped.
+      select dy.d,
+             ((dy.d::timestamp) at time zone ${timeZone}) + make_interval(mins => ${grainMinutes}::int * k) as starts
+      from days dy
+      cross join generate_series(0, 1440 / ${grainMinutes}::int - 1) as k
+      where dy.ord > 1
+    ),
+
+    instants as (
+      -- A step's point is its last observation of that day; a step with none is no point. One
+      -- backward index step on price_observation_market_date_idx per (day, step).
+      select s.d, m.at
+      from steps s
+      cross join lateral (
+        select max(o.as_of) as at
+        from price_observation o
+        where o.market_date = s.d
+          and o.as_of >= s.starts
+          and o.as_of < s.starts + make_interval(mins => ${grainMinutes}::int)
+      ) m
+      where m.at is not null
+    ),
+
+    dated as (
+      -- The window's first day, and any day no step found an observation on: the spine's close for
+      -- that date. Read off instants, never the log again — a per-day probe of price_observation
+      -- plans as a sequential scan, and one definition of "observed" is enough.
+      select dy.d
+      from days dy
+      where dy.ord = 1
+         or not exists (select 1 from instants i where i.d = dy.d)
+    ),
+
+    held as (
+      -- Positions in force on each plotted day, one row per (day, holding); narrowed here, never
+      -- in an outer WHERE, so a day with nothing held is still a point.
+      select p.d, h.id, h.instrument_id, h.quantity
+      from (select distinct d from instants) p
+      join account a on a.closed_at is null or a.closed_at > p.d
+      join holding h on h.position_set_id = latest_position_set(a.id, p.d)
+      where ${narrowing.instant}
+    ),
+
+    instant_points as (
+      select i.d, i.at, false as dated,
+        cast(coalesce(sum(cast(h.quantity * px.price as numeric(20, 4))), 0) as numeric(20, 4)) as amount,
+        count(px.price) as known,
+        count(h.id) as total
+      from instants i
+      left join held h on h.d = i.d
+      left join lateral (
+        select coalesce(
+          (select o.price from price_observation o
+            where o.instrument_id = h.instrument_id and o.as_of <= i.at
+            order by o.as_of desc limit 1),
+          (select pd.close from price_daily pd
+            where pd.instrument_id = h.instrument_id and pd.date < i.d
+            order by pd.date desc limit 1)
+        ) as price
+      ) px on true
+      group by i.d, i.at
+    ),
+
+    dated_points as (
+      select dt.d, null::timestamptz as at, true as dated,
+        cast(coalesce(sum(v.value), 0) as numeric(20, 4)) as amount,
+        count(*) filter (where v.is_priced) as known,
+        count(v.instrument_id) as total
+      from dated dt
+      left join lateral (
+        select * from holding_valued_at(dt.d) v where ${narrowing.dated}
+      ) v on true
+      group by dt.d
+    )
+
+    select cast(d as text) as day, at, dated, amount, known, total from instant_points
+    union all
+    select cast(d as text) as day, at, dated, amount, known, total from dated_points
+    order by day, at
+  `.execute(db);
+
+  return rows.rows.map((row) => {
+    const coverage = { known: Number(row.known), total: Number(row.total) };
+
+    return row.dated
+      ? { at: row.day, amount: row.amount, coverage, dated: true as const }
+      : { at: row.at!.toISOString(), amount: row.amount, coverage };
+  });
+}
+
+// Same terms as netWorthSessionSeries, over a window rather than one session (spec 0022).
+export async function netWorthGrainedSeries(
+  filter: OwnerFilter,
+  window: GrainedWindow,
+  db: Kysely<Database> = getDb(),
+): Promise<SessionPoint[]> {
+  return readGrainedSeries(db, window, {
+    instant: ownedBy("a.owner_id", filter) ?? sql`true`,
+    dated: ownedBy("v.owner_id", filter) ?? sql`true`,
+  });
+}
+
+// Same terms as accountSessionSeries, over a window rather than one session (spec 0022).
+export async function accountGrainedSeries(
+  accountId: string,
+  window: GrainedWindow,
+  db: Kysely<Database> = getDb(),
+): Promise<SessionPoint[]> {
+  return readGrainedSeries(db, window, {
+    instant: isAccount("a.id", accountId),
+    dated: isAccount("v.account_id", accountId),
+  });
 }
 
 // The hand-typed prefix series (§7), raw — the overlap rule is a display rule, not a fact here.

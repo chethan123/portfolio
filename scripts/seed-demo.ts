@@ -325,6 +325,9 @@ const PRICE_LEAD_DAYS = 45;
 /** Demo's pretend refresh cadence, matching the seeded app_setting.refresh_cadence_minutes default. */
 const SESSION_CADENCE_MINUTES = 15;
 
+/** Sessions walked with observations, so a grained 1W has five days to draw (spec 0022). */
+const SESSION_COUNT = 5;
+
 /** How long the stale instrument has been silent — its quote's as_of, price, and daily-spine end must all agree. */
 const STALE_QUOTE_DAYS = 3;
 
@@ -397,16 +400,19 @@ function buildCalendar(now: Date): Calendar {
 }
 
 /**
- * Latest trading day with a session, walked backwards (a weekday can be a market holiday). Built
- * through isMarketOpen, not hours-from-midnight (NY is UTC-4/5 across the year); close appended by hand — isMarketOpen is half-open.
+ * Latest `count` trading sessions, oldest first, walked backwards from today (a weekday can be a
+ * market holiday). Built through isMarketOpen, not hours-from-midnight (NY is UTC-4/5 across the
+ * year); close appended by hand — isMarketOpen is half-open.
  */
-function findSession(
+function findSessions(
   priceDates: readonly IsoDate[],
   timeZone: string,
-): { date: IsoDate; instants: Date[] } | null {
+  count: number,
+): { date: IsoDate; instants: Date[] }[] {
   const step = SESSION_CADENCE_MINUTES * 60 * 1000;
+  const sessions: { date: IsoDate; instants: Date[] }[] = [];
 
-  for (let index = priceDates.length - 1; index >= 0; index--) {
+  for (let index = priceDates.length - 1; index >= 0 && sessions.length < count; index--) {
     const date = at(priceDates, index);
     const instants: Date[] = [];
 
@@ -419,11 +425,12 @@ function findSession(
 
     if (instants.length > 0) {
       instants.push(new Date(at(instants, instants.length - 1).getTime() + step));
-      return { date, instants };
+      sessions.push({ date, instants });
     }
   }
 
-  return null;
+  // Walked oldest first, so the latest session's walk is the one that ends on today's close.
+  return sessions.reverse();
 }
 
 /** Session prices ending exactly on the close, not an interpolation: refresh writes observation and
@@ -890,49 +897,56 @@ async function seed(
   );
   written.push({ table: "quote", rows: quoteIds.length });
 
-  // ADR-0006
-  const session = findSession(calendar.priceDates, timeZone);
+  // ADR-0006; spec 0022 "The demo seeds five sessions, not one" — a grained 1W needs more than a
+  // single dense day.
+  const sessions = findSessions(calendar.priceDates, timeZone, SESSION_COUNT);
 
-  if (session !== null) {
+  if (sessions.length > 0) {
     const observationIds: string[] = [];
     const observationAsOf: Date[] = [];
+    const observationMarketDates: IsoDate[] = [];
     const observationPrices: string[] = [];
     const observationFetched: Date[] = [];
+    const pollInstants: Date[] = [];
 
-    for (const instrument of INSTRUMENTS) {
-      const series = prices.get(instrument.key);
-      const id = byKey.get(instrument.key);
-      if (series === undefined || id === undefined) continue;
+    for (const session of sessions) {
+      for (const instrument of INSTRUMENTS) {
+        const series = prices.get(instrument.key);
+        const id = byKey.get(instrument.key);
+        if (series === undefined || id === undefined) continue;
 
-      // Stale instrument never came back today, so it observed nothing.
-      if (instrument.stale === true) continue;
+        // Stale instrument never came back in any session, so it observed nothing.
+        if (instrument.stale === true) continue;
 
-      const close = at(series, series.length - 1).close;
-      const previous = at(series, Math.max(0, series.length - 2)).close;
+        // Off the series by date, not the last two entries: every session but the latest needs a
+        // close that is not the series' own end.
+        const close = requirePrice(series, session.date, instrument.key);
+        const previous = requirePrice(series, isoOf(msOf(session.date) - DAY_MS), instrument.key);
 
-      // A mutual fund strikes one NAV after the close (DESIGN.md §6.2, ADR-0006).
-      const instants =
-        instrument.quoteType === "MUTUALFUND"
-          ? [at(session.instants, session.instants.length - 1)]
-          : session.instants;
+        // A mutual fund strikes one NAV after the close (DESIGN.md §6.2, ADR-0006).
+        const instants =
+          instrument.quoteType === "MUTUALFUND"
+            ? [at(session.instants, session.instants.length - 1)]
+            : session.instants;
 
-      const walk = walkSession(previous, close, instants.length, sessionGauss);
+        const walk = walkSession(previous, close, instants.length, sessionGauss);
 
-      for (const [index, instant] of instants.entries()) {
-        observationIds.push(id);
-        observationAsOf.push(instant);
-        observationPrices.push(at(walk, index).toFixed(4));
-        // A few seconds later: a poll learns a price after it was struck.
-        observationFetched.push(new Date(instant.getTime() + 4000));
+        for (const [index, instant] of instants.entries()) {
+          observationIds.push(id);
+          observationAsOf.push(instant);
+          observationMarketDates.push(session.date);
+          observationPrices.push(at(walk, index).toFixed(4));
+          // A few seconds later: a poll learns a price after it was struck.
+          observationFetched.push(new Date(instant.getTime() + 4000));
+        }
       }
+      pollInstants.push(...session.instants);
     }
 
     await client.query(
       `insert into price_observation (instrument_id, as_of, market_date, price, fetched_at)
-       select instrument_id, as_of, $5::date, price, fetched_at
-       from unnest($1::bigint[], $2::timestamptz[], $3::numeric[], $4::timestamptz[])
-         as t (instrument_id, as_of, price, fetched_at)`,
-      [observationIds, observationAsOf, observationPrices, observationFetched, session.date],
+       select * from unnest($1::bigint[], $2::timestamptz[], $3::date[], $4::numeric[], $5::timestamptz[])`,
+      [observationIds, observationAsOf, observationMarketDates, observationPrices, observationFetched],
     );
     written.push({ table: "price_observation", rows: observationIds.length });
 
@@ -946,9 +960,9 @@ async function seed(
     await client.query(
       `insert into price_poll (started_at, requested, priced, stale)
        select unnest($1::timestamptz[]), $2, $3, $4`,
-      [session.instants, requested, priced, requested - priced],
+      [pollInstants, requested, priced, requested - priced],
     );
-    written.push({ table: "price_poll", rows: session.instants.length });
+    written.push({ table: "price_poll", rows: pollInstants.length });
   }
 
   const accounts = new Map<string, string>();

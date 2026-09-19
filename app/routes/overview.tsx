@@ -24,6 +24,7 @@ import {
   DEFAULT_RANGE,
   chartRangeMiddleware,
   chartWindow,
+  dayOf,
   isoDate,
   rangeDescription,
   type CustomSpan,
@@ -107,7 +108,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   ]);
 
   // §7 rule 2: computed wins on overlap; manual fills the gap ahead, bounded so a 1M chart can't squeeze in a 2022 point.
-  const firstComputed = computed[0]?.date;
+  const first = computed[0];
   const manualPrefix =
     // Never under 1D — a 2022 point on this morning's line would claim a session that never happened.
     resolved.session !== undefined
@@ -115,7 +116,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       : reachable.filter(
           (point) =>
             point.date >= resolved.since &&
-            (firstComputed === undefined || point.date < firstComputed),
+            // On a grained window the first computed point may be an instant, and §7 rule 2
+            // (computed wins on an overlapping date) is a rule about days, not instants.
+            (first === undefined || point.date < dayOf(first, controls.session)),
         );
 
   // Summed from the same rollup the table renders, not counted separately.

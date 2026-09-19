@@ -16,7 +16,7 @@ Keep original evidence and rejected options intact; add a dated follow-up when a
 - [The lock slice, reviewed before launch](2026-09-05-lock-slice-launch-review.md) — 2026-09-05.
 - [Price worker platform facts — 4 September 2026](2026-09-04-price-worker-platform-facts.md) — 2026-09-04.
 - [Security and privacy audit](2026-09-02-security-and-privacy-audit.md) — 2026-09-02.
-- [Why the Overview takes eleven seconds with 1D selected — 1 September 2026](2026-09-01-overview-1d-latency.md) — 2026-09-01.
+- [Why the Overview takes eleven seconds with 1D selected — 1 September 2026](2026-09-01-overview-1d-latency.md) — 2026-09-01. Gained a third run, 2026-09-19: the grained-window reader (spec 0022) measured on the same harness, 138–151 ms at 92 days / grain 180 and 128–161 ms at 7 days / grain 15, both under the 500 ms stop figure, no sequential scan of `price_observation`.
 - [Net worth aggregation audit — 1 September 2026](2026-09-01-net-worth-aggregation-audit.md) — 2026-09-01.
 - [Account pickers and file-to-account mapping — how established apps do it](2026-08-30-account-picker-conventions.md) — 2026-08-30.
 - [Codex review validation — independent audit](2026-08-29-codex-review-validation.md) — 2026-08-29.

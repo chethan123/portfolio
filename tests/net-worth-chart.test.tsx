@@ -386,4 +386,130 @@ describe("<ChartEmptyNote> (spec 0015)", () => {
     );
     expect(render(0)).toContain("The caller&#x27;s own wording.");
   });
+
+  it("falls through to the caller's fallback for a grained session with one moment", () => {
+    // a grained window's dated fallback (spec 0022) is never "waiting for a second observation"
+    const fallback = <p className="empty-note">The caller's own wording.</p>;
+    const markup = renderToStaticMarkup(
+      <ChartEmptyNote session={{ timeZone: "America/New_York", grained: true }} moments={1}>
+        {fallback}
+      </ChartEmptyNote>,
+    );
+
+    expect(markup).toContain("The caller&#x27;s own wording.");
+  });
+});
+
+describe("a grained axis (spec 0022, ADR-0014)", () => {
+  const grainedSession = { timeZone: "America/New_York", grained: true } as const;
+
+  // Day one a dated close; day two three instants through the session (09:31, 12:00, and the
+  // 16:00 close); day three a dated close — the shape a 1W/1M/3M line draws.
+  const grained: ChartPoint[] = [
+    { date: "2026-06-04", amount: "100000.0000", dated: true },
+    { date: "2026-06-05T13:31:00.000Z", amount: "101000.0000" },
+    { date: "2026-06-05T16:00:00.000Z", amount: "101500.0000" },
+    { date: "2026-06-05T20:00:03.000Z", amount: "102000.0000" },
+    { date: "2026-06-06", amount: "103000.0000", dated: true },
+  ];
+
+  const render = (points: ChartPoint[], manual: ChartPoint[] = [], masked = false) =>
+    renderToStaticMarkup(
+      <NetWorthChart
+        manual={manual}
+        computed={points}
+        label="Net worth"
+        masked={masked}
+        session={grainedSession}
+        id="test"
+      />,
+    );
+
+  it("gives every day after the first the same width", () => {
+    // positions 1, 1.003, 1.385, 2, 3 normalised across the box (spec 0022's own worked example)
+    const scale = buildScale(grained, grainedSession);
+
+    expect(scale.x("2026-06-04")).toBe(0);
+    expect(scale.x("2026-06-05T13:31:00.000Z")).toBeCloseTo(1.282, 2);
+    expect(scale.x("2026-06-05T16:00:00.000Z")).toBeCloseTo(192.308, 2);
+    expect(scale.x("2026-06-05T20:00:03.000Z")).toBe(500);
+    expect(scale.x("2026-06-06")).toBe(1000);
+  });
+
+  it("places an instant inside its day by its time in the session, clamped at the close", () => {
+    // 23:30Z = 19:30 New York, after the regular close — clamps to the day's right edge, same as the close print would
+    const withEveningNav: ChartPoint[] = [
+      { date: "2026-06-04", amount: "100000.0000", dated: true },
+      { date: "2026-06-05T13:31:00.000Z", amount: "101000.0000" },
+      { date: "2026-06-05T23:30:00.000Z", amount: "102000.0000" },
+    ];
+
+    expect(buildScale(withEveningNav, grainedSession).x("2026-06-05T23:30:00.000Z")).toBe(1000);
+  });
+
+  it("places a hand-typed point dated day one where the day-one dated point sits", () => {
+    // both plot at the axis's left edge: same calendar day, same dayIndex and fraction
+    const markup = render(grained, [{ date: "2026-06-04", amount: "99000.0000" }]);
+
+    expect(markup.match(/class="chart-guide" style="left:0%"/g)).toHaveLength(2);
+  });
+
+  it("names its ticks by day, not by time of day, on a grained axis", () => {
+    const markup = render(grained);
+
+    expect(markup).toContain("<span>4 Jun</span>");
+    expect(markup).toContain("<span>5 Jun</span>");
+    expect(markup).toContain("<span>6 Jun</span>");
+  });
+
+  it("names the right edge by the day of an open struck at 09:30, not the day before it", () => {
+    // 13:30Z is 09:30 New York: the open's position is the integer the previous day's close would
+    // sit at, and a tick derived from the number alone named 7 Jun (Codex review, PR #353).
+    const endingOnAnOpen: ChartPoint[] = [
+      { date: "2026-06-04", amount: "100000.0000", dated: true },
+      { date: "2026-06-05T20:00:03.000Z", amount: "102000.0000" },
+      { date: "2026-06-08T13:30:00.000Z", amount: "101000.0000" },
+    ];
+    const markup = render(endingOnAnOpen);
+
+    expect(markup).toContain("<span>4 Jun</span>");
+    expect(markup).toContain("<span>5 Jun</span>");
+    expect(markup).toContain("<span>8 Jun</span>");
+    expect(markup).not.toContain("<span>7 Jun</span>");
+  });
+
+  it("puts the time beside the date in an instant's readout and no time in a dated point's", () => {
+    const markup = render(grained);
+
+    expect(markup).toContain(
+      '<span class="chart-readout-date">5 Jun 2026, 09:31</span>' +
+        '<span class="chart-readout-value">$101,000.00</span>',
+    );
+    expect(markup).toContain('<span class="chart-readout-date">4 Jun 2026</span>');
+    expect(markup).not.toContain('<span class="chart-readout-date">4 Jun 2026,');
+  });
+
+  it("dates an evening NAV on the market clock", () => {
+    // 23:30Z = 19:30 New York, same calendar day — reading the day off the ISO string alone would risk a UTC rollover
+    const markup = render([
+      { date: "2026-06-04", amount: "100000.0000", dated: true },
+      { date: "2026-06-05T13:31:00.000Z", amount: "101000.0000" },
+      { date: "2026-06-05T23:30:00.000Z", amount: "102000.0000" },
+    ]);
+
+    expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026, 19:30</span>');
+  });
+
+  it("describes a line ending on a dated point without a time in its aria-label", () => {
+    const markup = render(grained);
+
+    expect(markup).toContain('aria-label="Net worth ending on 6 Jun 2026 at $103,000.00."');
+  });
+
+  it("masks a grained line's amounts exactly as every other range's", () => {
+    const markup = render(grained, [], true);
+
+    expect(markup).not.toMatch(/\$\d/);
+    expect(markup).toContain('<span class="chart-readout-date">4 Jun 2026</span>');
+  });
 });
