@@ -555,6 +555,70 @@ describe("commitUpload", () => {
   );
 
   it(
+    "keeps the stale warning when a date change coincides with a changed mapping",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "BOTH", name: "Concurrent Change Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "BOTH" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nBOTH,3,40\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.added[0]?.quantity).toBe("3");
+      expect(reviewed.asOfInput).not.toBe("2026-06-30");
+
+      const changed = await rememberMapping(
+        draftId,
+        {
+          ...BASE_MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis", costBasis: null },
+        },
+        db,
+      );
+      expect(changed).toEqual({ nextStep: "review" });
+
+      const reviewedDateEvidence = [
+        { label: "current but non-reproducing", value: reviewed.asOfInput },
+        { label: "forged", value: "1999-01-01" },
+        { label: "invalid", value: "not-a-date" },
+        { label: "missing", value: undefined },
+      ] as const;
+      for (const evidence of reviewedDateEvidence) {
+        const refusal = await refusalOf(() =>
+          commitUpload(
+            draftId,
+            {
+              accountId: account.id,
+              asOf: "2026-06-30",
+              baselineSetId: "",
+              reviewRevision: reviewed.reviewRevision ?? "",
+              ...(evidence.value === undefined ? {} : { reviewedAsOf: evidence.value }),
+            },
+            db,
+          ),
+        );
+        expect(refusal, evidence.label).toBeInstanceOf(StaleReviewError);
+        if (!(refusal instanceof StaleReviewError)) {
+          throw new Error(`Expected a stale review for ${evidence.label} evidence.`);
+        }
+        expect(refusal.fieldErrors.form, evidence.label).toContain(
+          "This statement or its account changed after this review",
+        );
+        expect(refusal.fieldErrors.form, evidence.label).not.toContain(
+          "different statement date",
+        );
+        expect(refusal.diff.asOf, evidence.label).toEqual({
+          source: "asked",
+          date: "2026-06-30",
+        });
+        expect(refusal.diff.added[0]?.quantity, evidence.label).toBe("40");
+      }
+
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
     "refuses changed raw statement bytes after Review and records nothing",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;

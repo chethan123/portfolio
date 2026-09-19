@@ -347,6 +347,52 @@ describe("a review submitted after another tab changes the mapping", () => {
       });
     }),
   );
+
+  it(
+    "keeps the stale warning when the user also changes the statement date",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
+      const tabA = await reviewPage(draftId);
+      expect(tabA.diff.added[0]?.quantity).toBe("100");
+      expect(tabA.diff.asOfInput).not.toBe(AS_OF);
+
+      const tabB = await rememberMapping(
+        draftId,
+        {
+          ...MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis" },
+        },
+        ctx.db,
+      );
+      expect(tabB).toEqual({ nextStep: "review" });
+
+      const refusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId,
+            reviewRevision: tabA.diff.reviewRevision ?? "",
+            reviewedAsOf: tabA.diff.asOfInput,
+          }),
+          { draftId },
+        ),
+      );
+      if (refusal instanceof Response) throw new Error("Expected the current review, not a redirect.");
+      expect(refusal.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
+      expect(refusal.diff?.added[0]?.quantity).toBe("40");
+      expect(refusal.formError).toContain("This statement or its account changed after this review");
+      expect(refusal.formError).not.toContain("different statement date");
+
+      const markup = renderRoute(Review, `/upload/${draftId}/review`, tabA, {
+        actionData: refusal,
+      });
+      expect(markup).toContain("This statement or its account changed after this review");
+      expect(markup).not.toContain("different statement date");
+      expect(markup).toContain('role="alert"');
+      expect(await lastRecorded(accountId, ctx.db)).toBeNull();
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
 });
 
 describe("the review revision carried by the form", () => {

@@ -1195,7 +1195,7 @@ flowchart TD
     D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
     D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
     D1 -->|no| D2{"review revision differs,<br/>and dated baseline unchanged?"}
-    D2 -->|yes| D3{"posted date differs from<br/>the reviewed date?"}
+    D2 -->|yes| D3{"current state at reviewed date<br/>reproduces posted revision?"}
     D3 -->|yes| R10a["refuse: redraw for the chosen date,<br/>without claiming another change"]
     D3 -->|no| R10["refuse: review no longer describes<br/>this statement and account"]
     D2 -->|no| E{"file names two<br/>different accounts?"}
@@ -1236,10 +1236,11 @@ These deserve emphasis:
   lets recorded vocabulary outrank them, preserving ADR-0013. Quotes and prices are excluded, so a
   refresh can change the contextual values on the next render without revoking authorization.
   Missing revisions — including forms rendered before the revision existed — fail the comparison.
-  The form also carries the date that revision was drawn for. An edited undated-file date still
-  refuses and redraws before any write, but its message identifies that intentional redraw rather
-  than claiming the statement or account changed; a revision mismatch at the same date keeps the
-  stale-review warning.
+  The form also carries the date that revision was drawn for. On a mismatch, the commit rebuilds
+  the current draft and account state at that reviewed date; only reproducing the posted revision
+  proves the chosen date is the sole change. That case refuses and redraws before any write without
+  claiming the statement or account changed. Missing, invalid, forged or non-reproducing evidence
+  keeps the stale-review warning.
 - **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
   classifies against the latest set at or before the resolved date, not always "now"; `J` collects
   every reason that diff disagrees with what the form still believes — a posted `baselineSetId`

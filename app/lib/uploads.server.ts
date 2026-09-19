@@ -1009,10 +1009,22 @@ async function commitUploadUnderLock(
       diff.reviewRevision === null ||
       raw.reviewRevision !== diff.reviewRevision)
   ) {
-    const dateChanged =
+    // A different posted date is only an assertion. Rebuilding the current draft and account
+    // state at the reviewed date must reproduce the submitted revision before the gentler
+    // explanation is credible; missing, invalid, forged or concurrently changed evidence falls
+    // back to stale.
+    let reviewedRevision: string | null = null;
+    if (
       raw.asOf !== undefined &&
       raw.reviewedAsOf !== undefined &&
-      raw.asOf !== raw.reviewedAsOf;
+      raw.asOf !== raw.reviewedAsOf
+    ) {
+      reviewedRevision = (
+        await assembleDiff(draft, { mode: "review", asOf: raw.reviewedAsOf }, db)
+      ).diff.reviewRevision;
+    }
+    const dateChanged =
+      reviewedRevision !== null && reviewedRevision === raw.reviewRevision;
     throw new StaleReviewError(
       diff,
       asOf,
