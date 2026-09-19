@@ -617,9 +617,13 @@ the account page's, offer presets from 1D to All plus a custom span, default to 
 the last pick in a cookie; a preset the surface's history cannot reach is drawn disabled rather
 than dropped. A long span is not every date. The grid is sampled under a fixed point budget,
 geometrically and anchored on the window's end, so the recent end stays dense while a decade still
-fits ([ADR-0003](docs/adr/0003-anchored-geometric-chart-sampling.md)). 1D is the exception. It
-plots the latest observed session off the observation log, one point per distinct instant,
-unsampled (§6.2, ADR-0006). The hover/focus readout is pre-rendered. Every point's date and figure
+fits ([ADR-0003](docs/adr/0003-anchored-geometric-chart-sampling.md)). A range of at most 92 days
+is drawn at a **grain** instead: a step on the market clock inside each day, set by the span, read
+from the observation log, on an axis that gives every day the same width; a day the log has
+nothing for draws its finished-day close, dated, in the day's slot
+([ADR-0014](docs/adr/0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md)).
+1D is the one range drawn unsampled: every observation in the latest session, one point per
+distinct instant (§6.2, ADR-0006). The hover/focus readout is pre-rendered. Every point's date and figure
 are in the HTML and CSS reveals one at a time, without chart-specific client state ([ADR-0004](docs/adr/0004-pre-rendered-chart-interaction.md)).
 
 Structurally, the rule is a signature. The owner filter is a required first argument with no default
@@ -1514,11 +1518,12 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
 2. **The net worth chart cannot separate market movement from contributions.** Consequence of no
    cash-flow tracking (§3). Labelling mitigates; it does not solve. It is sharpest on 1D, where a
    statement uploaded during the session moves the change figure beside the headline by the whole
-   change in holdings while the line beside it moves only by the change in price. The line holds
-   today's positions constant across the session, and the change reader compares today's positions
-   against the previous session's. Every other range agrees with its own line because the line's
-   first point *is* what the change reads; a session is simply short enough for the difference to be
-   visible.
+   change in holdings while the line beside it moves only by the change in price. 1D holds today's
+   positions constant across the session, and the change reader compares today's positions against
+   the previous session's; a grained range does not share this gap, since it values each instant at
+   the position set in force on its date. Every other range agrees with its own line because the
+   line's first point *is* what the change reads; a session is simply short enough for the
+   difference to be visible.
 3. **Hand-rolled dashboard queries can disagree.** Consequence of no materialisation (§8.2).
    `holding_valued` mitigates.
 4. **No joint accounts.** Consequence of single-owner (§4.2). Adding them is a join table plus
@@ -1574,17 +1579,17 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     "held nothing, ever" and "holds nothing now" differently on every screen, which is a second empty
     state for a case that arises when a household closes out one owner entirely.
 13. **1D always shows the latest session; an older one cannot be chosen.** The observations are
-    kept forever, so the data for last Tuesday's session exists. But drawing it is a separate
-    decision with its own cost, and one deliberately deferred
-    ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)): an instant-parameterised
-    sibling of `holding_valued_at` (a third object bound by ADR-0001's row-type contract), a second
-    time vocabulary in `chart-range.ts`, and a time axis that can name a day as well as an hour. The
-    data existing is not a promise that it will be drawn. Two smaller limits come with it. The
-    archive holds only what was observed at the household's own cadence, which is not market data:
-    no OHLC bars, no volume, permanent unbackfillable gaps for every stretch the server was down,
-    and no corporate-action adjustment. It must not be mistaken for a backtest-grade series. And
-    the 1D line is drawn once, when the page loads. Nothing updates in place, because a live tick
-    pipeline was rejected in §6 for a reason that has not changed.
+    kept forever, so the data for last Tuesday's session exists, and a short range now draws the
+    sessions inside it at a grain
+    ([ADR-0014](docs/adr/0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md)).
+    But choosing that session *as 1D* is a separate decision, still deferred
+    ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md), ADR-0014): a second time
+    vocabulary in `chart-range.ts` to name an older session, and a control to pick one. Two smaller
+    limits remain. The archive holds only what was observed at the household's own cadence, which is
+    not market data: no OHLC bars, no volume, permanent unbackfillable gaps for every stretch the
+    server was down, and no corporate-action adjustment. It must not be mistaken for a
+    backtest-grade series. And the line is drawn once, when the page loads. Nothing updates in
+    place, because a live tick pipeline was rejected in §6 for a reason that has not changed.
 14. **A backfilled instrument gets the current ticker's history.** A symbol's history at the feed
     belongs to whatever holds the ticker *now*, so an instrument that changed symbols is filled with
     the wrong company's closes, and the only guard is a person spot-checking a figure against a

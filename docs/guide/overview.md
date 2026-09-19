@@ -39,6 +39,16 @@ different reason: an instance with no stored price observations has no session t
 far as the selected owners' own first recorded holdings. See the dashed line below. The options
 come back the moment you press **Show everyone**.
 
+**1W, 1M and 3M draw the sessions inside them, not just their closes.** Every day gets a point every
+15 minutes, an hour or three hours depending on the range, finer for a shorter one, laid across the
+whole day's width — a session takes up as much of the chart as any other day, not the sliver of the
+24 hours it actually runs. The weekend is a flat stretch between Friday's close and Monday's open. A
+gap, a stretch where nothing was observed, is a straight bridge between the point before and the
+point after, never a flat run. A point's readout names the moment its price was actually struck. YTD
+gets whichever of these applies to how much of the year has passed, and changes partway through it:
+15-minute steps for the first week of January, hourly until the start of February, three-hourly
+until early April, then the ordinary daily line for the rest of the year.
+
 The choice lives in the address bar as `?range=3m` (or, for Custom,
 `?range=custom&start=…&end=…`). So it survives a reload, you can bookmark it, and you can send the
 address to the other person in the household and they will see the same window you did. With no
@@ -69,7 +79,9 @@ least two observations at distinct times to draw a line.
 - The axis and readout show time on the market's clock.
 - Every distinct observed instant is plotted; one refresh can add several points.
 - The change chip compares current value with the close before the displayed session.
-- Current quantities are used across the session, so an upload can change the whole 1D line.
+- Current quantities are used across the session — 1D is the only range that does this. An upload
+  can change the whole 1D line; every other range values each day at the positions you held on it,
+  so an upload there only reshapes the line from the day it lands.
 
 Mutual funds often report one daily price, leaving parts of the line flat. The chart does not
 stream. Reload or use **Refresh now** to read newer observations.
