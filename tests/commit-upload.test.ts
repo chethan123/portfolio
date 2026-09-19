@@ -479,7 +479,7 @@ describe("commitUpload", () => {
         db,
       );
 
-      await expect(
+      const refusal = await refusalOf(() =>
         commitUpload(
           draftId,
           {
@@ -487,13 +487,70 @@ describe("commitUpload", () => {
             asOf: "2026-06-30",
             baselineSetId: reviewed.baselineSetId ?? "",
             reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
           },
           db,
         ),
-      ).rejects.toThrow(StaleReviewError);
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
 
       expect(await lastRecorded(account.id, db)).toBeNull();
       await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
+    "redraws an intentionally changed date without blaming another change before recording it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "DATE", name: "Dated Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "DATE" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nDATE,3,\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBeNull();
+      expect(reviewed.asOfInput).not.toBe("2026-06-30");
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a changed-date review.");
+      expect(refusal.fieldErrors.form).toBe(
+        "This comparison was drawn for a different statement date. Here it is for 2026-06-30. " +
+          "Nothing was recorded — check it and record again.",
+      );
+      expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
+      expect(refusal.diff.baselineSetId).toBeNull();
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+
+      const written = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: "",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
+          reviewedAsOf: refusal.diff.asOfInput,
+        },
+        db,
+      );
+      expect(written.asOf).toBe("2026-06-30");
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
     }),
   );
 

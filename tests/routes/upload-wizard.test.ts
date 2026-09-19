@@ -17,7 +17,7 @@ import Review, {
 } from "../../app/routes/upload/review.tsx";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
-import { rememberMapping, requireDraft } from "~/lib/uploads.server";
+import { STALE_REVIEW_MESSAGE, rememberMapping, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -193,6 +193,12 @@ describe("a draft's bare address", () => {
       expect(page.earliestAsOf).toBe(earliestRecordableDate());
       expect(page.latestAsOf).toBe(latestRecordableDate());
       expect(page.earliestAsOf).toBe("1970-01-01");
+
+      const stalePage = await reviewPage(draftId, "?stale=true");
+      expect(stalePage.staleReviewMessage).toBe(STALE_REVIEW_MESSAGE);
+      expect(renderRoute(Review, `/upload/${draftId}/review?stale=true`, stalePage)).toContain(
+        STALE_REVIEW_MESSAGE,
+      );
     }),
   );
 });
@@ -315,12 +321,15 @@ describe("a review submitted after another tab changes the mapping", () => {
             asOf: AS_OF,
             accountId,
             reviewRevision: tabA.diff.reviewRevision ?? "",
+            reviewedAsOf: tabA.diff.asOfInput,
           }),
           { draftId },
         ),
       );
       if (refusal instanceof Response) throw new Error("Expected the current review, not a redirect.");
       expect(refusal.diff?.added[0]?.quantity).toBe("40");
+      expect(refusal.formError).toContain("This statement or its account changed after this review");
+      expect(refusal.formError).not.toContain("different statement date");
       const markup = renderRoute(
         Review,
         `/upload/${draftId}/review?asOf=${AS_OF}`,
@@ -391,6 +400,9 @@ describe("the review revision carried by the form", () => {
       const firstReview = await reviewPage(draftId);
       expect(firstReview.diff.asOf.source).toBe("asked");
       expect(firstReview.diff.asOf.date).not.toBe(AS_OF);
+      const firstMarkup = renderRoute(Review, `/upload/${draftId}/review`, firstReview);
+      expect(firstMarkup).toContain('name="reviewedAsOf"');
+      expect(firstMarkup).toContain(`name="reviewedAsOf" value="${firstReview.diff.asOfInput}"`);
 
       const changedDate = await reviewAction(
         args(
@@ -398,6 +410,7 @@ describe("the review revision carried by the form", () => {
             asOf: AS_OF,
             accountId,
             reviewRevision: firstReview.diff.reviewRevision ?? "",
+            reviewedAsOf: firstReview.diff.asOfInput,
           }),
           { draftId },
         ),
@@ -408,6 +421,20 @@ describe("the review revision carried by the form", () => {
 
       expect(changedDate.diff?.asOf).toEqual({ source: "asked", date: AS_OF });
       expect(changedDate.diff?.reviewRevision).not.toBe(firstReview.diff.reviewRevision);
+      expect(changedDate.formError).toBe(
+        `This comparison was drawn for a different statement date. Here it is for ${AS_OF}. ` +
+          "Nothing was recorded — check it and record again.",
+      );
+      expect(changedDate.formError).not.toContain("statement or its account changed");
+      expect(changedDate.values.confirmFiledBehind).toBeUndefined();
+      expect(changedDate.values.confirmRemovals).toBeUndefined();
+      expect(await lastRecorded(accountId, ctx.db)).toBeNull();
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+
+      const changedMarkup = renderRoute(Review, `/upload/${draftId}/review`, firstReview, {
+        actionData: changedDate,
+      });
+      expect(changedMarkup).toContain(`name="reviewedAsOf" value="${AS_OF}"`);
 
       const recorded = await redirectTo(() =>
         reviewAction(
@@ -416,6 +443,7 @@ describe("the review revision carried by the form", () => {
               asOf: AS_OF,
               accountId,
               reviewRevision: changedDate.diff?.reviewRevision ?? "",
+              reviewedAsOf: changedDate.diff?.asOfInput ?? "",
             }),
             { draftId },
           ),
@@ -731,7 +759,7 @@ describe("the review revision carried by the form", () => {
           formError: "Obsolete refusal",
           values: {},
           diff: stalePage.diff,
-          baselineMoved: false,
+          confirmationReset: "blocked-test",
         },
       });
 

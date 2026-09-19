@@ -767,7 +767,10 @@ control:
   longer describe what the commit would act on. The refusal carries the current dated diff back;
   nothing is recorded and neither confirmation is carried forward. Quote refreshes do not make a
   review stale, because the current values are context rather than statement data. A form rendered
-  before review revisions existed is refused in the same way and must be reviewed once more.
+  before review revisions existed is refused in the same way and must be reviewed once more. The
+  form carries the date its comparison was drawn for, so directly pressing **Record this
+  statement** after editing an undated file's date still redraws without a write, but says the
+  comparison was drawn for a different date rather than claiming the statement or account changed.
 - **An unconfirmed filed-behind statement.** §6.4's own confirmation, refused the same way when its
   tick is missing, or was given against a baseline since superseded.
 

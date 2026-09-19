@@ -239,7 +239,7 @@ async function draftAccountId(
 }
 
 async function lockDraft(draftId: string, db: Kysely<Database>): Promise<void> {
-  if (!/^\d+$/.test(draftId)) return;
+  if (!couldBeId(draftId)) return;
   await db
     .selectFrom("upload_draft")
     .select("id")
@@ -479,11 +479,18 @@ export class StaleReviewError extends ValidationError {
   readonly diff: UploadDiff;
   readonly asOf: IsoDate | null;
 
-  constructor(diff: UploadDiff, asOf: IsoDate | null) {
+  constructor(
+    diff: UploadDiff,
+    asOf: IsoDate | null,
+    reason: "date_changed" | "revision_changed" = "revision_changed",
+  ) {
     super({
       [FORM_ERROR]:
-        "This statement or its account changed after this review. Nothing was recorded — " +
-        "check it and record again.",
+        reason === "date_changed"
+          ? `This comparison was drawn for a different statement date. Here it is for ${asOf}. ` +
+            "Nothing was recorded — check it and record again."
+          : "This statement or its account changed after this review. Nothing was recorded — " +
+            "check it and record again.",
     });
     this.diff = diff;
     this.asOf = asOf;
@@ -492,18 +499,14 @@ export class StaleReviewError extends ValidationError {
 
 // A refusal decided after assembleDiff has already run, carrying the diff it was decided against
 // so the review can re-render exactly what it refused rather than the loader's stale one (#181).
-// `diff` and `baselineMoved` are fields assigned in the body, not parameter properties —
-// erasableSyntaxOnly (tsconfig.json) forbids those. Precedent for a payload-carrying domain error:
-// DraftNotReadyError. `baselineMoved` is the same comparison the commit itself makes (below) —
-// carried here so the route reads the fact rather than restating the domain's own rule (CLAUDE.md).
+// `diff` is assigned in the body, not a parameter property — erasableSyntaxOnly (tsconfig.json)
+// forbids those. Precedent for a payload-carrying domain error: DraftNotReadyError.
 export class RefusedUpload extends ValidationError {
   readonly diff: UploadDiff;
-  readonly baselineMoved: boolean;
 
-  constructor(message: string, diff: UploadDiff, baselineMoved: boolean) {
+  constructor(message: string, diff: UploadDiff) {
     super({ [FORM_ERROR]: message });
     this.diff = diff;
-    this.baselineMoved = baselineMoved;
   }
 }
 
@@ -887,28 +890,10 @@ async function assembleDiff(
   };
 }
 
-type DiffOptions = { asOf: string; db?: Kysely<Database> };
-type ReviewedUploadDiff = UploadDiff & { reviewRevision: string };
-
-export function diffForDraft(draftId: string, options: DiffOptions): Promise<ReviewedUploadDiff>;
-export function diffForDraft(
-  draftId: string,
-  db?: Kysely<Database>,
-): Promise<UploadDiff>;
 export async function diffForDraft(
   draftId: string,
-  optionsOrDb: DiffOptions | Kysely<Database> = getDb(),
+  db: Kysely<Database> = getDb(),
 ): Promise<UploadDiff> {
-  const options =
-    "asOf" in optionsOrDb ? optionsOrDb : { asOf: null, db: optionsOrDb };
-  if (options.asOf !== null) {
-    const reviewed = await reviewForDraft(draftId, options.asOf, options.db);
-    if (reviewed.reviewRevision === null) {
-      throw new Error("A validated review date must produce a review revision.");
-    }
-    return reviewed as ReviewedUploadDiff;
-  }
-  const db = options.db ?? getDb();
   const draft = await requireDraft(draftId, db);
   return (await assembleDiff(draft, { mode: "unknown" }, db)).diff;
 }
@@ -931,6 +916,7 @@ export type CommitInput = {
   baselineSetId?: string;
   confirmFiledBehind?: string;
   reviewRevision?: string;
+  reviewedAsOf?: string;
 };
 
 export type CommittedUpload = {
@@ -1023,7 +1009,15 @@ async function commitUploadUnderLock(
       diff.reviewRevision === null ||
       raw.reviewRevision !== diff.reviewRevision)
   ) {
-    throw new StaleReviewError(diff, asOf);
+    const dateChanged =
+      raw.asOf !== undefined &&
+      raw.reviewedAsOf !== undefined &&
+      raw.asOf !== raw.reviewedAsOf;
+    throw new StaleReviewError(
+      diff,
+      asOf,
+      dateChanged ? "date_changed" : "revision_changed",
+    );
   }
 
   // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
@@ -1038,7 +1032,6 @@ async function commitUploadUnderLock(
         `"${differingNumber}" on another, and a statement describes one account. ` +
         "Check which account this export belongs to — nothing was recorded.",
       diff,
-      baselineMoved,
     );
   }
 
@@ -1054,7 +1047,6 @@ async function commitUploadUnderLock(
           `"${account.externalAccountNumber}". A statement lands in the account it describes — check ` +
           "which account this export belongs to.",
         diff,
-        baselineMoved,
       );
     }
   }
@@ -1067,7 +1059,6 @@ async function commitUploadUnderLock(
           "application can hold, so nothing was recorded. Check both columns against the " +
           "sample rows — a cost basis is what one share cost, not what the whole position did.",
         diff,
-        baselineMoved,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.price)) {
@@ -1076,7 +1067,6 @@ async function commitUploadUnderLock(
           "application can hold, so nothing was recorded. Check the quantity column against " +
           "the sample rows.",
         diff,
-        baselineMoved,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
@@ -1085,7 +1075,6 @@ async function commitUploadUnderLock(
           "dividend than this application can hold, so nothing was recorded. Check the " +
           "quantity column against the sample rows.",
         diff,
-        baselineMoved,
       );
     }
   }
@@ -1153,7 +1142,7 @@ async function commitUploadUnderLock(
       throw new Error("A refusal must carry a sentence.");
     }
 
-    throw new RefusedUpload(reasons.join(" "), diff, baselineMoved);
+    throw new RefusedUpload(reasons.join(" "), diff);
   }
 
   // Promotion first, since the draft delete below cascades the answers away. Only the strings
@@ -1211,7 +1200,6 @@ async function commitUploadUnderLock(
         "upload or repointed under Settings while this review was open, so nothing was " +
         "recorded. Reload the review and check what it is about to record.",
       diff,
-      baselineMoved,
     );
   }
   // Every string had a meaning at diff time, and the promotion restored the draft's own; one
@@ -1223,7 +1211,6 @@ async function commitUploadUnderLock(
       `"${forgotten}" was forgotten under Settings while this review was open, so nothing ` +
         "was recorded. Reload the review — it will ask what the name means.",
       diff,
-      baselineMoved,
     );
   }
 

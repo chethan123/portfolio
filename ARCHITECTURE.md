@@ -1195,7 +1195,9 @@ flowchart TD
     D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
     D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
     D1 -->|no| D2{"review revision differs,<br/>and dated baseline unchanged?"}
-    D2 -->|yes| R10["refuse: review no longer describes<br/>this statement and account"]
+    D2 -->|yes| D3{"posted date differs from<br/>the reviewed date?"}
+    D3 -->|yes| R10a["refuse: redraw for the chosen date,<br/>without claiming another change"]
+    D3 -->|no| R10["refuse: review no longer describes<br/>this statement and account"]
     D2 -->|no| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
@@ -1217,7 +1219,7 @@ flowchart TD
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R10a refuse
 ```
 
 These deserve emphasis:
@@ -1234,6 +1236,10 @@ These deserve emphasis:
   lets recorded vocabulary outrank them, preserving ADR-0013. Quotes and prices are excluded, so a
   refresh can change the contextual values on the next render without revoking authorization.
   Missing revisions — including forms rendered before the revision existed — fail the comparison.
+  The form also carries the date that revision was drawn for. An edited undated-file date still
+  refuses and redraws before any write, but its message identifies that intentional redraw rather
+  than claiming the statement or account changed; a revision mismatch at the same date keeps the
+  stale-review warning.
 - **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
   classifies against the latest set at or before the resolved date, not always "now"; `J` collects
   every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
@@ -1680,8 +1686,8 @@ Three base error types and two upload-specific refinements, with the layer each 
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors`, a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `RefusedUpload` | `uploads.server.ts` | the freshly assembled dated diff and whether its baseline moved, as well as the `ValidationError` messages | the review action | the same review re-rendered once with every applicable baseline, filed-behind and removal refusal, and both confirmations cleared |
-| `StaleReviewError` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` message | the review action | the same review re-rendered with its current diff and both confirmations cleared; only `DraftNotReadyError` redirects to an earlier step |
+| `RefusedUpload` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` messages | the review action | the same review re-rendered once with every applicable baseline, filed-behind and removal refusal, and both confirmations cleared |
+| `StaleReviewError` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` message | the review action | the same review re-rendered with its current diff and both confirmations cleared; an intentionally edited undated-file date is named as a redraw, while a same-date revision mismatch keeps the stale warning; only `DraftNotReadyError` redirects to an earlier step |
 | `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: the `upload/review.tsx` action throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed and, when Review must block, only its display fields, step state and source-row problems | the upload routes | a redirect to that step; Review instead renders the narrow blocked payload |
 

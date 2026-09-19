@@ -13,6 +13,7 @@ import { requestRefresh } from "~/lib/price-poller.server";
 import {
   DraftNotReadyError,
   RefusedUpload,
+  STALE_REVIEW_MESSAGE,
   StaleReviewError,
   commitUpload,
   reviewForDraft,
@@ -46,7 +47,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         instrumentsSkipped: diff.instrumentsSkipped,
       } satisfies UploadStepsData,
       diff,
-      staleReview: url.searchParams.get("stale") === "true",
+      staleReviewMessage:
+        url.searchParams.get("stale") === "true" ? STALE_REVIEW_MESSAGE : null,
       earliestAsOf: earliestRecordableDate(),
       latestAsOf: latestRecordableDate(),
     };
@@ -61,6 +63,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
           } satisfies UploadStepsData,
           diff: null,
           blocked: error.blocked,
+          staleReviewMessage: null,
           earliestAsOf: earliestRecordableDate(),
           latestAsOf: latestRecordableDate(),
         };
@@ -89,8 +92,6 @@ export async function action({ params, request }: Route.ActionArgs) {
           formError: null,
           values: safeValues,
           diff,
-          baselineMoved: false,
-          reviewChanged: true,
           confirmationReset: crypto.randomUUID(),
         };
       }
@@ -123,8 +124,6 @@ export async function action({ params, request }: Route.ActionArgs) {
         formError: formError ?? null,
         values: safeValues,
         diff: error.diff,
-        baselineMoved: false,
-        reviewChanged: true,
         confirmationReset: crypto.randomUUID(),
       };
     }
@@ -159,10 +158,6 @@ export async function action({ params, request }: Route.ActionArgs) {
           throw reviewError;
         }
       }
-      // The domain's own comparison (uploads.server.ts), not restated here (CLAUDE.md) — false
-      // when there was no refusal to carry it, since nothing then moved under this render.
-      const baselineMoved = error instanceof RefusedUpload ? error.baselineMoved : false;
-      const reviewChanged = false;
       const safeValues = { ...values };
       delete safeValues.confirmFiledBehind;
       delete safeValues.confirmRemovals;
@@ -171,8 +166,6 @@ export async function action({ params, request }: Route.ActionArgs) {
         formError: formError ?? null,
         values: safeValues,
         diff,
-        baselineMoved,
-        reviewChanged,
         confirmationReset: crypto.randomUUID(),
       };
     }
@@ -278,13 +271,6 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
   const errors = actionData?.errors;
   const values = actionData?.values;
-
-  // A tick given against a baseline that has since moved describes figures no longer on screen
-  // (#181) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
-  // The comparison itself is the domain's (uploads.server.ts), read off the refusal rather than
-  // restated here.
-  const baselineMoved = actionData?.baselineMoved ?? false;
-  const reviewChanged = actionData?.reviewChanged ?? false;
 
   // "this account holds" is only true of today's holdings — wrong once filed behind means these
   // counts are the baseline's own (uploads.server.ts's matching guard).
@@ -459,16 +445,17 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {diff.reviewRevision !== null ? (
           <input type="hidden" name="reviewRevision" value={diff.reviewRevision} />
         ) : null}
+        <input type="hidden" name="reviewedAsOf" value={diff.asOfInput} />
 
         {diff.filedBehind !== null ? (
           <div className="danger-zone">
             <label className="choice">
-              {/* Keyed on the baseline, not just `defaultChecked`: React only assigns
+              {/* Keyed on the refusal token, not just `defaultChecked`: React only assigns
                   `element.defaultChecked` on a re-render, never `element.checked`
                   (react-dom-client.development.js:1675-1678), and HTML's dirty-checkedness flag
                   stops the content attribute affecting a box once a person has clicked it. A
                   `<Form>` refusal reuses this component instance, so without a key change here a
-                  ticked box would keep looking ticked after the baseline moved voided it. No test
+                  ticked box would keep looking ticked after the refusal voided it. No test
                   covers this: `renderRoute` (tests/support/render.tsx) calls
                   `renderToStaticMarkup` fresh each time, with no persistent fiber tree to
                   reconcile against, so a render-only test cannot see a `key` remount either way —
@@ -478,9 +465,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                 type="checkbox"
                 name="confirmFiledBehind"
                 value="true"
-                defaultChecked={
-                  !baselineMoved && !reviewChanged && values?.confirmFiledBehind === "true"
-                }
+                defaultChecked={false}
               />
               <strong>
                 This statement is dated <span className="u-data">{diff.filedBehind.asOf}</span>,
@@ -498,17 +483,15 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
-              {/* Same reason as confirmFiledBehind's box above: keyed on the baseline so a
-                  baseline change remounts the box instead of leaving a person's own click stuck
+              {/* Same reason as confirmFiledBehind's box above: keyed on the refusal so the
+                  response remounts the box instead of leaving a person's own click stuck
                   behind HTML's dirty-checkedness flag. */}
               <input
                 key={`${diff.reviewRevision ?? "invalid"}:${actionData?.confirmationReset ?? "loader"}:removals`}
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"
-                defaultChecked={
-                  !baselineMoved && !reviewChanged && values?.confirmRemovals === "true"
-                }
+                defaultChecked={false}
               />
               <strong>
                 {diff.removesEverything ? (
@@ -528,11 +511,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           </div>
         ) : null}
 
-        {loaderData.staleReview ? (
+        {loaderData.staleReviewMessage ? (
           <div className="panel-body form-intro">
             <p className="form-error" role="alert">
-              The previous attempt was refused because this statement or its account changed after
-              its review. Nothing was recorded — check it and record again.
+              {loaderData.staleReviewMessage}
             </p>
           </div>
         ) : null}
