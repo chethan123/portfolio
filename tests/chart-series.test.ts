@@ -108,6 +108,20 @@ describe("the window decides the reader", () => {
         expect(await chartSeries(scope, sessionWindow("2026-06-05"))).toEqual([
           { date: "2026-06-05T13:30:00.000Z", amount: "1500.0000" },
         ]);
+
+        // Grained window, same seed: the window's first day is dated at the daily close, the
+        // second day's one observation is an instant — the seam's third reader, off resolved.grain.
+        const grained: RangeWindow = {
+          range: "1w",
+          since: "2026-06-04",
+          dates: ["2026-06-04", "2026-06-05"],
+          grain: 15,
+        };
+
+        expect(await chartSeries(scope, grained)).toEqual([
+          { date: "2026-06-04", amount: "1000.0000", dated: true },
+          { date: "2026-06-05T13:30:00.000Z", amount: "1500.0000" },
+        ]);
       },
     ),
   );
