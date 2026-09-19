@@ -4,11 +4,6 @@
 > can update daily rows dated within seven days either side of today's market date, including past closes.
 > Daily rows are not immutable. See [the data model](../data-model.md).
 
-> **Revised in part** by [0014](0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md):
-> a chart range of at most 92 days now draws every session inside it from this log at a grain set by
-> its span, so the first two costs named under "Past-navigable intraday is deferred" have been paid.
-> Choosing an older session as 1D remains deferred. Nothing else here is rewritten.
-
 
 The price poller has always fetched a live quote every refresh cadence during market hours and
 overwritten it in place, discarding every intermediate price. To support a 1D chart range, and
@@ -18,6 +13,13 @@ instrument per provider-stated instant (`as_of`), inserted with `on conflict do 
 same transaction that upserts `quote` and `price_daily`. This reverses the recorded "no sub-daily
 range chips" decision in `docs/design/pricing-ui-brief.md` §8; the mutual-funds-strike-one-NAV
 argument there remains true and is accepted as a caveat, not a blocker.
+
+**Revised in part** by [0014](0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md).
+A chart range of at most 92 days now draws every day inside it but the first from this log, at a
+grain set by its span, so of the three costs named under "Past-navigable intraday is deferred"
+below, the instant-parameterised reader and the day-and-hour axis have been paid. The vocabulary
+and control to choose an older session as 1D have not, and that remains deferred. Nothing else here
+is rewritten.
 
 ## The three price tiers
 
