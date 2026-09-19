@@ -9,8 +9,10 @@
 export type IsoDate = string;
 
 // Regular NYSE session, market-local minutes from midnight. Pre/post-market excluded (§6.2).
-const SESSION_OPENS = 9 * 60 + 30;
-const SESSION_CLOSES = 16 * 60;
+// Exported for the chart, which lays a day's session across its slot with them (spec 0022) — the
+// regular session, not the holiday calendar, so this module's trust rule (§10) is untouched.
+export const SESSION_OPENS = 9 * 60 + 30;
+export const SESSION_CLOSES = 16 * 60;
 const QUOTE_WINDOW_PADDING_MINUTES = 15;
 
 /**

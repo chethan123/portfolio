@@ -376,9 +376,11 @@ of how two writers share one table without one silently owning the other's rows.
 | `date` | `date` | no | PK part; the trading day |
 | `close` | `numeric(20,4)` | no | the close |
 
-**`price_observation`** is every distinct intraday price the feed reported, kept forever, and it is
-what the 1D chart draws. `(instrument_id, as_of)` is the primary key, so an unchanged quote writes
-nothing.
+**`price_observation`** is every distinct intraday price the feed reported, kept forever. It is what
+the 1D chart draws, and, at a grain, what a chart range of at most 92 days draws for every day
+inside it that has observations
+([ADR-0014](adr/0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md)).
+`(instrument_id, as_of)` is the primary key, so an unchanged quote writes nothing.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -650,6 +652,16 @@ calculate investment return.
 The 1D series holds current positions fixed across the latest observed session. Each price change
 contributes the difference between a holding's separately rounded old and new values. The opening
 price is the previous observation or, failing that, a daily close strictly before the session.
+
+A chart range of at most 92 days values at a **grain** instead
+([ADR-0014](adr/0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md)):
+a step on the market clock inside each day, set by the span. A day inside the window with
+observations is dated by the log, one point per step at the last observation in it, the holdings
+priced at their own latest observation at or before that instant against the position set in force
+on that day. A day with none, and the window's first day always, is dated by the spine instead: it
+values the same way `holding_valued_at` does, as one calendar-date point. The first day is dated
+even when it has observations, so the series starts at the close the change figure beside the
+headline reads, the way the daily series does.
 
 Charts omit dates with no holdings and discard coverage metadata, so a partially priced historical
 point is not individually labelled. [Architecture §6.3](../ARCHITECTURE.md#63-read-path-dashboards)

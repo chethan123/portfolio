@@ -429,14 +429,21 @@ table with a single grep. They come in three tiers.
   compute it in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴,
   half away from zero) and is never summed into a total. This is the one place a valuation figure
   is produced outside the view, and it is worth watching.
-- `valuation.server.ts:417` (`readSessionSeries`) values holdings from `price_observation` rather
-  than through `holding_valued`, the 1D chart's line and the only valuation anywhere that reads the
-  observation log. Not an escape from the invariant but an extension of it: the same module owns
-  both, so the rule stays "one module values holdings" rather than becoming "one view does". It
-  hand-writes the join to `holding` that §11.1 warns about, because no view can express "priced at
-  an instant", and it earns that by living beside the readers it must agree with. The last point of
-  its line and `netWorth()` are the same figure by construction (ADR-0006). A screen writing its own
-  join over `price_observation` has left the mitigation exactly as one over `holding` has.
+- `valuation.server.ts:424` (`readSessionSeries`) values holdings from `price_observation` rather
+  than through `holding_valued`, the 1D chart's line. Not an escape from the invariant but an
+  extension of it: the same module owns both, so the rule stays "one module values holdings" rather
+  than becoming "one view does". It hand-writes the join to `holding` that §11.1 warns about,
+  because no view can express "priced at an instant", and it earns that by living beside the readers
+  it must agree with. The last point of its line and `netWorth()` are the same figure by
+  construction (ADR-0006). A screen writing its own join over `price_observation` has left the
+  mitigation exactly as one over `holding` has.
+- `valuation.server.ts:572` (`readGrainedSeries`, ADR-0014) is the second valuation outside the two
+  SQL objects, and the second reader of `price_observation`. Each plotted instant of a chart range
+  of at most 92 days is valued the way `readSessionSeries` values 1D's, narrowed the same way; each
+  day the log has nothing for is valued through `holding_valued_at` instead, the daily line's own
+  reader, inside the lateral it already narrows in. One statement holds both, so the invariant that
+  a past date's valuation never reads an observation holds by construction: a date comes from the
+  spine or a day from the log, never one day from both.
 
 ### 4.3 The `.server` convention
 
@@ -893,8 +900,8 @@ anywhere.
 | `upload_draft_answer_instrument_id_idx` | `(instrument_id)` | The instrument cascade, as `instrument_alias_instrument_id_idx`; the answers themselves are reached through the primary key `(draft_id, raw_string)`. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at`, an index scan stopping at the first row, executed once per holding per plotted date. |
-| `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. |
-| `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. |
+| `price_observation_pkey` | `(instrument_id, as_of)` | Three jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. It is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. And it is the grained reader's per-holding lookup (ADR-0014): one backward index probe per (plotted instant, holding) pair, for the last observation at or before that instant. |
+| `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. The grained reader's per-step maximum (ADR-0014) rides the same range scan, one backward index step per (day, step) pair. |
 
 ### 5.6 The numeric boundary
 
@@ -1343,7 +1350,7 @@ history and a quote is not a fact):
 
 | Table | Cardinality | Lifecycle | Read by |
 |---|---|---|---|
-| `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries`, the 1D line, and nothing else |
+| `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries`, the 1D line; `netWorthGrainedSeries` / `accountGrainedSeries`, a grained line (ADR-0014) |
 | `quote` | one row per instrument | overwritten in place | `holding_valued`, today's figures |
 | `price_daily` | **at most** one row per instrument per trading day | dated prices: quote refreshes upsert rows; backfill inserts only missing rows | `holding_valued_at(d)`, every historical figure |
 
@@ -1543,6 +1550,18 @@ instants × holdings, and an instant is per *instrument* rather than per poll, s
 carried instead as a running total: the holdings priced at the open, moved by each observation's
 separately rounded new value less the rounded value it replaced (spec 0016, measured in
 [`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)).
+
+**The grained reader is the module's third front** (ADR-0014). `netWorthGrainedSeries` and
+`accountGrainedSeries` value a chart range of at most 92 days at a **grain**: a step on the market
+clock inside each day, set by the span. A day inside the window with observations contributes one
+point per step, the last observation in it, valued the way the session readers value an instant; a
+day with none, and the window's first day always, falls back to `holding_valued_at(d)`, the daily
+line's own close. One statement, two narrowings: the dated branch sits inside the
+`holding_valued_at` lateral, on `v.owner_id` or `v.account_id`, the way the dated series reader's
+does; the instant branch sits in the holdings CTE, on `a.owner_id` or `a.id`, the way the session
+readers' does. It re-values every plotted instant rather than running a total, because the grain
+bounds how many there are — at most 27 a session at 15 minutes and 3 at three hours — where a
+running total's cost tracks the refresh cadence instead and would not shrink with a coarser grain.
 
 ```
    Screen                Reads                            Shape it groups by
@@ -2156,12 +2175,13 @@ that, and each would be wrong at a hundred times the scale.
 
 Most of the figures below describe the design target rather than a measurement: the demo household
 in `scripts/seed-demo.ts`, two people, six accounts and three years of statements, is what almost
-everything here has actually been run against. Two things are measured rather than targeted, and
-both were measured on one household, the 21 accounts, 97 holdings and 98 feed instruments that
+everything here has actually been run against. Three things are measured rather than targeted, and
+all three were measured on one household, the 21 accounts, 97 holdings and 98 feed instruments that
 `docs/research/2026-09-01-overview-1d-latency/harness/scale-shape.sql` builds, which is still the
-single reproduction path: the 1D read, in
-[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md),
-and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_set_cost.sql`.
+single reproduction path: the 1D read and the grained-window reader (ADR-0014), both in
+[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)
+(the first and third runs), and `latest_position_set`'s planner cost, in
+`migrations/0011_latest_position_set_cost.sql`.
 
 | Choice | Right here because | Would break at |
 |---|---|---|
@@ -2170,25 +2190,31 @@ and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_se
 | One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
 | Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set, where 1 minute is ~15×, or a host where the database is not the largest thing on the disk |
 | The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. An instant is per instrument, so a session holds of the order of polls × feed instruments, 1,620 measured at the seeded cadence on ~100 instruments, against `SAMPLE_BUDGET`'s 180 dates for a long range | The payload before the query, now that the line is a running total over the session's observations: 1,620 points is ~97 KB of loader data and ~20 ms of query, and a 1-minute cadence is 23,460 points, ~1.4 MB and ~200 ms, paid on every Overview load with 1D selected |
+| A chart range of at most 92 days re-valued at a grain, instants × holdings, rather than sampled more densely off the spine (ADR-0014) | The grain bounds the count, not the cadence: at most 27 steps a session at 15 minutes, 3 at three hours. Measured on the harness shape (research note, third run): 3M at grain 180, 222 points, 138–151 ms with JIT on and ~62 ms off; 1W at grain 15, 137 points, 128–161 ms on and ~57 ms off; no sequential scan of `price_observation` in either plan | A household past the ~100 feed instruments the design targets, where the (instant, holding) pairs a 3M window prices — of the order of 20,000 here — grow with holdings as well as span; the 1D running total is the named fallback shape |
 | In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling, since two app containers would both poll and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
-**Four indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
+**Five indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
 here becomes a scan of the table and a sort. Because `0011_latest_position_set_cost.sql` prices it
 at 1000, `latest_position_set` runs once per account for a plain read, and once per (account, date)
-across a plotted series: before that the planner hash-joined on the call and re-evaluated it per
-bucket candidate, 7,415 calls on the harness shape against the 3,780 the work needs, and the cost
-is what put `holding_one_row_per_instrument` on this path at all, as the `Index Cond` the call
-becomes. `position_set_account_as_of_idx` matches its ordering exactly, stopping at the first row;
-adding a column to that ordering without adding it to the index would turn every dashboard read into
-a sort. The carry-forward lateral inside `holding_valued_at` runs far more often, once per holding
-per plotted date, and rides `price_daily`'s primary key the same way. And the 1D reader rides
-`price_observation`'s primary key, `(instrument_id, as_of)`, twice per holding: once stopping at the
-price in force when the session opened, and once as a range scan over that holding's observations
-inside the session; that key is also the dedup that keeps the log a record of distinct instants
-rather than of polls, which is the one place in the schema where an index and a rule are the same
-object.
+across a plotted series — dated or grained alike: before that the planner hash-joined on the call
+and re-evaluated it per bucket candidate, 7,415 calls on the harness shape against the 3,780 the
+work needs, and the cost is what put `holding_one_row_per_instrument` on this path at all, as the
+`Index Cond` the call becomes. `position_set_account_as_of_idx` matches its ordering exactly,
+stopping at the first row; adding a column to that ordering without adding it to the index would
+turn every dashboard read into a sort. The carry-forward lateral inside `holding_valued_at` runs
+far more often, once per holding per plotted date — a grained line's dated points among them — and
+rides `price_daily`'s primary key the same way. The 1D reader and the grained reader's instant
+branch (ADR-0014) both ride `price_observation`'s primary key, `(instrument_id, as_of)`: the 1D
+reader twice per holding, once stopping at the price in force when the session opened and once as a
+range scan over that holding's observations inside the session; the grained reader once per
+(plotted instant, holding), stopping at the last observation at or before it. That key is also the
+dedup that keeps the log a record of distinct instants rather than of polls, which is the one place
+in the schema where an index and a rule are the same object. And the grained reader's per-step
+maximum — deciding which day is observed at all, and where inside it a step's point falls — rides
+`price_observation_market_date_idx`, one backward index step per (day, step) pair, the same index
+`latestObservedSession` rides to find the latest session in one backward scan stopping at row one.
 
 **The 1D line is one round trip too, and it is a running total rather than a re-valuation.** The
 price in force at the open is looked up once per holding, and each held instrument's observations
@@ -2308,7 +2334,7 @@ still live in the current code:
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading`, what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
-| `chart-series.server.ts` | **The one place a chart's series is read** (spec 0015), for both surfaces: `chartReach` reads how far a surface can reach, its earliest recorded date and the latest observed session, and `chartSeries` picks the reader the resolved window implies, then applies §6.3's `coverage.total > 0` rule. That rule was two copies of route code before, one per screen, and forgetting it fails nothing: the chart just draws a climb out of a zero nobody recorded. `ChartScope` names the surface and what narrows it, and §6.3 says where the owner filter then sits |
+| `chart-series.server.ts` | **The one place a chart's series is read** (spec 0015), for both surfaces: `chartReach` reads how far a surface can reach, its earliest recorded date and the latest observed session, and `chartSeries` picks the reader the resolved window implies — session, grained (ADR-0014) or dated, off `resolved.session`/`resolved.grain` alone — then applies §6.3's `coverage.total > 0` rule. That rule was two copies of route code before, one per screen, and forgetting it fails nothing: the chart just draws a climb out of a zero nobody recorded. `ChartScope` names the surface and what narrows it, and §6.3 says where the owner filter then sits |
 | `lock.server.ts` | **The only module that imports `@simplewebauthn/server`.** Ceremony options, assertion and registration verification, grant minting and its rolling idle expiry, and the fresh-assertion authorisation that enrolling or removing a passkey requires (docs/adr/0012, spec 0019). The grant cookie's own builders live here too, `HttpOnly`, so nothing browser-reachable ever needs them. The middleware (`app/root.tsx`) asks this module one question, whether there is a live grant, and acts on the answer |
 | `lock.ts` | The lock's browser-safe vocabulary: the idle-window and re-entry-grace constants, the one encoding rule `passkey.transports` is written and read through, and the return-address query parameter the unlock screen carries. Plain `.ts`, not `.server.ts`, the same argument `masking.ts` makes for itself. Pure, and in the client bundle |
 | `unlock-ceremony.ts` | The unlock screen's client-only seam onto `@simplewebauthn/browser`, the one file naming that package, and only inside a dynamic `import()` in a function body, never at module scope, so it never sits in a server bundle. `supportsPasskeys()` decides only what the screen shows, never what the server allows |
@@ -2327,7 +2353,7 @@ still live in the current code:
 | `market-hours.ts` | `isScheduledQuoteWindow` and `isMarketOpen` (both optimisations) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `raw-string.ts` | The one line-ending rule a raw instrument string needs when a form posts it back, browser-safe because the instruments step's action and the alias screen's rows both apply it |
-| `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
+| `chart-range.ts` | The chart's time vocabulary: a range (the presets and the range cookie middleware, ADR-0003), the window it resolves to (`chartWindow`, and the sampled date grid under its point budget), the points drawn on that window (`ChartPoint`) and the axis that labels them (`SessionAxis`); `isoDate` lives here too, the one copy after spec 0015 deleted the others. 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). `grainFor` (ADR-0014) is the span-to-grain tier lookup a span of at most 92 days carries as `RangeWindow.grain`; `dayOf` is the one answer for a point's calendar day, an instant's on the market clock or a dated point's own, that the chart's axis, readout and the Overview's manual-prefix rule all share. Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
 | `masking.ts` | The masking vocabulary, policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). `resolveMasked`, `resolveBrowserMasked` and the cookie builders are pure; the same client-bundle module also owns the browser store, `BroadcastChannel`, listeners and `localStorage` ordering tokens |
 | `masking.server.ts` | One masking resolution per server request. A deferred promise in React Router's typed request context makes parallel root and Holdings loaders share the same policy read and fail-closed outcome |
@@ -2403,7 +2429,7 @@ also export pure helpers for testing.
 | `empty-state.tsx` | What a dashboard says when it has nothing to show: no figure and no axis at all, because a zero net worth and a never-uploaded instance are indistinguishable on screen and only one of them is alarming |
 | `stub-page.tsx` | A page header over a sentence saying what a screen will be, written for routes whose content belonged to a later slice. The slices landed: nothing imports it now |
 | `icons.tsx` | The icon set, inline, replacing the mock's CDN font for the same reasons the fonts are self-hosted (§13.7 of DESIGN.md). Decorative by design: every icon is `aria-hidden` beside a real text label |
-| `net-worth-chart.tsx` | The trend line, hand-drawn: one stroke over a gradient is a polyline, a path and some CSS, and a charting dependency would mean fighting its defaults to arrive back here. Colours resolve from custom properties through classes, because `stroke="#0055ff"` cannot follow a theme. The one file besides `amount.tsx` allowed to call a money formatter, since its figures are axis ticks and per-point readouts, which no component can host. The readout overlays are HTML positioned in percentages, not SVG children (ADR-0004) |
+| `net-worth-chart.tsx` | The trend line, hand-drawn: one stroke over a gradient is a polyline, a path and some CSS, and a charting dependency would mean fighting its defaults to arrive back here. Colours resolve from custom properties through classes, because `stroke="#0055ff"` cannot follow a theme. The one file besides `amount.tsx` allowed to call a money formatter, since its figures are axis ticks and per-point readouts, which no component can host. The readout overlays are HTML positioned in percentages, not SVG children (ADR-0004). `buildScale`'s grained branch (ADR-0014) gives every calendar day the same width and places an instant inside its day's session slot; a dated (finished-day) point sits at the slot's right edge, and ticks and readouts read that distinction off `ChartPoint.dated` rather than the string's shape |
 | `chart-range-control.tsx` | The segmented range control. Every option links to its own explicit `range`, the default included, because a bare relative link would read back whatever the cookie held. A disabled preset is a span, never a link, and every link carries the rest of the query |
 | `owner-filter-control.tsx` | The owner filter (spec 0013, ADR-0008), in the page header's actions on every screen it reaches. A disclosure rather than a row of boxes, because a row grows with the household and reflowed differently everywhere. Its hidden fields arrive as a prop: the control knows no screen's vocabulary |
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
@@ -2484,7 +2510,7 @@ where each piece lives.
 | **Carry-forward** | Resolving a date to the last `price_daily` close at or before it. Why Saturday is worth Friday's close, and why USD prices at 1.00 on any date |
 | **The spine** | `price_daily`, at most one row per instrument per trading day. Non-trading days get no row at all; a missed poll is a visible gap the carry-forward closes, and one the next backfill of that instrument fills as a side effect |
 | **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history, since history is finished days |
-| **The log** | `price_observation`, every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
+| **The log** | `price_observation`, every observation, append-only. Read by the 1D chart and, at a grain, by a chart range of at most 92 days (ADR-0014); invisible to every valuation of a past date |
 | **Poll** | One refresh attempt, recorded whether or not any observation resulted. What tells a quiet market apart from a server that was not running |
 | **Price worker** | The one process that talks to the price feed (`server/price-worker.ts`, §7.5): holds no rule about what to fetch or what a price means, and no database credential |
 | **Worker socket** | The unix socket in the shared volume through which the app asks and the worker answers (§3.1, §7.5): a request and a raw answer, nothing kept |

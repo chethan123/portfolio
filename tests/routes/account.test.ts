@@ -606,6 +606,60 @@ describe("the 1D range on an account", () => {
       expect(asked.session).toBeNull();
     }),
   );
+
+  it(
+    "plots a grained window narrowed to this account, at the log's instants and the spine either side of them",
+    withDatabase(async (ctx) => {
+      const owner = await ctx.seedPerson({ name: "Alice" });
+      const account = await ctx.seedAccount({ name: "Fidelity Taxable", owner, kind: "brokerage" });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // A second account holding the same instrument at a figure that would give away an
+      // unnarrowed sum, proving the account reader, not the household one, answered.
+      const other = await ctx.seedAccount({ name: "Other Brokerage", owner, kind: "brokerage" });
+      await ctx.seedPositionSet({
+        account: other,
+        asOf: daysAgo(2),
+        holdings: [{ instrument: vti, quantity: "900" }],
+      });
+
+      await ctx.seedPositionSet({
+        account,
+        asOf: daysAgo(2),
+        holdings: [{ instrument: vti, quantity: "100" }],
+      });
+      await ctx.seedDailyClose({ instrument: vti, date: daysAgo(2), close: "100.0000" });
+
+      for (const [minute, price] of [
+        ["13:30", "101.0000"],
+        ["17:00", "104.0000"],
+        ["20:00", "110.0000"],
+      ]) {
+        await ctx.seedObservation({
+          instrument: vti,
+          asOf: `${daysAgo(1)}T${minute}:00Z`,
+          marketDate: daysAgo(1),
+          price: price as string,
+        });
+      }
+      await ctx.seedDailyClose({ instrument: vti, date: daysAgo(1), close: "110.0000" });
+
+      const data = await loader(
+        args(get(`/accounts/${account.id}?range=1w`), { accountId: account.id }),
+      );
+
+      expect(data.session).toEqual({ timeZone: "America/New_York", grained: true });
+      // Same shape as the Overview's grained window (spec 0022): a dated point at the account's own
+      // first statement, its session's three observations as instants, and today dated off the spine.
+      expect(data.computed).toEqual([
+        { date: daysAgo(2), amount: "10000.0000", dated: true },
+        { date: `${daysAgo(1)}T13:30:00.000Z`, amount: "10100.0000" },
+        { date: `${daysAgo(1)}T17:00:00.000Z`, amount: "10400.0000" },
+        { date: `${daysAgo(1)}T20:00:00.000Z`, amount: "11000.0000" },
+        { date: daysAgo(0), amount: "11000.0000", dated: true },
+      ]);
+    }),
+  );
 });
 
 describe("a refused balance without JavaScript", () => {

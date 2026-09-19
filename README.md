@@ -344,6 +344,8 @@ for a disposable environment; read its cleanup steps before running it.
 - Current totals: latest account snapshot and current quote.
 - Daily history: latest snapshot and daily close on or before each requested date.
 - 1D: current holdings valued at observed instants in the latest recorded session.
+- A short range (1W, 1M, 3M, or a shorter YTD/Custom): the day's own holdings valued at observed
+  instants at a grain set by the span; a day with none valued at its daily close instead.
 
 Money products round per holding before summing. Totals carry priced/total holding counts.
 Value, basis, and unrealized gain can cover different holdings; do not subtract independently

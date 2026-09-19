@@ -7,9 +7,9 @@
 import { useId, type ReactNode } from "react";
 
 import { MASKED_FIGURE } from "~/components/amount";
-import { isoDate } from "~/lib/chart-range";
+import { dayOf, isoDate } from "~/lib/chart-range";
 import { compactScale, formatCompact, formatMoney, toPlotValue } from "~/lib/format";
-import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
+import { SESSION_CLOSES, SESSION_OPENS, marketTimeOf, type IsoDate } from "~/lib/market-hours";
 
 import type { ChartPoint, SessionAxis } from "~/lib/chart-range";
 
@@ -48,9 +48,19 @@ export type Scale = {
   y: (amount: string) => number;
   domain: { floor: number; span: number };
   time: { start: number; end: number };
+  // Present only on a grained axis: the position range, and the day at any position, answered
+  // from the plotted points rather than from the number — an open at 09:30 sits at the same
+  // integer as the previous day's close, so arithmetic on the position alone names the wrong day.
+  days?: { min: number; max: number; at: (position: number) => IsoDate };
 };
 
-export function buildScale(points: ChartPoint[]): Scale {
+// A point's minute of the market day, from marketTimeOf's "HH:MM" — for placing an instant inside its session slot.
+function marketMinutesOf(date: string, timeZone: string): number {
+  const [hours = "0", minutes = "0"] = marketTimeOf(new Date(date), timeZone).split(":");
+  return Number(hours) * 60 + Number(minutes);
+}
+
+export function buildScale(points: ChartPoint[], session: SessionAxis | null = null): Scale {
   const times = points.map((point) => Date.parse(point.date));
   const values = points.map((point) => toPlotValue(point.amount));
 
@@ -59,20 +69,77 @@ export function buildScale(points: ChartPoint[]): Scale {
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
 
-  // Time, not index — spacing points evenly would compress decades of annual manual dots into the width of a month.
-  const timeSpan = maxTime - minTime || 1;
   const valueSpan = (maxValue - minValue) * (1 + PADDING * 2);
   const floor = minValue - (maxValue - minValue) * PADDING;
+  const time = { start: minTime, end: maxTime };
+
+  // A flat line has no range to scale against — centre it rather than divide by zero.
+  const y = (amount: string) =>
+    valueSpan === 0 ? HEIGHT / 2 : HEIGHT - ((toPlotValue(amount) - floor) / valueSpan) * HEIGHT;
+  const domain = { floor, span: valueSpan };
+
+  if (session !== null && session.grained) {
+    // Day index counts calendar days from the window's earliest day; fraction places an instant
+    // inside its day's session slot, 1 for a dated (finished-day) point, which is why the first
+    // day — dated always — contributes only its slot's right edge.
+    const withDays = points.map((point) => ({ point, day: dayOf(point, session) }));
+    const earliestDay = withDays.reduce(
+      (min, { day }) => (day < min ? day : min),
+      withDays[0]?.day ?? "",
+    );
+    const earliestMs = Date.parse(`${earliestDay}T00:00:00Z`);
+
+    const positions = new Map<string, number>();
+    const placed: { position: number; day: IsoDate }[] = [];
+    for (const { point, day } of withDays) {
+      const dayIndex = (Date.parse(`${day}T00:00:00Z`) - earliestMs) / DAY_MS;
+      const fraction = point.dated
+        ? 1
+        : Math.min(
+            1,
+            Math.max(
+              0,
+              (marketMinutesOf(point.date, session.timeZone) - SESSION_OPENS) /
+                (SESSION_CLOSES - SESSION_OPENS),
+            ),
+          );
+      positions.set(point.date, dayIndex + fraction);
+      placed.push({ position: dayIndex + fraction, day });
+    }
+
+    // The nearest plotted point's day; a tie goes to the later point, so an open that shares its
+    // position with the previous day's close names its own day.
+    const dayAt = (position: number): IsoDate =>
+      placed.reduce((nearest, entry) =>
+        Math.abs(entry.position - position) <= Math.abs(nearest.position - position) ? entry : nearest,
+      ).day;
+
+    const positionValues = [...positions.values()];
+    const minPos = Math.min(...positionValues);
+    const maxPos = Math.max(...positionValues);
+    const posSpan = maxPos - minPos;
+
+    return {
+      // A flat position range (one day) has nothing to scale against — centre it, as a flat value range does.
+      x: (date) => {
+        const pos = positions.get(date) ?? minPos;
+        return posSpan === 0 ? WIDTH / 2 : ((pos - minPos) / posSpan) * WIDTH;
+      },
+      y,
+      domain,
+      time,
+      days: { min: minPos, max: maxPos, at: dayAt },
+    };
+  }
+
+  // Time, not index — spacing points evenly would compress decades of annual manual dots into the width of a month.
+  const timeSpan = maxTime - minTime || 1;
 
   return {
     x: (date) => ((Date.parse(date) - minTime) / timeSpan) * WIDTH,
-    // A flat line has no range to scale against — centre it rather than divide by zero.
-    y: (amount) =>
-      valueSpan === 0
-        ? HEIGHT / 2
-        : HEIGHT - ((toPlotValue(amount) - floor) / valueSpan) * HEIGHT,
-    domain: { floor, span: valueSpan },
-    time: { start: minTime, end: maxTime },
+    y,
+    domain,
+    time,
   };
 }
 
@@ -158,8 +225,9 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 }
 
 function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): string {
-  // A session's ticks all fall in one trading day — only the time of day varies.
-  if (session !== null) return marketTimeOf(new Date(ms), session.timeZone);
+  // A 1D session's ticks all fall in one trading day — only the time of day varies. A grained axis's
+  // ticks name days instead, one trading day apiece, so it falls through to the day/month naming below.
+  if (session !== null && !session.grained) return marketTimeOf(new Date(ms), session.timeZone);
 
   const [year = "", month = "", day = ""] = isoDate(ms).split("-");
   const name = MONTHS[Number(month) - 1] ?? month;
@@ -168,14 +236,17 @@ function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): s
 }
 
 // A readout's date always carries its year, unlike x ticks — read alone, not in context of two others (spec 0010).
-function readoutDate(date: string, session: SessionAxis | null): string {
-  // Day comes from `market-hours.ts` too, not a UTC slice — a session crossing UTC midnight would date a point a day out.
-  const stamped = session === null ? date.slice(0, 10) : marketDateOf(new Date(date), session.timeZone);
+function readoutDate(point: ChartPoint, session: SessionAxis | null): string {
+  // dayOf hands back a point's own date verbatim when there's no session to consult — sliced to
+  // guard a full instant fed in without one, as the axis (isoDate on a parsed ms value) already does.
+  const stamped = dayOf(point, session).slice(0, 10);
   const [year = "", month = "", day = ""] = stamped.split("-");
   const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
-  // Time joins the date, not the amount — so masking of the figure beside it is untouched.
-  return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
+  // Time joins the date, not the amount — so masking of the figure beside it is untouched. A dated
+  // (finished-day) point on a grained axis names its date alone, the way 1D never does.
+  if (session === null || point.dated) return stamp;
+  return `${stamp}, ${marketTimeOf(new Date(point.date), session.timeZone)}`;
 }
 
 function Readout({
@@ -189,7 +260,7 @@ function Readout({
 }) {
   return (
     <>
-      <span className="chart-readout-date">{readoutDate(target.point.date, session)}</span>
+      <span className="chart-readout-date">{readoutDate(target.point, session)}</span>
       <span className="chart-readout-value">
         {masked ? `$${MASKED_FIGURE}` : formatMoney(target.point.amount)}
       </span>
@@ -219,35 +290,45 @@ export function NetWorthChart({
   const generated = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gradientId = `${id ?? generated}-chart-fill`;
 
-  const all = [...manual, ...computed];
+  // A hand-typed point is a calendar date; run through marketDateOf like an instant (via dayOf), it
+  // would come back a day early, so the chart marks it dated before it reaches the scale or a readout.
+  const datedManual = manual.map((point) => ({ ...point, dated: true as const }));
+  const all = [...datedManual, ...computed];
 
   if (all.length < 2) return null;
 
-  const scale = buildScale(all);
-  const last = computed.at(-1) ?? manual.at(-1);
+  const scale = buildScale(all, session);
+  const last = computed.at(-1) ?? datedManual.at(-1);
 
   // §7 rule 1: dashed run extended to meet the first computed point, so the join reads as interpolation, not a gap.
   const firstComputed = computed[0];
-  const manualRun = manual.length > 0 && firstComputed ? [...manual, firstComputed] : manual;
+  const manualRun =
+    datedManual.length > 0 && firstComputed ? [...datedManual, firstComputed] : datedManual;
 
   const rules = gridRules(scale, masked);
 
-  const targets = hitTargets(manual, computed, scale);
+  const targets = hitTargets(datedManual, computed, scale);
   const resting = targets.at(-1);
 
   // "an amount that is hidden", not a dot run — the `aria-label` is the announcement itself (story 6, spec 0010).
   const ending =
     last === undefined
       ? ""
-      : ` ending on ${readoutDate(last.date, session)} at ${
+      : ` ending on ${readoutDate(last, session)} at ${
           masked ? "an amount that is hidden" : formatMoney(last.amount)
         }.`;
 
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
-  const ticks = [0, 0.5, 1].map((fraction) =>
-    tickLabel(start + (end - start) * fraction, withDay, session),
-  );
+  const { days } = scale;
+  // A grained axis names the day at the left edge, the middle and the right edge — the plotted
+  // point nearest each — rather than interpolating `scale.time` in milliseconds.
+  const ticks = days
+    ? [0, 0.5, 1].map((fraction) => {
+        const day = days.at(days.min + (days.max - days.min) * fraction);
+        return tickLabel(Date.parse(`${day}T00:00:00Z`), true, session);
+      })
+    : [0, 0.5, 1].map((fraction) => tickLabel(start + (end - start) * fraction, withDay, session));
 
   return (
     <>
@@ -371,7 +452,7 @@ export function ChartEmptyNote({
   moments: number;
   children: ReactNode;
 }) {
-  if (session !== null && moments > 0) {
+  if (session !== null && !session.grained && moments > 0) {
     return (
       <p className="empty-note">
         A line needs two observed moments and this session has {moments}. It appears once another

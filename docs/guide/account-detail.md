@@ -42,7 +42,8 @@ never included. The chosen range lives in the URL and is remembered in this brow
 A line needs two valued-date samples with holdings. Try All or let more days accumulate; another
 statement is not required. The empty panel's second-statement instruction is outdated
 ([fix tracked in #280](https://github.com/chethan123/portfolio/issues/280)).
-For 1D, the latest stored session needs two observed instants.
+For 1D, the latest stored session needs two observed instants. 1W, 1M and 3M draw this account's own
+sessions the same way Overview's do, narrowed to it alone.
 The readout names the selected point and can differ from the current headline.
 
 ## The holdings table

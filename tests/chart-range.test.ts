@@ -9,8 +9,10 @@ import {
   SAMPLE_BUDGET,
   chartWindow,
   customRangeMin,
+  dayOf,
   decodeRangeCookieValue,
   encodeRangeCookieValue,
+  grainFor,
   isRangeDisabled,
   rangeCookie,
   rangeDescription,
@@ -21,8 +23,10 @@ import {
   readRangeCookie,
   resolveRange,
   surfaceEarliestDate,
+  type ChartPoint,
   type RangeKey,
   type RangeWindow,
+  type SessionAxis,
   type Surface,
 } from "~/lib/chart-range";
 
@@ -336,6 +340,83 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
   });
 });
 
+describe("the grain a span earns (spec 0022)", () => {
+  const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface };
+
+  it("maps a span in whole days to its tier", () => {
+    expect(grainFor(0)).toBe(15);
+    expect(grainFor(7)).toBe(15);
+    expect(grainFor(8)).toBe(60);
+    expect(grainFor(31)).toBe(60);
+    expect(grainFor(32)).toBe(180);
+    expect(grainFor(92)).toBe(180);
+    expect(grainFor(93)).toBeUndefined();
+  });
+
+  it("lands every preset in its tier on the widest date the calendar gives it", () => {
+    expect(resolveRange("1w", { ...NO_DATA, today: TODAY }).grain).toBe(15);
+
+    // July has 31 days — the widest a trailing month ever gets.
+    expect(resolveRange("1m", { ...NO_DATA, today: "2026-08-31" }).grain).toBe(60);
+
+    // 31 (Jul) + 31 (Aug) + 30 (Sep) — the widest a trailing quarter ever gets.
+    expect(resolveRange("3m", { ...NO_DATA, today: "2026-10-29" }).grain).toBe(180);
+
+    const farBack = { earliest: { positionSet: "2010-01-01" as const }, surface: "household" as Surface, today: TODAY };
+    for (const range of ["1y", "5y", "all"] as RangeKey[]) {
+      expect(resolveRange(range, farBack).grain).toBeUndefined();
+    }
+  });
+
+  it("carries a session and no grain on 1D, and neither when 1D falls back to the default", () => {
+    const withSession = resolveRange("1d", { ...NO_DATA, today: TODAY, session: "2026-08-25" });
+    expect(withSession.session).toBe("2026-08-25");
+    expect(withSession.grain).toBeUndefined();
+
+    const fallback = resolveRange("1d", { ...NO_DATA, today: TODAY, session: null });
+    expect(fallback.session).toBeUndefined();
+    expect(fallback.grain).toBeUndefined();
+  });
+
+  it("grains a custom span by its own length, not a preset's", () => {
+    expect(spanOf(daysBefore(TODAY, 14), TODAY).grain).toBe(60);
+    expect(spanOf(daysBefore(TODAY, 100), TODAY).grain).toBeUndefined();
+  });
+
+  it("changes YTD's grain through the year, off the span alone", () => {
+    expect(resolveRange("ytd", { ...NO_DATA, today: "2026-02-10" }).grain).toBe(180);
+    expect(resolveRange("ytd", { ...NO_DATA, today: "2026-01-01" }).grain).toBe(15);
+  });
+
+  it("still samples every calendar day, both ends included, on a grained window", () => {
+    const window = resolveRange("1w", { ...NO_DATA, today: TODAY });
+
+    expect(window.grain).toBe(15);
+    expect(window.dates[0]).toBe(window.since);
+    expect(window.dates.at(-1)).toBe(TODAY);
+    expect(window.dates.length).toBe(8);
+  });
+});
+
+describe("dayOf: the calendar day a point belongs to", () => {
+  const session: SessionAxis = { timeZone: "America/New_York" };
+
+  it("is a dated point's own date even with a session in hand", () => {
+    const point: ChartPoint = { date: "2026-06-05", amount: "0", dated: true };
+    expect(dayOf(point, session)).toBe("2026-06-05");
+  });
+
+  it("is the market date an instant was struck on", () => {
+    const point: ChartPoint = { date: "2026-06-05T23:30:00Z", amount: "0" };
+    expect(dayOf(point, session)).toBe("2026-06-05");
+  });
+
+  it("is the point's own date, unparsed, when there is no session at all", () => {
+    const point: ChartPoint = { date: "2026-06-05T23:30:00Z", amount: "0" };
+    expect(dayOf(point, null)).toBe("2026-06-05T23:30:00Z");
+  });
+});
+
 describe("a custom range", () => {
   const earliest = { positionSet: "2026-01-01" as const };
 
@@ -589,5 +670,32 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       customMin: "2026-06-01",
       customMax: TODAY,
     });
+  });
+
+  it("reports a grained session on a short range", () => {
+    const shared = {
+      today: TODAY,
+      earliest: { positionSet: "2020-01-01" as const },
+      session: "2026-08-25" as const,
+      timeZone: "America/New_York",
+    };
+
+    const { controls } = chartWindow("household", { request: new Request("https://x/?range=1w"), ...shared });
+
+    expect(controls.session).toEqual({ timeZone: "America/New_York", grained: true });
+  });
+
+  it("reports the session with no grained key on 1D", () => {
+    const shared = {
+      today: TODAY,
+      earliest: { positionSet: "2020-01-01" as const },
+      session: "2026-08-25" as const,
+      timeZone: "America/New_York",
+    };
+
+    const { controls } = chartWindow("household", { request: new Request("https://x/?range=1d"), ...shared });
+
+    expect(controls.session).toEqual({ timeZone: "America/New_York" });
+    expect(controls.session).not.toHaveProperty("grained");
   });
 });

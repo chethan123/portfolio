@@ -870,7 +870,12 @@ describe("the 1D range on the Overview", () => {
       expect((await loader(args(get("/?range=1d")))).session).toEqual({
         timeZone: "America/New_York",
       });
-      expect((await loader(args(get("/?range=1m")))).session).toBeNull();
+      // 1M is grained (spec 0022): still a session axis, per-day rather than per-instant.
+      expect((await loader(args(get("/?range=1m")))).session).toEqual({
+        timeZone: "America/New_York",
+        grained: true,
+      });
+      expect((await loader(args(get("/?range=1y")))).session).toBeNull();
     }),
   );
 
@@ -929,9 +934,10 @@ describe("the 1D range on the Overview", () => {
     "leaves every other range drawing exactly what it drew before",
     withDatabase(async (ctx) => {
       await seedDayZero(ctx, daysAgo(60));
-      const before = await loader(args(get("/?range=1m")));
+      const before = await loader(args(get("/?range=1y")));
 
-      // Observations only — no new close, no new position set — so the new tier is the only thing that changed.
+      // Observations only — no new close, no new position set — so a range of at most 92 days is the
+      // only kind that would notice (spec 0022 grains it); 1Y is wider and still reads the daily line.
       const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
       for (const minute of ["13:30", "17:00", "20:00"]) {
         await ctx.seedObservation({
@@ -942,11 +948,53 @@ describe("the 1D range on the Overview", () => {
         });
       }
 
-      const after = await loader(args(get("/?range=1m")));
+      const after = await loader(args(get("/?range=1y")));
 
-      // Story 19: a new tier must change nothing about a line already history — the day series reads price_daily alone.
+      // Story 19: a new observation must change nothing about a line already history — the day series reads price_daily alone.
       expect(after.computed).toEqual(before.computed);
       expect(after.change).toEqual(before.change);
+    }),
+  );
+
+  it(
+    "plots a grained window over several days: the log's own instants for the seeded session, and the spine either side of it",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const data = await loader(args(get("/?range=1w")));
+
+      expect(data.session).toEqual({ timeZone: "America/New_York", grained: true });
+
+      // Days before the account's first statement (daysAgo(2)) score total: 0 on the dated branch
+      // and are dropped (§6.3); daysAgo(1)'s three observations are each their own instant; today
+      // has none of its own and falls back to the dated spine, carrying yesterday's close forward.
+      // Dated points assert by `dated` and `date` — never a "Z" instant built from daysAgo, which
+      // the seam never draws for one.
+      expect(data.computed).toEqual([
+        { date: daysAgo(2), amount: "10000.0000", dated: true },
+        { date: `${daysAgo(1)}T13:30:00.000Z`, amount: "10100.0000" },
+        { date: `${daysAgo(1)}T17:00:00.000Z`, amount: "10400.0000" },
+        { date: `${daysAgo(1)}T20:00:00.000Z`, amount: "11000.0000" },
+        { date: daysAgo(0), amount: "11000.0000", dated: true },
+      ]);
+    }),
+  );
+
+  it(
+    "drops a hand-typed point dated the first computed day and draws one dated before it ahead, on a grained window",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      // The first computed day is daysAgo(2), the account's own first statement — a hand-typed
+      // point dated exactly there loses to it (§7 rule 2); one dated a day earlier is drawn ahead.
+      await ctx.seedManualNetWorth({ date: daysAgo(2), amount: "1.0000" });
+      await ctx.seedManualNetWorth({ date: daysAgo(3), amount: "2.0000" });
+
+      const data = await loader(args(get("/?range=1w")));
+
+      expect(data.computed[0]).toEqual({ date: daysAgo(2), amount: "10000.0000", dated: true });
+      expect(data.manual).toEqual([{ date: daysAgo(3), amount: "2.0000" }]);
+      expect(data.manualWithheld).toBe(false);
     }),
   );
 });

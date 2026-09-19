@@ -16,6 +16,12 @@ and nothing to recompute on resize. The output is correct in the server-rendered
 JavaScript disabled, and adds nothing to hydrate. The cost is three extra elements per point,
 bounded by the sampling budget ADR-0003 introduced.
 
+**Revised in part** by [0014](0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md).
+On a chart range of at most 92 days the points come from the observation log at a grain set by the
+span, so the bound there is the grain tiers, about 225 points at 3M, rather than the sampling
+budget; a range longer than that is still bounded as this paragraph says. Nothing else here is
+rewritten.
+
 This sets a general rule. An interaction whose states are finite and known at render time is
 rendered, not computed. Client state is reserved for interactions that are not. Using it means
 revisiting this record, because the property being protected is not "this component is cheap", it is
