@@ -500,6 +500,148 @@ describe("the review revision carried by the form", () => {
   );
 
   it(
+    "redraws a date-only change that crosses a recorded baseline before accepting confirmations",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId, account, instrument } = await stageDraft(ctx, {
+        resolved: true,
+      });
+      if (instrument === null) throw new Error("The resolved fixture did not seed its instrument.");
+      const earlier = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument, quantity: "1" }],
+      });
+      const current = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument, quantity: "2" }],
+      });
+      const reviewed = await reviewPage(draftId);
+      expect(reviewed.diff.baselineSetId).toBe(current.id);
+
+      const refusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId,
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
+            reviewedAsOf: reviewed.diff.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          }),
+          { draftId },
+        ),
+      );
+      if (refusal instanceof Response) throw new Error("Expected the redrawn review.");
+      expect(refusal.formError).toContain("different statement date");
+      expect(refusal.formError).not.toContain("statement or its account changed");
+      expect(refusal.diff?.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff?.filedBehind).toEqual({
+        asOf: AS_OF,
+        currentAsOf: "2026-07-31",
+      });
+      expect(refusal.values.confirmFiledBehind).toBeUndefined();
+      expect(refusal.values.confirmRemovals).toBeUndefined();
+      expect(refusal.confirmationReset).toBeTypeOf("string");
+      expect((await lastRecorded(accountId, ctx.db))?.id).toBe(current.id);
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await ctx.db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", accountId)
+          .where("as_of_date", "=", AS_OF)
+          .execute(),
+      ).toHaveLength(0);
+
+      const destination = await redirectTo(() =>
+        reviewAction(
+          args(
+            post(`/upload/${draftId}/review`, {
+              asOf: AS_OF,
+              accountId,
+              baselineSetId: refusal.diff?.baselineSetId ?? "",
+              reviewRevision: refusal.diff?.reviewRevision ?? "",
+              reviewedAsOf: refusal.diff?.asOfInput ?? "",
+              confirmFiledBehind: "true",
+            }),
+            { draftId },
+          ),
+        ),
+      );
+      expect(destination).toMatch(new RegExp(`^/accounts/${accountId}\\?uploaded=\\d+$`));
+      expect((await lastRecorded(accountId, ctx.db))?.id).toBe(current.id);
+      await expect(requireDraft(draftId, ctx.db)).rejects.toThrow();
+    }),
+  );
+
+  it(
+    "keeps the stale warning when a baseline-crossing date change also changes the mapping",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId, account, instrument } = await stageDraft(ctx, {
+        resolved: true,
+      });
+      if (instrument === null) throw new Error("The resolved fixture did not seed its instrument.");
+      const earlier = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument, quantity: "1" }],
+      });
+      const current = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument, quantity: "2" }],
+      });
+      const reviewed = await reviewPage(draftId);
+      expect(reviewed.diff.baselineSetId).toBe(current.id);
+
+      const changed = await rememberMapping(
+        draftId,
+        {
+          ...MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis" },
+        },
+        ctx.db,
+      );
+      expect(changed).toEqual({ nextStep: "review" });
+
+      const refusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: AS_OF,
+            accountId,
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
+            reviewedAsOf: reviewed.diff.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          }),
+          { draftId },
+        ),
+      );
+      if (refusal instanceof Response) throw new Error("Expected the current stale review.");
+      expect(refusal.formError).toContain("This statement or its account changed after this review");
+      expect(refusal.formError).not.toContain("different statement date");
+      expect(refusal.diff?.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff?.updated[0]?.quantityAfter).toBe("40");
+      expect(refusal.values.confirmFiledBehind).toBeUndefined();
+      expect(refusal.values.confirmRemovals).toBeUndefined();
+      expect(refusal.confirmationReset).toBeTypeOf("string");
+      expect((await lastRecorded(accountId, ctx.db))?.id).toBe(current.id);
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await ctx.db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", accountId)
+          .where("as_of_date", "=", AS_OF)
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
     "keeps a dated refusal's diff through a later validation and clears both acknowledgements",
     withDatabase(async (ctx) => {
       const { draftId, account, instrument: vti } = await stageDraft(ctx, { resolved: true });

@@ -772,7 +772,8 @@ control:
   statement** after editing an undated file's date still redraws without a write, but says the
   comparison was drawn for a different date rather than claiming the statement or account changed
   only when rebuilding the current state at that reviewed date reproduces the submitted revision.
-  Concurrent statement or account changes retain the stale-review warning.
+  Concurrent statement or account changes retain the stale-review warning even when the new date
+  also selects another recorded baseline.
 - **An unconfirmed filed-behind statement.** §6.4's own confirmation, refused the same way when its
   tick is missing, or was given against a baseline since superseded.
 

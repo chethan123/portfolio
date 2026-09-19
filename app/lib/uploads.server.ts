@@ -997,17 +997,15 @@ async function commitUploadUnderLock(
   }
   const rawStrings = [...resolved.keys()];
 
-  // Whether the figures this form was posted against are still the ones the diff above just
-  // classified — computed once, ahead of every RefusedUpload below, so each carries the same
-  // answer the "every reason to refuse" block (further down) decides the stale-review sentence
-  // from, and the route reads it off the refusal instead of restating the comparison (CLAUDE.md:
-  // a route never states a domain rule).
+  // Whether the baseline confirmation was posted against the figures the diff just classified.
+  // A revision mismatch takes precedence below: a moved baseline cannot hide another draft,
+  // alias or account-state change. Matching revisions still reach the confirmation aggregation,
+  // where stale baseline evidence voids both ticks.
   const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
   if (
-    !baselineMoved &&
-    (raw.reviewRevision === undefined ||
-      diff.reviewRevision === null ||
-      raw.reviewRevision !== diff.reviewRevision)
+    raw.reviewRevision === undefined ||
+    diff.reviewRevision === null ||
+    raw.reviewRevision !== diff.reviewRevision
   ) {
     // A different posted date is only an assertion. Rebuilding the current draft and account
     // state at the reviewed date must reproduce the submitted revision before the gentler

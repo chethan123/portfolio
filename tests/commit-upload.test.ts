@@ -555,6 +555,150 @@ describe("commitUpload", () => {
   );
 
   it(
+    "redraws a date-only change before asking for confirmations against its new baseline",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CROSS", name: "Baseline Crossing Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CROSS" });
+      const earlier = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+      const current = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "2" }],
+      });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nCROSS,3,\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBe(current.id);
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a date redraw.");
+      expect(refusal.fieldErrors.form).toContain("different statement date");
+      expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
+      expect(refusal.diff.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff.filedBehind).toEqual({
+        asOf: "2026-06-30",
+        currentAsOf: "2026-07-31",
+      });
+      expect(await lastRecorded(account.id, db)).toMatchObject({ id: current.id });
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-06-30")
+          .execute(),
+      ).toHaveLength(0);
+
+      const written = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: refusal.diff.baselineSetId ?? "",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
+          reviewedAsOf: refusal.diff.asOfInput,
+          confirmFiledBehind: "true",
+        },
+        db,
+      );
+      expect(written.asOf).toBe("2026-06-30");
+      expect((await lastRecorded(account.id, db))?.id).toBe(current.id);
+      await expect(requireDraft(draftId, db)).rejects.toThrow(NotFoundError);
+    }),
+  );
+
+  it(
+    "keeps the stale warning when a baseline-crossing date change also changes the mapping",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CROSSMAP", name: "Crossed Mapping Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CROSSMAP" });
+      const earlier = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+      const current = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "2" }],
+      });
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis\nCROSSMAP,3,40\n",
+      );
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBe(current.id);
+
+      const changed = await rememberMapping(
+        draftId,
+        {
+          ...BASE_MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis", costBasis: null },
+        },
+        db,
+      );
+      expect(changed).toEqual({ nextStep: "review" });
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
+      expect(refusal.diff.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff.added).toHaveLength(0);
+      expect(refusal.diff.updated[0]?.quantityAfter).toBe("40");
+      expect(await lastRecorded(account.id, db)).toMatchObject({ id: current.id });
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-06-30")
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
     "keeps the stale warning when a date change coincides with a changed mapping",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;

@@ -1194,7 +1194,7 @@ flowchart TD
     C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, resolve the<br/>date, classify against ITS<br/>dated baseline (#181)"]
     D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
     D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
-    D1 -->|no| D2{"review revision differs,<br/>and dated baseline unchanged?"}
+    D1 -->|no| D2{"review revision differs?"}
     D2 -->|yes| D3{"current state at reviewed date<br/>reproduces posted revision?"}
     D3 -->|yes| R10a["refuse: redraw for the chosen date,<br/>without claiming another change"]
     D3 -->|no| R10["refuse: review no longer describes<br/>this statement and account"]
@@ -1245,7 +1245,9 @@ These deserve emphasis:
   classifies against the latest set at or before the resolved date, not always "now"; `J` collects
   every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
   the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
-  majority removal — and throws once, naming every applicable one. The stale-baseline sentence
+  majority removal — and throws once, naming every applicable one. Revision mismatches are
+  classified first even when that baseline moved, so a baseline refusal cannot conceal another
+  statement or account change. When the current revision matches, the stale-baseline sentence
   fires whenever the baseline moved and no unconfirmed filed-behind demand is left to subsume it —
   reason 2 subsumes reason 1 whenever it applies, not only on an untouched first submission. Ticks
   are irrelevant to it. An undated file's first render is already classified against today; when

@@ -9,7 +9,7 @@ import { closeAccount } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
-import { RefusedUpload, commitUpload, reviewForDraft } from "~/lib/uploads.server";
+import { StaleReviewError, commitUpload, reviewForDraft } from "~/lib/uploads.server";
 
 import {
   backendPid,
@@ -266,7 +266,7 @@ describe("the account lock", () => {
   );
 
   it(
-    "reads the statement it lands on when an upload was waiting on another, refusing a stale baseline it could not see before",
+    "reads the statement it lands on when an upload waited on another and refuses its stale review",
     async () => {
       const database = await testDatabase();
       const { account, x, y, z, baselineSetId } = await plant(database, "upload-then-upload");
@@ -281,11 +281,8 @@ describe("the account lock", () => {
 
       // `second` is drawn before the race against the plant's own set — it cannot know the id of
       // the set `first` is about to land while it waits, so its posted baseline (undefined, i.e.
-      // "") is stale by the time it runs against the set `first` actually lands. A writer
-      // genuinely did land in the gap, so reason 1 fires and names it — there is no filed-behind
-      // story here to subsume it (both commit today's date), unlike an undated file's ordinary
-      // first POST, where the "baseline" only ever moves because the loader could not see a date
-      // yet to compare against (#181).
+      // "") is stale by the time it runs against the set `first` actually lands. The revision
+      // also binds that account state, so the stale-review guard fires before confirmations.
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
@@ -304,12 +301,12 @@ describe("the account lock", () => {
         ),
       );
 
-      // Both reasons fire together: the stale-baseline sentence, and the waiter's own
-      // re-classification against the set it actually landed on (issue #283), not the one it was
-      // staged against — 3 positions, 2 of them gone in its own one-row file.
-      expect(refusal.fieldErrors.form).toMatch(/measured against/);
-      expect(refusal.fieldErrors.form).toMatch(/removes 2 of the 3 positions/);
-      if (!(refusal instanceof RefusedUpload)) throw refusal;
+      // The warning takes precedence, while its carried diff still proves the waiter reclassified
+      // against the set it actually landed on (issue #283): 3 positions, 2 absent from its file.
+      expect(refusal.fieldErrors.form).toMatch(/statement or its account changed/);
+      expect(refusal.fieldErrors.form).not.toMatch(/measured against/);
+      expect(refusal.fieldErrors.form).not.toMatch(/removes 2 of the 3 positions/);
+      if (!(refusal instanceof StaleReviewError)) throw refusal;
       expect(refusal.diff.currentCount).toBe(3);
       expect(refusal.diff.removed).toHaveLength(2);
       expect(await latestQuantities(database, account.id)).toEqual({
