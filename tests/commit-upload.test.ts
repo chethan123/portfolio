@@ -699,6 +699,74 @@ describe("commitUpload", () => {
   );
 
   it(
+    "keeps the stale warning when an interval statement lands before the newly selected date",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "INTERVAL", name: "Interval History Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "INTERVAL" });
+      const march = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "3" }],
+      });
+      const september = await seedPositionSet({
+        account,
+        asOf: "2026-09-01",
+        holdings: [{ instrument: fund, quantity: "9" }],
+      });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nINTERVAL,8,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
+      expect(reviewed.baselineSetId).toBe(march.id);
+      expect(reviewed.filedBehind?.currentAsOf).toBe("2026-09-01");
+
+      const july = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "7" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-08-31",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
+      expect(refusal.diff.baselineSetId).toBe(july.id);
+      expect(refusal.diff.updated[0]).toMatchObject({
+        quantityBefore: "7.00000000",
+        quantityAfter: "8",
+      });
+      expect(refusal.diff.filedBehind).toEqual({
+        asOf: "2026-08-31",
+        currentAsOf: "2026-09-01",
+      });
+      expect((await lastRecorded(account.id, db))?.id).toBe(september.id);
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-08-31")
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
     "keeps the stale warning when a date change coincides with a changed mapping",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;

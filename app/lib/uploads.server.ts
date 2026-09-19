@@ -812,8 +812,18 @@ async function assembleDiff(
 
   let reviewRevision: string | null = null;
   if (asOfResolved !== null && asOfError === null) {
+    // Baseline and latest-set ids cannot see a set appended strictly between their dates. History
+    // is append-only and bigint ids increase, so this exact driver string changes on every account
+    // history write without exposing another holding or figure to the client.
+    const history = await db
+      .selectFrom("position_set")
+      .select(({ fn }) => fn.max("id").as("appendWatermark"))
+      .where("account_id", "=", draft.accountId)
+      .executeTakeFirstOrThrow();
+    const appendWatermark: string | null = history.appendWatermark;
+
     const revision = createHash("sha256");
-    revision.update("portfolio-upload-review-v2\0");
+    revision.update("portfolio-upload-review-v3\0");
     revision.update(Buffer.from(draft.bytes));
     revision.update("\0");
     revision.update(
@@ -848,10 +858,11 @@ async function assembleDiff(
             ),
         },
         latestSetId: latestRecorded?.id ?? null,
+        accountHistoryAppendWatermark: appendWatermark,
         asOf: asOfResolved,
       }),
     );
-    reviewRevision = `v2.${revision.digest("base64url")}`;
+    reviewRevision = `v3.${revision.digest("base64url")}`;
   }
 
   return {

@@ -1232,9 +1232,13 @@ These deserve emphasis:
   `RefusedUpload`: no diff exists yet for a bad date to attach to.
 - **The review revision binds the server-rendered interpretation.** `assembleDiff` hashes the raw
   file, mapping, effective raw-string meanings returned by `aliasesFor`, folded rows, chosen date,
-  dated baseline set and latest-set context. The effective map includes the draft's own answers but
-  lets recorded vocabulary outrank them, preserving ADR-0013. Quotes and prices are excluded, so a
-  refresh can change the contextual values on the next render without revoking authorization.
+  dated baseline set, latest-set context and an account-wide append watermark
+  (`max(position_set.id)`). The watermark is an exact driver string: an inserted backdated set can
+  fall between the reviewed and newly chosen dates without changing either the old baseline or the
+  chronologically latest set, but it still advances this account's watermark. The effective map
+  includes the draft's own answers but lets recorded vocabulary outrank them, preserving ADR-0013.
+  Quotes and prices are excluded, so a refresh can change the contextual values on the next render
+  without revoking authorization.
   Missing revisions — including forms rendered before the revision existed — fail the comparison.
   The form also carries the date that revision was drawn for. On a mismatch, the commit rebuilds
   the current draft and account state at that reviewed date; only reproducing the posted revision
@@ -1724,7 +1728,7 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; the draft row lock prevents the 24-hour sweep from taking it in between, and the zero-row check remains the final defense | `uploads.server.ts` |
 | Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
 | Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
-| A Columns save, effective alias change or account-history write landing after Review | Under `withAccountLock`, the commit locks and re-reads the draft, rebuilds the effective alias map and dated diff, then compares the posted review revision before writing. A changed raw file, mapping, draft answer, vocabulary meaning, folded row, date, baseline set or latest-set context refuses; prices are intentionally absent from the revision | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
+| A Columns save, effective alias change or account-history write landing after Review | Under `withAccountLock`, the commit locks and re-reads the draft, rebuilds the effective alias map and dated diff, then compares the posted review revision before writing. A changed raw file, mapping, draft answer, vocabulary meaning, folded row, date, baseline set, latest-set context or account-wide append watermark refuses; the watermark catches a backdated append that changes neither selected set. Prices are intentionally absent from the revision | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
 | A string recorded, repointed or forgotten after the commit's revision comparison | Promotion uses `on conflict do nothing`, then the commit re-reads vocabulary for the file's strings inside its transaction `for share` and refuses on any difference or absence; the throw takes promotion and draft deletion with it. Promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` (`commitUploadUnderLock`) |
 | A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |

@@ -642,6 +642,75 @@ describe("the review revision carried by the form", () => {
   );
 
   it(
+    "keeps the stale warning when an interval statement lands before the newly selected date",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId, account, instrument } = await stageDraft(ctx, {
+        resolved: true,
+      });
+      if (instrument === null) throw new Error("The resolved fixture did not seed its instrument.");
+      const march = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument, quantity: "3" }],
+      });
+      const september = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-09-01",
+        holdings: [{ instrument, quantity: "9" }],
+      });
+      const reviewed = await reviewPage(draftId, "?asOf=2026-06-30");
+      expect(reviewed.diff.baselineSetId).toBe(march.id);
+      expect(reviewed.diff.filedBehind?.currentAsOf).toBe("2026-09-01");
+
+      const july = await ctx.seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument, quantity: "7" }],
+      });
+
+      const refusal = await reviewAction(
+        args(
+          post(`/upload/${draftId}/review`, {
+            asOf: "2026-08-31",
+            accountId,
+            baselineSetId: reviewed.diff.baselineSetId ?? "",
+            reviewRevision: reviewed.diff.reviewRevision ?? "",
+            reviewedAsOf: reviewed.diff.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          }),
+          { draftId },
+        ),
+      );
+      if (refusal instanceof Response) throw new Error("Expected the current stale review.");
+      expect(refusal.formError).toContain("This statement or its account changed after this review");
+      expect(refusal.formError).not.toContain("different statement date");
+      expect(refusal.diff?.baselineSetId).toBe(july.id);
+      expect(refusal.diff?.updated[0]).toMatchObject({
+        quantityBefore: "7.00000000",
+        quantityAfter: "100",
+      });
+      expect(refusal.diff?.filedBehind).toEqual({
+        asOf: "2026-08-31",
+        currentAsOf: "2026-09-01",
+      });
+      expect(refusal.values.confirmFiledBehind).toBeUndefined();
+      expect(refusal.values.confirmRemovals).toBeUndefined();
+      expect(refusal.confirmationReset).toBeTypeOf("string");
+      expect((await lastRecorded(accountId, ctx.db))?.id).toBe(september.id);
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await ctx.db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", accountId)
+          .where("as_of_date", "=", "2026-08-31")
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
     "keeps a dated refusal's diff through a later validation and clears both acknowledgements",
     withDatabase(async (ctx) => {
       const { draftId, account, instrument: vti } = await stageDraft(ctx, { resolved: true });

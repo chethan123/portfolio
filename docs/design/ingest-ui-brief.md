@@ -763,8 +763,10 @@ control:
 - **A closed account** — closed while the draft sat open — refuses in `setBalance`'s words: a
   closed account's history does not change.
 - **A stale review.** The reviewed draft, raw file, mapping, effective instrument meanings, folded
-  rows, chosen date, dated baseline or current-account context changed, so the figures on screen no
-  longer describe what the commit would act on. The refusal carries the current dated diff back;
+  rows, chosen date, dated baseline or account history changed, so the figures on screen no longer
+  describe what the commit would act on. The revision includes an account-wide append watermark:
+  the chronologically latest set alone cannot detect a backdated set inserted between two candidate
+  dates. The refusal carries the current dated diff back;
   nothing is recorded and neither confirmation is carried forward. Quote refreshes do not make a
   review stale, because the current values are context rather than statement data. A form rendered
   before review revisions existed is refused in the same way and must be reviewed once more. The
