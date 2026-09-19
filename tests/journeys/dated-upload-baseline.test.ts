@@ -8,7 +8,12 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
 import { revisePosition } from "~/lib/positions.server";
-import { RefusedUpload, commitUpload, rememberMapping } from "~/lib/uploads.server";
+import {
+  RefusedUpload,
+  commitUpload,
+  rememberMapping,
+  reviewForDraft,
+} from "~/lib/uploads.server";
 import { accountHoldings, holdingsAt } from "~/lib/valuation.server";
 
 import { loader as accountPage } from "../../app/routes/account.tsx";
@@ -93,9 +98,19 @@ describe("an upload dated behind the account's current statement", () => {
 
       // 1. The first submit is refused, and the message names both dates — the statement's own
       // and what the account's correction made current.
+      const reviewed = await reviewForDraft(draftId, "2026-08-31", db);
       let refusal: RefusedUpload;
       try {
-        await commitUpload(draftId, { accountId: account.id, asOf: "2026-08-31" }, db);
+        await commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-08-31",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
+          db,
+        );
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -115,6 +130,7 @@ describe("an upload dated behind the account's current statement", () => {
           asOf: "2026-08-31",
           baselineSetId: refusal.diff.baselineSetId ?? "",
           confirmFiledBehind: "true",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
         },
         db,
       );

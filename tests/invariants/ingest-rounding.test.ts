@@ -135,10 +135,17 @@ describe("a statement that states the position's cost rather than the share's", 
         [{ raw: "VTI" }],
       );
 
-      const diff = await diffForDraft(draftId, ctx.db);
+      const diff = await diffForDraft(draftId, {
+        asOf: "2026-06-30",
+        db: ctx.db,
+      });
       expect(diff.added[0]?.costBasisPerShare).toBe("33.3333");
 
-      await commitUpload(draftId, { accountId, asOf: "2026-06-30" }, ctx.db);
+      await commitUpload(
+        draftId,
+        { accountId, asOf: "2026-06-30", reviewRevision: diff.reviewRevision },
+        ctx.db,
+      );
 
       const [held] = await accountHoldings(accountId, ctx.db);
       expect(held?.costBasisPerShare).toBe("33.3333");
@@ -158,12 +165,19 @@ describe("a statement that states the position's cost rather than the share's", 
         [{ raw: "TSLA" }],
       );
 
-      const diff = await diffForDraft(draftId, ctx.db);
+      const diff = await diffForDraft(draftId, {
+        asOf: "2026-06-30",
+        db: ctx.db,
+      });
       // Unfolded row keeps the file's own spelling; formatQuantity trims either representation to the same on-screen value.
       expect(diff.added[0]?.quantity).toBe("-10");
       expect(diff.added[0]?.costBasisPerShare).toBe("250.0000");
 
-      await commitUpload(draftId, { accountId, asOf: "2026-06-30" }, ctx.db);
+      await commitUpload(
+        draftId,
+        { accountId, asOf: "2026-06-30", reviewRevision: diff.reviewRevision },
+        ctx.db,
+      );
 
       const [held] = await accountHoldings(accountId, ctx.db);
       expect(held?.quantity).toBe("-10.00000000");
@@ -196,9 +210,21 @@ describe("the value shown on the review screen", () => {
         },
       );
 
-      const shown = (await diffForDraft(draftId, ctx.db)).added[0]?.value;
+      const review = await diffForDraft(draftId, {
+        asOf: "2026-06-30",
+        db: ctx.db,
+      });
+      const shown = review.added[0]?.value;
 
-      await commitUpload(draftId, { accountId, asOf: "2026-06-30" }, ctx.db);
+      await commitUpload(
+        draftId,
+        {
+          accountId,
+          asOf: "2026-06-30",
+          reviewRevision: review.reviewRevision,
+        },
+        ctx.db,
+      );
       const [held] = await accountHoldings(accountId, ctx.db);
 
       expect(shown).toBe(held?.value);

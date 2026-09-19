@@ -83,6 +83,19 @@ ratio and will not record until you tick it. Before you do, check that you expor
 rather than a filtered page. The removals are listed individually, with quantities, so they are
 worth reading.
 
+## A statement must be reviewed again before it records
+
+Recording is tied to the exact statement interpretation shown on Review. The app asks for another
+review when the file or mapping changed, an instrument name gained a different meaning, the chosen
+date changed, or an upload, balance or correction changed the account's history. An older open form
+may also need a fresh review after an app update. Price updates can change the values shown, but
+do not cause this refusal because Review is authorizing positions rather than prices.
+
+Nothing was added to the account. Read the newly drawn date and diff, then select any filed-behind
+or removal confirmations that still apply and record again. If a figure is wrong, return to Columns
+to check the mapping; if an instrument name is wrong, check Settings → Instruments. When the draft
+needs an earlier step before Review can be drawn again, the app takes you there first.
+
 ## The file itself is refused
 
 A statement is rejected outright, rather than partly imported, when it cannot be read honestly:

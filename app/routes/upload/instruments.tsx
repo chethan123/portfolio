@@ -17,7 +17,7 @@ import {
 } from "~/lib/instrument-resolution.server";
 import { socketProbe } from "~/lib/provider-socket.server";
 import { sameRawStrings } from "~/lib/raw-string";
-import { parseDraft, requireDraft } from "~/lib/uploads.server";
+import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
@@ -33,19 +33,21 @@ export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
+    const staleReview = new URL(request.url).searchParams.get("stale") === "true";
+    const stale = staleReview ? "?stale=true" : "";
 
     // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
-    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
     const screen = await resolutionScreen(result.parsed.positions, draft.id);
 
     // A concurrent draft's submit resolving everything is the same skip as above.
-    if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
+    if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review${stale}`);
 
     return {
       steps: {
@@ -56,6 +58,7 @@ export async function loader({ params }: Route.LoaderArgs) {
       screen,
       nameColumn: result.mapping.columns.name ?? null,
       newClassification: NEW_CLASSIFICATION,
+      staleReviewMessage: staleReview ? STALE_REVIEW_MESSAGE : null,
     };
   } catch (error) {
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
@@ -65,14 +68,15 @@ export async function loader({ params }: Route.LoaderArgs) {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const draft = await requireDraft(params.draftId);
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
 
     // A double submit finds everything already resolved and moves on, as the loader would.
-    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
     const { unresolved } = result;
 
@@ -92,7 +96,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       { probe: socketProbe },
     );
 
-    return redirect(`/upload/${draft.id}/review`);
+    return redirect(`/upload/${draft.id}/review${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
@@ -105,7 +109,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 }
 
 export default function Instruments({ loaderData, actionData }: Route.ComponentProps) {
-  const { screen, nameColumn, newClassification } = loaderData;
+  const { screen, nameColumn, newClassification, staleReviewMessage } = loaderData;
 
   const errors = actionData?.errors;
   // Typed wins over default on a refusal; `actionData` present means a refused submit.
@@ -135,6 +139,12 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
           upload and become vocabulary when the statement is recorded at the last step, so an
           upload abandoned before then teaches the next one no names.
         </p>
+
+        {staleReviewMessage ? (
+          <p className="form-error" role="alert">
+            {staleReviewMessage}
+          </p>
+        ) : null}
 
         {actionData?.formError ? (
           <p className="form-error" role="alert">

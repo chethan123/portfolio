@@ -191,10 +191,14 @@ to upload the corrected file against the same account. The draft's original file
 
 Commit rebuilds the diff and records a complete dated snapshot in one transaction. The same draft
 cannot commit twice. A same-date reupload supersedes the earlier snapshot; an older upload can
-change history without becoming current. If the figures on screen were drawn against a statement
-that changed underneath — another upload or correction landed, or the typed date was edited after
-review — committing is refused rather than acting on what is no longer true, and review shows the
-real figures to confirm instead.
+change history without becoming current. Commit is bound to the review you saw. A changed file or
+mapping, a different meaning for an instrument name, an edited date, or another write to the account
+can make that review unusable. An older open form may also need a fresh review after an app update.
+Nothing is recorded in that case. Read the redrawn date and diff, select any confirmations that now
+apply, and record again. If a figure is wrong, return to Columns or check the instrument name under
+Settings → Instruments. A price refresh alone does not invalidate Review. See
+[When something is refused](when-something-is-refused.md#a-statement-must-be-reviewed-again-before-it-records)
+for the recovery steps.
 
 Only account positions wait until commit. Drafts, mappings, and resolved instrument names are
 saved earlier and can survive an abandoned upload.

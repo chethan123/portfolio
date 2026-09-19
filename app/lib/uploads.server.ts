@@ -2,7 +2,10 @@
 // docs/specs/0004-ingest.md). Everything a step needs is on the one row, so
 // reload/back/bookmark all work. Its first-sighting answers ride with it (upload_draft_answer)
 // and become vocabulary only at commit. Drafts are swept at 24h by the next createDraft — no
-// cron. Size capped twice: the body as it streams in, File.size after.
+// cron. Size capped twice: the body as it streams in, File.size after. A commit is bound to its
+// reviewed revision; lock order is account → draft → aliases.
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import { sql } from "kysely";
@@ -14,7 +17,7 @@ import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
 import { couldBeId } from "./database-id.ts";
-import { getDb, type Database } from "./db.server.ts";
+import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { describeInstrument } from "./format.ts";
 import { holdingNote } from "./holdings-view.ts";
 import { FORM_ERROR, NotFoundError, ValidationError, parseInput, recordedDate } from "./input.server.ts";
@@ -40,6 +43,10 @@ const EXPIRED =
   "This upload has expired or was already recorded. A draft is kept for a day " +
   "and deleted once its statement lands, so a bookmarked or reopened step can " +
   "outlive it.";
+
+export const STALE_REVIEW_MESSAGE =
+  "The previous attempt was refused because this statement or its account changed after its " +
+  "review. Nothing was recorded — check it and record again.";
 
 export type UploadDraft = {
   id: string;
@@ -231,6 +238,16 @@ async function draftAccountId(
   return row?.account_id;
 }
 
+async function lockDraft(draftId: string, db: Kysely<Database>): Promise<void> {
+  if (!/^\d+$/.test(draftId)) return;
+  await db
+    .selectFrom("upload_draft")
+    .select("id")
+    .where("id", "=", draftId)
+    .forUpdate()
+    .executeTakeFirst();
+}
+
 export async function requireDraft(
   draftId: string,
   db: Kysely<Database> = getDb(),
@@ -245,8 +262,8 @@ export async function requireDraft(
 
 // had_first_sightings is written here, where the answer exists: vocabulary misses, plus the
 // strings this draft already answered (a walk back to columns must not turn "passed" into
-// "skipped"). nextStep sends the reader on only for what is still unanswered. Not one
-// transaction: the institution's remembered mapping is a rebuildable cache.
+// "skipped"). nextStep sends the reader on only for what is still unanswered. The draft update
+// and its rebuildable institution mapping cache share a transaction so a lost draft saves neither.
 export async function rememberMapping(
   draftId: string,
   mapping: StatementMapping,
@@ -282,22 +299,26 @@ export async function rememberMapping(
           .executeTakeFirst();
   const hadFirstSightings = unresolved.length > 0 || answered !== undefined;
 
-  await db
-    .updateTable("upload_draft")
-    .set({
-      mapping: JSON.stringify(mapping),
-      had_first_sightings: hadFirstSightings,
-    })
-    .where("id", "=", draft.id)
-    .execute();
-
   const account = await getAccount(draft.accountId, db);
-  await upsertMapping(
-    account.institution,
-    headerFingerprint(rows[mapping.headerRow] ?? []),
-    mapping,
-    db,
-  );
+  await inTransaction(db, async (trx) => {
+    const updated = await trx
+      .updateTable("upload_draft")
+      .set({
+        mapping: JSON.stringify(mapping),
+        had_first_sightings: hadFirstSightings,
+      })
+      .where("id", "=", draft.id)
+      .returning("id")
+      .executeTakeFirst();
+    if (updated === undefined) throw new NotFoundError(EXPIRED);
+
+    await upsertMapping(
+      account.institution,
+      headerFingerprint(rows[mapping.headerRow] ?? []),
+      mapping,
+      trx,
+    );
+  });
 
   return { nextStep: unresolved.length > 0 ? "instruments" : "review" };
 }
@@ -447,7 +468,27 @@ export type UploadDiff = {
   // rewrites history between its date and the next statement, even though it changes nothing the
   // account reports today.
   filedBehind: { asOf: IsoDate; currentAsOf: IsoDate } | null;
+  // Evidence of the exact server-rendered review. Null only when an undated file's requested date
+  // is invalid, so the page can show the field error without issuing usable authorization.
+  reviewRevision: string | null;
+  asOfInput: string;
+  asOfError: string | null;
 };
+
+export class StaleReviewError extends ValidationError {
+  readonly diff: UploadDiff;
+  readonly asOf: IsoDate | null;
+
+  constructor(diff: UploadDiff, asOf: IsoDate | null) {
+    super({
+      [FORM_ERROR]:
+        "This statement or its account changed after this review. Nothing was recorded — " +
+        "check it and record again.",
+    });
+    this.diff = diff;
+    this.asOf = asOf;
+  }
+}
 
 // A refusal decided after assembleDiff has already run, carrying the diff it was decided against
 // so the review can re-render exactly what it refused rather than the loader's stale one (#181).
@@ -484,12 +525,16 @@ type AssembledDiff = {
   // promotes the draft's answers for, and the meanings it must still find in vocabulary.
   resolved: Map<string, string>;
   fileAccountNumber: string | null;
-  // The date the diff classified against, resolved once here. Null only when the loader asked
-  // (asked === null) and neither the file nor a typed value named one yet; non-null by
-  // construction whenever `asked` was given, since a bad or missing date throws before this
-  // returns. Carried flat so the commit narrows it once, rather than re-narrowing diff.asOf.date.
+  // The date the diff classified against, resolved once here. Null only for explicit unknown-mode
+  // reads or an invalid review input; commit either resolves it or throws. Carried flat so the
+  // commit narrows it once, rather than re-narrowing diff.asOf.date.
   asOf: IsoDate | null;
 };
+
+type ReviewDate =
+  | { mode: "unknown" }
+  | { mode: "review"; asOf: string | null }
+  | { mode: "commit"; asOf: string | undefined };
 
 // quantity x price for a row holding_valued cannot compute yet; same digits the view produces.
 function valueAt(quantity: string, price: string | null): string | null {
@@ -515,17 +560,12 @@ function sameQuantity(before: string, after: string): boolean {
 }
 
 // Classified against the statement's own baseline (CONTEXT.md, "Baseline"): the latest set on or
-// before its date, or — while the loader has no date yet to see — the account's current one. Two
+// before its date. Explicit unknown-mode domain reads retain the account's current-set view. Two
 // spellings of one fund fold as the parser folds a duplicate: quantities summed, basis
 // quantity-weighted.
 async function assembleDiff(
   draft: UploadDraft,
-  // null: the loader, which reads no request body and so can never name a date. An object: the
-  // commit, whose `asOf` may still be undefined (the field wasn't posted) — that must refuse the
-  // same as an invalid one, so it is not conflated with "no date yet" (commit-upload.test.ts,
-  // "requires a valid recorded date when the file does not date itself" — a line citation would be
-  // one this same commit could move).
-  asked: null | { asOf: string | undefined },
+  asked: ReviewDate,
   db: Kysely<Database>,
 ): Promise<AssembledDiff> {
   const result = await parseDraft(draft, db);
@@ -537,17 +577,28 @@ async function assembleDiff(
   }
   const { parsed } = result;
 
-  // Resolved once, ahead of everything else that depends on it (the baseline, filedBehind, the
-  // write itself). Not a RefusedUpload: no diff exists yet for a bad date to attach to, and this
-  // is the field error commit-upload.test.ts's "requires a valid recorded date when the file does
-  // not date itself" pins, and review.tsx's `errors.asOf` read.
-  const asOfResolved: IsoDate | null =
-    parsed.asOfDate !== null
-      ? parsed.asOfDate
-      : asked !== null
-        ? parseInput(z.object({ asOf: recordedDate("The statement date") }), { asOf: asked.asOf })
-            .asOf
-        : null;
+  // Resolved once, ahead of its baseline and every guard. Review keeps a bad typed value visible
+  // and issues no revision; commit refuses the same value as ordinary field data.
+  const defaultAsOf = new Date().toISOString().slice(0, 10);
+  const asOfInput =
+    parsed.asOfDate ??
+    (asked.mode === "review"
+      ? (asked.asOf ?? defaultAsOf)
+      : asked.mode === "commit"
+        ? (asked.asOf ?? "")
+        : "");
+  let asOfResolved: IsoDate | null = parsed.asOfDate;
+  let asOfError: string | null = null;
+  if (parsed.asOfDate === null && asked.mode !== "unknown") {
+    try {
+      asOfResolved = parseInput(z.object({ asOf: recordedDate("The statement date") }), {
+        asOf: asOfInput,
+      }).asOf;
+    } catch (error) {
+      if (!(error instanceof ValidationError) || asked.mode === "commit") throw error;
+      asOfError = error.fieldErrors.asOf ?? "The statement date is invalid.";
+    }
+  }
 
   const strings = [...new Set(parsed.positions.map((position) => position.instrument))];
   const aliases = await aliasesFor(strings, draft.id, db);
@@ -600,8 +651,8 @@ async function assembleDiff(
     });
   }
 
-  // The baseline (CONTEXT.md, "Baseline"): the latest set at or before the resolved date, or —
-  // while the date is still unknown to the loader — the account's own current one, exactly as before.
+  // The baseline (CONTEXT.md, "Baseline"): the latest set at or before the resolved date, or the
+  // account's own current one for an explicit unknown-mode read or invalid review date.
   // `latestRecorded` is always the account's current set (undated), read alongside so filedBehind
   // needs no second query later.
   const [latestRecorded, baselineRecord] =
@@ -756,6 +807,50 @@ async function assembleDiff(
       ? { asOf: asOfResolved, currentAsOf: latestRecorded.asOf }
       : null;
 
+  let reviewRevision: string | null = null;
+  if (asOfResolved !== null && asOfError === null) {
+    const revision = createHash("sha256");
+    revision.update("portfolio-upload-review-v2\0");
+    revision.update(Buffer.from(draft.bytes));
+    revision.update("\0");
+    revision.update(
+      JSON.stringify({
+        draftId: draft.id,
+        accountId: draft.accountId,
+        filename: draft.filename,
+        mapping: result.mapping,
+        resolved: [...aliases]
+          .map(([raw, instrumentId]) => ({ raw, instrumentId }))
+          .sort((a, b) => (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0)),
+        rows: rows
+          .map((row) => ({
+            instrumentId: row.instrumentId,
+            quantity: row.quantity,
+            costBasisPerShare: row.costBasisPerShare,
+            accountNumber: row.accountNumber,
+          }))
+          .sort((a, b) =>
+            a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
+          ),
+        baseline: {
+          setId: baselineSetId,
+          holdings: current
+            .map((holding) => ({
+              instrumentId: holding.instrumentId,
+              quantity: holding.quantity,
+              costBasisPerShare: holding.costBasisPerShare,
+            }))
+            .sort((a, b) =>
+              a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
+            ),
+        },
+        latestSetId: latestRecorded?.id ?? null,
+        asOf: asOfResolved,
+      }),
+    );
+    reviewRevision = `v2.${revision.digest("base64url")}`;
+  }
+
   return {
     diff: {
       draftId: draft.id,
@@ -781,6 +876,9 @@ async function assembleDiff(
       baselineSetId,
       baselineAsOf,
       filedBehind,
+      reviewRevision,
+      asOfInput,
+      asOfError,
     },
     rows,
     resolved: aliases,
@@ -789,12 +887,39 @@ async function assembleDiff(
   };
 }
 
+type DiffOptions = { asOf: string; db?: Kysely<Database> };
+type ReviewedUploadDiff = UploadDiff & { reviewRevision: string };
+
+export function diffForDraft(draftId: string, options: DiffOptions): Promise<ReviewedUploadDiff>;
+export function diffForDraft(
+  draftId: string,
+  db?: Kysely<Database>,
+): Promise<UploadDiff>;
 export async function diffForDraft(
   draftId: string,
+  optionsOrDb: DiffOptions | Kysely<Database> = getDb(),
+): Promise<UploadDiff> {
+  const options =
+    "asOf" in optionsOrDb ? optionsOrDb : { asOf: null, db: optionsOrDb };
+  if (options.asOf !== null) {
+    const reviewed = await reviewForDraft(draftId, options.asOf, options.db);
+    if (reviewed.reviewRevision === null) {
+      throw new Error("A validated review date must produce a review revision.");
+    }
+    return reviewed as ReviewedUploadDiff;
+  }
+  const db = options.db ?? getDb();
+  const draft = await requireDraft(draftId, db);
+  return (await assembleDiff(draft, { mode: "unknown" }, db)).diff;
+}
+
+export async function reviewForDraft(
+  draftId: string,
+  requestedAsOf: string | null,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadDiff> {
   const draft = await requireDraft(draftId, db);
-  return (await assembleDiff(draft, null, db)).diff;
+  return (await assembleDiff(draft, { mode: "review", asOf: requestedAsOf }, db)).diff;
 }
 
 export type CommitInput = {
@@ -805,6 +930,7 @@ export type CommitInput = {
   // reaches here as an absent field, which is why the comparison treats the two the same.
   baselineSetId?: string;
   confirmFiledBehind?: string;
+  reviewRevision?: string;
 };
 
 export type CommittedUpload = {
@@ -843,6 +969,7 @@ async function commitUploadUnderLock(
   db: Kysely<Database>,
 ): Promise<CommittedUpload> {
   // Gone by now: a concurrent commit took it while this one waited, or the 24h sweep did.
+  await lockDraft(draftId, db);
   const draft = await findDraft(draftId, db);
   if (draft === undefined) throw new NotFoundError(EXPIRED);
 
@@ -867,7 +994,7 @@ async function commitUploadUnderLock(
   // no diff exists yet, so it cannot be a RefusedUpload.
   const { diff, rows, resolved, fileAccountNumber, asOf } = await assembleDiff(
     draft,
-    { asOf: raw.asOf },
+    { mode: "commit", asOf: raw.asOf },
     db,
   );
   // Non-null by construction: `asked` was given above, so assembleDiff either resolved a date or
@@ -890,6 +1017,14 @@ async function commitUploadUnderLock(
   // from, and the route reads it off the refusal instead of restating the comparison (CLAUDE.md:
   // a route never states a domain rule).
   const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+  if (
+    !baselineMoved &&
+    (raw.reviewRevision === undefined ||
+      diff.reviewRevision === null ||
+      raw.reviewRevision !== diff.reviewRevision)
+  ) {
+    throw new StaleReviewError(diff, asOf);
+  }
 
   // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
   const numbers = rows.flatMap((row) =>
@@ -969,11 +1104,9 @@ async function commitUploadUnderLock(
   if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
     const reasons: string[] = [];
 
-    // Reason 2 subsumes reason 1: a household typing a date for the first time also moves the
-    // baseline (the loader could only show the undated one), and telling them the review "went
-    // stale" would blame them for the round trip #181's design deliberately chose over a GET step.
-    // So reason 1 fires only when reason 2 does not — a concurrent writer or a date edited to
-    // another backdated value, with nothing left to demand a filed-behind tick for.
+    // Reason 2 subsumes reason 1 when a moved baseline also reveals an unconfirmed filed-behind
+    // statement: the specific acknowledgement is the useful next action, without a second sentence
+    // saying that the baseline moved. Reason 1 fires when no filed-behind tick already explains it.
     //
     // This is a structural guarantee, not a heuristic: the outer `if` above fires only when one of
     // baselineMoved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps
