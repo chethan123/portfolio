@@ -1,8 +1,12 @@
-// Chart time vocabulary (spec 0015): range, resolution, cookie (spec 0008), sampler density (spec 0009/ADR-0003). Not .server — both routes read this again after hydration.
+// Chart time vocabulary (spec 0015): range, resolution, cookie (spec 0008), sampler density (spec 0009/ADR-0003), grain (spec 0022/ADR-0014). Not .server — both routes read this again after hydration.
+import { marketDateOf } from "./market-hours.ts";
 import { readCookie } from "./cookies.ts";
 import type { IsoDate } from "./valuation.server.ts";
 
 export type RangeKey = "1d" | "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
+
+// Minutes between a grained window's steps on the market clock (spec 0022, ADR-0014).
+export type GrainMinutes = 15 | 60 | 180;
 
 // Identical key for key on Overview and account page, so a bookmark works on both. 1D isn't a span of dates (ADR-0006) — it names the most recent trading session, resolving to instants.
 export const RANGES: Record<RangeKey, { label: string }> = {
@@ -40,6 +44,8 @@ export interface CustomSpan {
 interface Window {
   since: IsoDate;
   dates: IsoDate[];
+  // Present only when the span earns one (spec 0022) — its presence, not a separate flag, tells the seam which reader answers.
+  grain?: GrainMinutes;
 }
 
 // The effective selection, not necessarily the one asked for: an unusable custom span reports as the default preset it fell back to.
@@ -51,15 +57,30 @@ export interface RangeWindow extends Window {
 }
 
 export type ChartPoint = {
-  // A calendar date YYYY-MM-DD for every preset but 1D, or a full ISO instant with a session. How it's labelled is SessionAxis's job, never inferred here.
+  // A calendar date YYYY-MM-DD for every preset but 1D, a full ISO instant with a session, or — on a
+  // grained window, flagged dated below — the calendar date a finished day values. How it's
+  // labelled is SessionAxis's job, never inferred from the string's shape.
   date: string;
   amount: string;
+  // A grained line's finished-day point: `date` above is the calendar date it values, among instants that are full ISO strings.
+  dated?: true;
 };
 
-// What a chart is told about the session it's drawing, or null when drawing days.
+// What a chart is told about the session it's drawing, or null when every point is a date.
 export type SessionAxis = {
   timeZone: string; // MARKET_TIMEZONE; a session is 09:30-16:00 in exactly one zone
+  // Several sessions, one per day, not 1D's one: ticks name days and a dated point reads out with no time.
+  grained?: true;
 };
+
+// The calendar day a point belongs to: the readout, the per-day axis and the Overview's
+// manual-prefix rule all need this one answer, so it lives once.
+// A hand-typed point arrives flagged `dated` by the chart — a bare YYYY-MM-DD run through
+// marketDateOf parses as UTC midnight, the previous evening in New York, and comes back a day early.
+export function dayOf(point: ChartPoint, session: SessionAxis | null): IsoDate {
+  if (session === null || point.dated) return point.date;
+  return marketDateOf(new Date(point.date), session.timeZone);
+}
 
 // null (looked, found nothing) and undefined (not passed) both mean "no session" to 1D.
 const hasSession = (session?: IsoDate | null): session is IsoDate =>
@@ -131,15 +152,29 @@ function solveGrowthRatio(n: number, target: number): number {
   return (low + high) / 2;
 }
 
+// Whole days in a span -> grain, narrowest tier first. Thresholds are where the presets' own widths
+// land: 1W is exactly 7 days back, 1M at most 31 (calendar-month arithmetic), 3M at most 92, so no
+// preset ever crosses a tier from one day to the next (FIXED_BOUNDARY). Longer spans have no grain.
+const GRAIN_TIERS: ReadonlyArray<readonly [maxSpanDays: number, grain: GrainMinutes]> = [
+  [7, 15],
+  [31, 60],
+  [92, 180],
+];
+
+export function grainFor(spanDays: number): GrainMinutes | undefined {
+  return GRAIN_TIERS.find(([maxSpanDays]) => spanDays <= maxSpanDays)?.[1];
+}
+
 // Every calendar day when the span fits the budget; otherwise exactly SAMPLE_BUDGET dates decaying geometrically backward from `until` (spec 0009, ADR-0003).
 function sampleWindow(since: IsoDate, until: IsoDate): Window {
   const start = parseIso(since);
   const end = parseIso(until);
   const spanDays = Math.round((end - start) / DAY_MS);
+  const grain = grainFor(spanDays);
 
   if (spanDays + 1 <= SAMPLE_BUDGET) {
     const dates = Array.from({ length: spanDays + 1 }, (_, index) => addDays(since, index));
-    return { since, dates };
+    return grain === undefined ? { since, dates } : { since, dates, grain };
   }
 
   // SAMPLE_BUDGET - 1 gap terms, first fixed at one day, solved to sum exactly to the span.
@@ -158,6 +193,7 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
   // Built nearest-to-until first; reversed into the oldest-first order callers expect.
   const dates = offsets.map((offset) => addDays(until, -Math.round(offset))).reverse();
 
+  // Past SAMPLE_BUDGET the span always exceeds grainFor's widest tier (92 days), so grain is never set here.
   return { since, dates };
 }
 
@@ -314,7 +350,7 @@ export function readChartRange(request: Request): RequestedRange {
 export type ChartControls = Pick<RangeWindow, "range"> & {
   // Required, not optional: always undefined off a non-custom range, never an omittable key (route tests assert toBeUndefined()).
   custom: RangeWindow["custom"];
-  // Null on every range but 1D — tells the chart which axis it's drawing (§7).
+  // Null unless the line carries instants — tells the chart which axis it's drawing (§7).
   session: SessionAxis | null;
   rangeOptions: ReturnType<typeof rangeOptions>;
   customMin: ReturnType<typeof customRangeMin>;
@@ -348,7 +384,12 @@ export function chartWindow(
     controls: {
       range: resolved.range,
       custom: resolved.custom,
-      session: resolved.session === undefined ? null : { timeZone },
+      session:
+        resolved.session !== undefined
+          ? { timeZone }
+          : resolved.grain !== undefined
+            ? { timeZone, grained: true }
+            : null,
       rangeOptions: rangeOptions({ today, earliest, surface, session }),
       customMin: customRangeMin(surface, earliest),
       customMax: today,
