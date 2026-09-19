@@ -462,6 +462,22 @@ describe("a grained axis (spec 0022, ADR-0014)", () => {
     expect(markup).toContain("<span>6 Jun</span>");
   });
 
+  it("names the right edge by the day of an open struck at 09:30, not the day before it", () => {
+    // 13:30Z is 09:30 New York: the open's position is the integer the previous day's close would
+    // sit at, and a tick derived from the number alone named 7 Jun (Codex review, PR #353).
+    const endingOnAnOpen: ChartPoint[] = [
+      { date: "2026-06-04", amount: "100000.0000", dated: true },
+      { date: "2026-06-05T20:00:03.000Z", amount: "102000.0000" },
+      { date: "2026-06-08T13:30:00.000Z", amount: "101000.0000" },
+    ];
+    const markup = render(endingOnAnOpen);
+
+    expect(markup).toContain("<span>4 Jun</span>");
+    expect(markup).toContain("<span>5 Jun</span>");
+    expect(markup).toContain("<span>8 Jun</span>");
+    expect(markup).not.toContain("<span>7 Jun</span>");
+  });
+
   it("puts the time beside the date in an instant's readout and no time in a dated point's", () => {
     const markup = render(grained);
 

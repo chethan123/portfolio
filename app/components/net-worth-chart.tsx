@@ -48,9 +48,10 @@ export type Scale = {
   y: (amount: string) => number;
   domain: { floor: number; span: number };
   time: { start: number; end: number };
-  // Present only on a grained axis: the earliest day and the position range are what the tick
-  // block needs to name a day, without interpolating `time` in milliseconds (spec 0022).
-  days?: { earliest: IsoDate; min: number; max: number };
+  // Present only on a grained axis: the position range, and the day at any position, answered
+  // from the plotted points rather than from the number — an open at 09:30 sits at the same
+  // integer as the previous day's close, so arithmetic on the position alone names the wrong day.
+  days?: { min: number; max: number; at: (position: number) => IsoDate };
 };
 
 // A point's minute of the market day, from marketTimeOf's "HH:MM" — for placing an instant inside its session slot.
@@ -89,6 +90,7 @@ export function buildScale(points: ChartPoint[], session: SessionAxis | null = n
     const earliestMs = Date.parse(`${earliestDay}T00:00:00Z`);
 
     const positions = new Map<string, number>();
+    const placed: { position: number; day: IsoDate }[] = [];
     for (const { point, day } of withDays) {
       const dayIndex = (Date.parse(`${day}T00:00:00Z`) - earliestMs) / DAY_MS;
       const fraction = point.dated
@@ -102,7 +104,15 @@ export function buildScale(points: ChartPoint[], session: SessionAxis | null = n
             ),
           );
       positions.set(point.date, dayIndex + fraction);
+      placed.push({ position: dayIndex + fraction, day });
     }
+
+    // The nearest plotted point's day; a tie goes to the later point, so an open that shares its
+    // position with the previous day's close names its own day.
+    const dayAt = (position: number): IsoDate =>
+      placed.reduce((nearest, entry) =>
+        Math.abs(entry.position - position) <= Math.abs(nearest.position - position) ? entry : nearest,
+      ).day;
 
     const positionValues = [...positions.values()];
     const minPos = Math.min(...positionValues);
@@ -118,7 +128,7 @@ export function buildScale(points: ChartPoint[], session: SessionAxis | null = n
       y,
       domain,
       time,
-      days: { earliest: earliestDay, min: minPos, max: maxPos },
+      days: { min: minPos, max: maxPos, at: dayAt },
     };
   }
 
@@ -311,13 +321,12 @@ export function NetWorthChart({
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
   const { days } = scale;
-  // A grained axis names the day at the left edge, the middle and the right edge — read off the
-  // scale's day positions — rather than interpolating `scale.time` in milliseconds.
+  // A grained axis names the day at the left edge, the middle and the right edge — the plotted
+  // point nearest each — rather than interpolating `scale.time` in milliseconds.
   const ticks = days
     ? [0, 0.5, 1].map((fraction) => {
-        const pos = days.min + (days.max - days.min) * fraction;
-        const ms = Date.parse(`${days.earliest}T00:00:00Z`) + (Math.ceil(pos) - 1) * DAY_MS;
-        return tickLabel(ms, true, session);
+        const day = days.at(days.min + (days.max - days.min) * fraction);
+        return tickLabel(Date.parse(`${day}T00:00:00Z`), true, session);
       })
     : [0, 0.5, 1].map((fraction) => tickLabel(start + (end - start) * fraction, withDay, session));
 
