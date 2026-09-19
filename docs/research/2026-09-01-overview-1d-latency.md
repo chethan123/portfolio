@@ -2,6 +2,10 @@
 
 > Follow-up (2026-09-11): The running-total query is implemented in [valuation.server.ts](../../app/lib/valuation.server.ts). Timings below describe the original benchmark, not a measurement of the current build.
 
+> Follow-up (2026-09-19): [Spec 0022](../specs/0022-chart-grain.md)'s grained-window reader
+> (`readGrainedSeries`) reuses this harness's shape and is measured against it below, in "Third
+> run — 19 September 2026".
+
 *Diagnosed against `46d65df`, on a local PostgreSQL 16.13 (Ubuntu 24.04) with the demo household
 scaled to the reported shape. Every number below — except the covering-index measurement, whose two index definitions are given
 where it is reported — was produced by the scripts in
@@ -186,6 +190,80 @@ The plan check spec 0016 asks for passes on the second run: at 470,988 observati
 17.9 ms. On a single session's log the same query sequentially scans it instead: the whole table is
 24 buffers, so a scan is the cheaper plan whatever the predicate says — which is why the plan check
 needs the year of sessions behind it.
+
+## Third run — 19 September 2026, the grained-window reader (spec 0022, ticket 02)
+
+[Spec 0022](../specs/0022-chart-grain.md) draws a chart range of at most 92 days at a grain —
+15 minutes up to a week, an hour up to a month, three hours up to a quarter — instead of one
+finished-day close per date. `readGrainedSeries` (`app/lib/valuation.server.ts`) is the reader;
+this run is its "measure first" step, before the reader was wired into the chart seam.
+
+Same harness as above, same shape: `scale-shape.sql` once, then
+`scale-observations.sql -v cadence=15 -v days=92`, which seeds the weekday sessions inside 92
+calendar days — 66 sessions, 174,636 observation rows, 1,620 distinct instants in the latest
+session, exactly the first run's shape. The statement itself is new —
+[`harness/grained.sql`](2026-09-01-overview-1d-latency/harness/grained.sql), on
+`session-rewrite.sql`'s pattern (`\if :{?prefix}` for `explain (analyze, buffers)`), parameterised
+by the window's last date and length (psql has no array literal to hand in `dates` directly), a
+grain in minutes and a time zone, with the narrowing slot substituted `true` — the unfiltered
+Overview, the case measured here. Local PostgreSQL 16.13 (Ubuntu 24.04), same host class as the
+runs above.
+
+| Window | Points | Wall time (JIT on, the default) | Wall time (JIT off) |
+|---|---|---|---|
+| Last 92 days, grain 180 (3M) | 222 | 138–151 ms (3 runs) | 62 ms |
+| Last 7 days, grain 15 (1W) | 137 | 128–161 ms (3 runs) | 57 ms |
+
+Both figures are comfortably under the 500 ms figure that would have stopped the ticket. This
+host pays roughly 70–90 ms of JIT compilation on a plan complex enough to cross
+`jit_above_cost` (100000) that the spec's own review figures (about 110 ms / 65 ms, "The Shape",
+spec 0022) did not appear to pay — with JIT off this run's 62 ms and 57 ms sit close to those,
+so the shape has not drifted; the difference is host and JIT overhead, not the statement.
+
+The plan (`explain (analyze, buffers)`, JIT on, 92-day/grain-180 case, abridged to the lines that
+carry the claim):
+
+```
+Sort  (actual rows=222)
+  Buffers: shared hit=30466
+  ...
+  CTE instants
+    ->  Nested Loop  (actual rows=195)
+          ->  ... Index Only Scan Backward using price_observation_market_date_idx
+                    on price_observation o  (loops=728)
+  ...
+  ->  Append  (actual rows=222)
+        ->  Subquery Scan on instant_points  (actual rows=195)
+              ...
+              SubPlan 4
+                ->  Index Scan Backward using price_observation_pkey
+                      on price_observation o_1  (loops=4458)
+              SubPlan 5
+                ->  Index Scan Backward using price_daily_pkey
+                      on price_daily pd_1  (loops=888)
+        ->  Subquery Scan on dated_points  (actual rows=27)
+              ...
+              ->  Index Scan Backward using price_daily_pkey
+                    on price_daily pd  (loops=486)
+Execution Time: 130.901 ms
+```
+
+The three nodes the spec asks the plan to confirm are present: an **Index Only Scan Backward on
+`price_observation_market_date_idx`** inside the `instants` lateral (one backward step per
+day/step pair, 728 = 91 non-first days × 8 three-hour steps), an **Index Scan Backward on
+`price_observation_pkey`** inside the per-holding lateral (SubPlan 4, one probe per (instant,
+holding) pair, 4458 of them), with the **`price_daily_pkey` fallback** (SubPlan 5) reached only
+when that probe finds nothing — here mostly the household's cash and non-feed holdings, which
+never post an observation at all, so it is not "never executed" in this run's shape the way a
+feed-only household's would be, but it is still an index probe, never a scan. **No sequential
+scan of `price_observation` appears anywhere in either plan** (92-day or 7-day); the `dated` CTE
+reads `instants`, never the log, matching the ticket's requirement. The 7-day/grain-15 plan is the
+same shape (`price_observation_pkey` at `loops=10962`, `price_observation_market_date_idx` at
+`loops=576`, no seq scan).
+
+Both figures are recorded for [ARCHITECTURE.md §10](../../ARCHITECTURE.md), for ticket 05 to carry
+in; the harness and the explain output are reproducible from `harness/grained.sql` with the same
+recipe as `session-rewrite.sql` above.
 
 ## What is approved, and what is still a decision
 

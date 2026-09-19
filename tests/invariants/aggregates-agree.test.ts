@@ -18,6 +18,7 @@ import {
   currentHoldings,
   netWorth,
   netWorthAt,
+  netWorthGrainedSeries,
   netWorthSeries,
 } from "~/lib/valuation.server";
 import { MONEY_SCALE, toUnits } from "~/lib/money";
@@ -105,6 +106,32 @@ describe("the total for a date, asked two different ways", () => {
 
       expect(series?.amount).toBe(point.amount);
       expect(series?.coverage).toEqual(point.coverage);
+    }),
+  );
+});
+
+describe("a grained line's dated point and the point query", () => {
+  it(
+    "agree on a date, amount and coverage alike — the grained reader's other definition of the same close",
+    withDatabase(async (ctx) => {
+      const { vti, vxus } = await anAwkwardPortfolio(ctx);
+      await ctx.seedDailyClose({ instrument: vti, date: "2026-06-30", close: "3.1111" });
+      await ctx.seedDailyClose({ instrument: vxus, date: "2026-06-30", close: "70.7070" });
+
+      // A single-date window: its only point is dated, the first day of the window.
+      const [point, [grained]] = await Promise.all([
+        netWorthAt(ALL_OWNERS, "2026-06-30", ctx.db),
+        netWorthGrainedSeries(
+          ALL_OWNERS,
+          { dates: ["2026-06-30"], grainMinutes: 60, timeZone: "America/New_York" },
+          ctx.db,
+        ),
+      ]);
+
+      expect(grained?.dated).toBe(true);
+      expect(grained?.amount).toBe(point.amount);
+      expect(grained?.coverage).toEqual(point.coverage);
+      expect(point.coverage).toEqual({ known: 3, total: 4 });
     }),
   );
 });
