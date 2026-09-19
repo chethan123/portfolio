@@ -4,6 +4,11 @@
 > can update daily rows dated within seven days either side of today's market date, including past closes.
 > Daily rows are not immutable. See [the data model](../data-model.md).
 
+> **Revised in part** by [0014](0014-a-short-chart-range-draws-its-sessions-at-a-grain-from-the-observation-log.md):
+> a chart range of at most 92 days now draws every session inside it from this log at a grain set by
+> its span, so the first two costs named under "Past-navigable intraday is deferred" have been paid.
+> Choosing an older session as 1D remains deferred. Nothing else here is rewritten.
+
 
 The price poller has always fetched a live quote every refresh cadence during market hours and
 overwritten it in place, discarding every intermediate price. To support a 1D chart range, and
