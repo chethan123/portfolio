@@ -27,9 +27,8 @@ writing rules; each document below at the section named.
       instant at the position set in force on its date
 - [ ] `ADR-0006`: the note ADR-0014 adds is already in place; check it reads true against the
       shipped behaviour and touch nothing else in the file
-- [ ] `ADR-0004`: a bold-led note after the opening paragraph, in the shape ADR-0011's
-      "Superseded in part" note takes: on a grained range (ADR-0014) the readout count is bounded
-      by the grain tiers, about 290 at 3M, rather than by the sampling budget
+- [ ] `ADR-0004`: the note ADR-0014 adds is already in place (about 225 points at 3M); check it
+      reads true against the shipped behaviour and touch nothing else in the file
 - [ ] `ARCHITECTURE.md` §4.2, the "Valuing holdings" row and its `readSessionSeries` bullet
       (`:432-437`, whose `valuation.server.ts` line number is already stale): the grained reader is
       the second valuation outside the two SQL objects, in the same module
@@ -64,7 +63,7 @@ writing rules; each document below at the section named.
 - [ ] `docs/specs/README.md`: a row for 0022 in the table and `chart-grain/` in the ticket
       directories paragraph
 - [ ] `docs/research/README.md`: ticket 02's figures are recorded under the latency note's entry
-      if ticket 02 did not already
+      if ticket 02 did not already; `harness/README.md`'s file table has a row for `grained.sql`
 - [ ] `CONTEXT.md`'s "Grain" entry (already landed): check it still reads true; no edit expected
 - [ ] Nothing is added to `migrations/*.sql` text, `docs/design/pricing-ui-brief.md`, or
       `docs/specs/0008-chart-ranges.md` (spec 0022, "Deliberately not on the list")

@@ -83,7 +83,11 @@ beside it; `tests/dashboard-queries.test.ts` "the 1D series" for how the 1D read
 - [ ] No session-clock literal (`09:30`, `16:00`) appears in the reader; steps run from midnight
 - [ ] The reader's header says it is the instants × holdings shape spec 0016 retired for 1D,
       bounded here by the grain rather than the cadence, and names the running total as the
-      fallback with its cost (every observation of a held instrument in the window)
+      fallback with its cost (every observation of a held instrument in the window); one clause
+      notes that the steps are absolute-time arithmetic from local midnight, so a zone whose
+      clock change fell on a weekday would leave a day's last hour uncovered, which no New York
+      session reaches
+- [ ] `harness/README.md`'s file table gains a row for `grained.sql`
 - [ ] The module header's claim, "the only thing that values from `price_observation`", stays true:
       this reader is in this module
 
