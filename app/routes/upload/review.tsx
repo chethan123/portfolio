@@ -10,7 +10,14 @@ import {
   latestRecordableDate,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
-import { DraftNotReadyError, RefusedUpload, commitUpload, diffForDraft } from "~/lib/uploads.server";
+import {
+  DraftNotReadyError,
+  RefusedUpload,
+  STALE_REVIEW_MESSAGE,
+  StaleReviewError,
+  commitUpload,
+  reviewForDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { DiffAdded, DiffRemoved, DiffUpdated, UploadDiff } from "~/lib/uploads.server";
@@ -27,9 +34,10 @@ export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, request }: Route.LoaderArgs) {
+  const url = new URL(request.url);
   try {
-    const diff = await diffForDraft(params.draftId);
+    const diff = await reviewForDraft(params.draftId, url.searchParams.get("asOf"));
 
     return {
       steps: {
@@ -39,7 +47,8 @@ export async function loader({ params }: Route.LoaderArgs) {
         instrumentsSkipped: diff.instrumentsSkipped,
       } satisfies UploadStepsData,
       diff,
-      today: new Date().toISOString().slice(0, 10),
+      staleReviewMessage:
+        url.searchParams.get("stale") === "true" ? STALE_REVIEW_MESSAGE : null,
       earliestAsOf: earliestRecordableDate(),
       latestAsOf: latestRecordableDate(),
     };
@@ -54,13 +63,14 @@ export async function loader({ params }: Route.LoaderArgs) {
           } satisfies UploadStepsData,
           diff: null,
           blocked: error.blocked,
-          today: new Date().toISOString().slice(0, 10),
+          staleReviewMessage: null,
           earliestAsOf: earliestRecordableDate(),
           latestAsOf: latestRecordableDate(),
         };
       }
 
-      return redirect(`/upload/${params.draftId}/${error.step}`);
+      const stale = url.searchParams.get("stale") === "true" ? "?stale=true" : "";
+      return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -71,6 +81,25 @@ export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
 
   try {
+    if (values.intent === "review-date") {
+      const diff = await reviewForDraft(params.draftId, values.asOf ?? "");
+      if (diff.asOfError !== null) {
+        const safeValues = { ...values };
+        delete safeValues.confirmFiledBehind;
+        delete safeValues.confirmRemovals;
+        return {
+          errors: { asOf: diff.asOfError },
+          formError: null,
+          values: safeValues,
+          diff,
+          confirmationReset: crypto.randomUUID(),
+        };
+      }
+      throw redirect(
+        `/upload/${params.draftId}/review?asOf=${encodeURIComponent(diff.asOfInput)}`,
+      );
+    }
+
     const written = await commitUpload(params.draftId, values);
 
     // Here, not inside `commitUpload`: the statement is committed by now, so
@@ -85,22 +114,67 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     throw redirect(`/accounts/${written.accountId}?uploaded=${written.setId}`);
   } catch (error) {
+    if (error instanceof StaleReviewError) {
+      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
+      const safeValues = { ...values };
+      delete safeValues.confirmFiledBehind;
+      delete safeValues.confirmRemovals;
+      return {
+        errors: fieldErrors,
+        formError: formError ?? null,
+        values: safeValues,
+        diff: error.diff,
+        confirmationReset: crypto.randomUUID(),
+      };
+    }
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      // Carries the diff the refusal was decided against (#181) — a re-run loader would show the
-      // undated one again, and the household would tick a box against figures already rejected.
-      const diff = error instanceof RefusedUpload ? error.diff : null;
-      // The domain's own comparison (uploads.server.ts), not restated here (CLAUDE.md) — false
-      // when there was no refusal to carry it, since nothing then moved under this render.
-      const baselineMoved = error instanceof RefusedUpload ? error.baselineMoved : false;
-      return { errors: fieldErrors, formError: formError ?? null, values, diff, baselineMoved };
+      // Carries the diff the refusal was decided against (#181) — the loader's earlier read can
+      // predate the account state the commit just refused against.
+      let diff: UploadDiff;
+      if (error instanceof RefusedUpload) {
+        diff = error.diff;
+      } else {
+        try {
+          // A generic guard can fire before commit assembles a diff. Rebuild through the domain so
+          // the submitted date and the figures stay one review on this same-page response.
+          diff = await reviewForDraft(params.draftId, values.asOf ?? "");
+        } catch (reviewError) {
+          if (reviewError instanceof DraftNotReadyError) {
+            if (reviewError.blocked !== null) {
+              return redirect(`/upload/${params.draftId}/review`);
+            }
+            const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
+            return redirect(`/upload/${params.draftId}/${reviewError.step}${stale}`);
+          }
+          if (reviewError instanceof NotFoundError) {
+            const accountId =
+              values.accountId !== undefined && /^\d+$/.test(values.accountId)
+                ? values.accountId
+                : null;
+            throw data({ accountId }, { status: 404 });
+          }
+          throw reviewError;
+        }
+      }
+      const safeValues = { ...values };
+      delete safeValues.confirmFiledBehind;
+      delete safeValues.confirmRemovals;
+      return {
+        errors: fieldErrors,
+        formError: formError ?? null,
+        values: safeValues,
+        diff,
+        confirmationReset: crypto.randomUUID(),
+      };
     }
     if (error instanceof DraftNotReadyError) {
       if (error.blocked !== null) {
         return redirect(`/upload/${params.draftId}/review`);
       }
-      return redirect(`/upload/${params.draftId}/${error.step}`);
+      const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
+      return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
     }
     if (error instanceof NotFoundError) {
       // Committed-draft re-POST — draft is gone, so the hidden field only feeds the expired page's link.
@@ -144,7 +218,7 @@ function GroupHeading({ label }: { label: string }) {
 }
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
-  const { today, earliestAsOf, latestAsOf } = loaderData;
+  const { earliestAsOf, latestAsOf } = loaderData;
 
   // Fresh loader state wins over carried action data: if a saved draft has become invalid, an
   // earlier refused diff must not put its removal comparison and Record button back on screen.
@@ -191,18 +265,12 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
     );
   }
 
-  // The refusal's own diff when there was one (#181) — the loader's is undated for an asked date
-  // and would otherwise show the household figures the commit already rejected.
+  // The refusal's own diff when there was one (#181) — the loader can hold the earlier account
+  // state the commit just refused against.
   const diff: UploadDiff = actionData?.diff ?? loaderData.diff;
 
   const errors = actionData?.errors;
   const values = actionData?.values;
-
-  // A tick given against a baseline that has since moved describes figures no longer on screen
-  // (#181) — both boxes render unticked rather than carry a confirmation nobody gave to this diff.
-  // The comparison itself is the domain's (uploads.server.ts), read off the refusal rather than
-  // restated here.
-  const baselineMoved = actionData?.baselineMoved ?? false;
 
   // "this account holds" is only true of today's holdings — wrong once filed behind means these
   // counts are the baseline's own (uploads.server.ts's matching guard).
@@ -374,26 +442,30 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
             missing baseline round-trips as the empty string on every side of the comparison. */}
         <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />
+        {diff.reviewRevision !== null ? (
+          <input type="hidden" name="reviewRevision" value={diff.reviewRevision} />
+        ) : null}
+        <input type="hidden" name="reviewedAsOf" value={diff.asOfInput} />
 
         {diff.filedBehind !== null ? (
           <div className="danger-zone">
             <label className="choice">
-              {/* Keyed on the baseline, not just `defaultChecked`: React only assigns
+              {/* Keyed on the refusal token, not just `defaultChecked`: React only assigns
                   `element.defaultChecked` on a re-render, never `element.checked`
                   (react-dom-client.development.js:1675-1678), and HTML's dirty-checkedness flag
                   stops the content attribute affecting a box once a person has clicked it. A
                   `<Form>` refusal reuses this component instance, so without a key change here a
-                  ticked box would keep looking ticked after the baseline moved voided it. No test
+                  ticked box would keep looking ticked after the refusal voided it. No test
                   covers this: `renderRoute` (tests/support/render.tsx) calls
                   `renderToStaticMarkup` fresh each time, with no persistent fiber tree to
                   reconcile against, so a render-only test cannot see a `key` remount either way —
                   the safest honest check left is the browser itself. */}
               <input
-                key={diff.baselineSetId ?? ""}
+                key={`${diff.reviewRevision ?? "invalid"}:${actionData?.confirmationReset ?? "loader"}:filed`}
                 type="checkbox"
                 name="confirmFiledBehind"
                 value="true"
-                defaultChecked={!baselineMoved && values?.confirmFiledBehind === "true"}
+                defaultChecked={false}
               />
               <strong>
                 This statement is dated <span className="u-data">{diff.filedBehind.asOf}</span>,
@@ -411,15 +483,15 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
-              {/* Same reason as confirmFiledBehind's box above: keyed on the baseline so a
-                  baseline change remounts the box instead of leaving a person's own click stuck
+              {/* Same reason as confirmFiledBehind's box above: keyed on the refusal so the
+                  response remounts the box instead of leaving a person's own click stuck
                   behind HTML's dirty-checkedness flag. */}
               <input
-                key={diff.baselineSetId ?? ""}
+                key={`${diff.reviewRevision ?? "invalid"}:${actionData?.confirmationReset ?? "loader"}:removals`}
                 type="checkbox"
                 name="confirmRemovals"
                 value="true"
-                defaultChecked={!baselineMoved && values?.confirmRemovals === "true"}
+                defaultChecked={false}
               />
               <strong>
                 {diff.removesEverything ? (
@@ -436,6 +508,14 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                 )}
               </strong>
             </label>
+          </div>
+        ) : null}
+
+        {loaderData.staleReviewMessage ? (
+          <div className="panel-body form-intro">
+            <p className="form-error" role="alert">
+              {loaderData.staleReviewMessage}
+            </p>
           </div>
         ) : null}
 
@@ -461,23 +541,35 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   id="review-as-of"
                   name="asOf"
                   type="date"
-                  defaultValue={values?.asOf ?? today}
+                  defaultValue={values?.asOf ?? diff.asOfInput}
                   min={earliestAsOf}
                   max={latestAsOf}
-                  aria-invalid={errors?.asOf ? true : undefined}
+                  aria-invalid={errors?.asOf || diff.asOfError ? true : undefined}
                 />
               </label>
-              {errors?.asOf ? (
+              {errors?.asOf ?? diff.asOfError ? (
                 <p className="field-error" role="alert">
-                  {errors.asOf}
+                  {errors?.asOf ?? diff.asOfError}
                 </p>
               ) : (
-                <p className="form-note">This file does not date itself.</p>
+                <p className="form-note">
+                  This file does not date itself. Review a changed date before recording it.
+                </p>
               )}
             </div>
           )}
 
-          <button type="submit" className="button">
+          {diff.asOf.source === "asked" ? (
+            <button
+              type="submit"
+              className="button button--secondary"
+              name="intent"
+              value="review-date"
+            >
+              Review this date
+            </button>
+          ) : null}
+          <button type="submit" className="button" disabled={diff.reviewRevision === null}>
             Record this statement
           </button>
           {/* Nothing was written yet — safe to walk back and remap. */}

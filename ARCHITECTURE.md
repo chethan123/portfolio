@@ -1178,7 +1178,7 @@ There is deliberately **no skip**. A skipped row is a holding silently missing f
 #### Commit: the flow's one write
 
 `commitUpload` is the deepest function in the codebase, three parameters over an entry check, the
-account lock, seven guards and a transaction. The order is the design:
+account lock, its guards and a transaction. The order is the design:
 
 ```mermaid
 flowchart TD
@@ -1194,7 +1194,11 @@ flowchart TD
     C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, resolve the<br/>date, classify against ITS<br/>dated baseline (#181)"]
     D --> D1{"file undated, and posted<br/>asOf not a real, non-future date?"}
     D1 -->|yes| R5["refuse: the statement date —<br/>no diff exists yet, so this alone<br/>is not a RefusedUpload"]
-    D1 -->|no| E{"file names two<br/>different accounts?"}
+    D1 -->|no| D2{"review revision differs?"}
+    D2 -->|yes| D3{"current state at reviewed date<br/>reproduces posted revision?"}
+    D3 -->|yes| R10a["refuse: redraw for the chosen date,<br/>without claiming another change"]
+    D3 -->|no| R10["refuse: review no longer describes<br/>this statement and account"]
+    D2 -->|no| E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
@@ -1215,10 +1219,10 @@ flowchart TD
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R10a refuse
 ```
 
-Five of those deserve emphasis:
+These deserve emphasis:
 
 - **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the two-account and
   account-number guards rather than between them. When the file dates itself, that date is used;
@@ -1226,41 +1230,52 @@ Five of those deserve emphasis:
   never saw it. Resolving it first is what lets every guard after read the dated baseline the
   commit will actually act on, and it is the one refusal in this diagram that is not a
   `RefusedUpload`: no diff exists yet for a bad date to attach to.
+- **The review revision binds the server-rendered interpretation.** `assembleDiff` hashes the raw
+  file, mapping, effective raw-string meanings returned by `aliasesFor`, folded rows, chosen date,
+  dated baseline set, latest-set context and an account-wide append watermark
+  (`max(position_set.id)`). The watermark is an exact driver string: an inserted backdated set can
+  fall between the reviewed and newly chosen dates without changing either the old baseline or the
+  chronologically latest set, but it still advances this account's watermark. The effective map
+  includes the draft's own answers but lets recorded vocabulary outrank them, preserving ADR-0013.
+  Quotes and prices are excluded, so a refresh can change the contextual values on the next render
+  without revoking authorization.
+  Missing revisions — including forms rendered before the revision existed — fail the comparison.
+  The form also carries the date that revision was drawn for. On a mismatch, the commit rebuilds
+  the current draft and account state at that reviewed date; only reproducing the posted revision
+  proves the chosen date is the sole change. That case refuses and redraws before any write without
+  claiming the statement or account changed. Missing, invalid, forged or non-reproducing evidence
+  keeps the stale-review warning.
 - **The baseline binds the confirmation to what it was drawn against (#181).** `assembleDiff`
   classifies against the latest set at or before the resolved date, not always "now"; `J` collects
   every reason that diff disagrees with what the form still believes — a posted `baselineSetId`
   the fresh diff no longer matches, an unconfirmed filed-behind statement, or an unconfirmed
-  majority removal — and throws once, naming every applicable one. The stale-baseline sentence
+  majority removal — and throws once, naming every applicable one. Revision mismatches are
+  classified first even when that baseline moved, so a baseline refusal cannot conceal another
+  statement or account change. When the current revision matches, the stale-baseline sentence
   fires whenever the baseline moved and no unconfirmed filed-behind demand is left to subsume it —
   reason 2 subsumes reason 1 whenever it applies, not only on an untouched first submission. Ticks
-  are irrelevant to it: an untouched first submit of a backdated, undated file also has its
-  baseline "move" between the loader's guess and the commit's own resolved date, and that is not
-  the reader's round trip to answer for (see §7.2's baseline-moving row).
+  are irrelevant to it. An undated file's first render is already classified against today; when
+  the reader chooses another date, **Review this date** draws and binds that date's baseline before
+  a commit can use it (see §7.2's baseline-moving row).
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write*. It succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking every multiplication before storing turns a site-wide outage into one sentence
   about one row.
-- **Everything under the account lock, promotion then delete-first inside it.** The first draft
-  read only learns which account to lock; the draft is read again once the row is held, so a
-  concurrent commit of the same draft waits, finds the row gone, and gets its 404 before it has
-  decided anything. The promotion of the draft's answers comes first because the delete cascades
-  those rows away; the deletion then leads the rest of the writes, and `numDeletedRows === 0`
-  still aborts everything, the promotion included. No commit reaches that abort now, but
-  `createDraft`'s 24-hour sweep runs under no lock, so a day-old draft can still vanish between
-  the re-read and the delete.
-- **Vocabulary is re-read inside the transaction.** The diff resolved the file's strings before the
-  transaction opened. A string another upload recorded, or Settings repointed or forgot, in that
-  gap would land the holding under an instrument the alias no longer names, for the next re-upload
-  to diff away. So the commit re-reads `instrument_alias` for those strings, share-locked so a
-  repoint waits for it, and refuses with a sentence on any difference or absence, which rolls the
-  promotion back with the rest.
+- **One helper owns the transaction and its lock order is account → draft → aliases.** The first
+  draft read only finds the account for `withAccountLock`; inside its callback the commit locks and
+  re-reads the draft, then `assembleDiff` resolves through `aliasesFor`. After every refusal passes,
+  it promotes the file's draft answers, deletes the draft, and re-reads vocabulary `FOR SHARE`.
+  That late read must still match the effective map used for Review: it catches another draft's
+  promotion and a Settings repoint or forget landing between the earlier read and this lock. Any
+  difference rolls promotion and deletion back. The promotion stays before deletion because the
+  latter cascades the answers away; zero deleted rows still aborts the transaction.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, `commitUpload` in `uploads.server.ts` writes it onto the account (guarded by
+file carries one, `commitUploadUnderLock` writes it onto the account, guarded by
 `where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
-predicate stays as the write's own statement of the rule). The guard arms itself on the first upload,
+predicate stays as the write's own statement of the rule. The guard arms itself on the first upload,
 and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
@@ -1673,12 +1688,14 @@ opens containing the number the table prints, so it refuses the *change* instead
 
 ### 7.1 The error model
 
-Three error types, and the layer each one is answered at.
+Three base error types and two upload-specific refinements, with the layer each is answered at.
 
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors`, a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `action` in `upload/review.tsx` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
+| `RefusedUpload` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` messages | the review action | the same review re-rendered once with every applicable baseline, filed-behind and removal refusal, and both confirmations cleared |
+| `StaleReviewError` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` message | the review action | the same review re-rendered with its current diff and both confirmations cleared; an intentionally edited undated-file date is named as a redraw, while a same-date revision mismatch keeps the stale warning; only `DraftNotReadyError` redirects to an earlier step |
+| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: the `upload/review.tsx` action throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed and, when Review must block, only its display fields, step state and source-row problems | the upload routes | a redirect to that step; Review instead renders the narrow blocked payload |
 
 **A refusal is an ordinary outcome of a form submission, never a 500.** That rule is what keeps
@@ -1708,13 +1725,14 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
 | Two refreshes anywhere, from a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's. The checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
-| Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; zero rows deleted still aborts everything, the promotion included, which only the unlocked 24-hour sweep can now cause | `uploads.server.ts` |
+| Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; the draft row lock prevents the 24-hour sweep from taking it in between, and the zero-row check remains the final defense | `uploads.server.ts` |
 | Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
 | Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
-| A string recorded, repointed or forgotten between the review's diff and the commit | The commit re-reads vocabulary for the file's strings inside its transaction, `for share`, and refuses on any difference or absence; the throw takes the promotion with it. The promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` |
+| A Columns save, effective alias change or account-history write landing after Review | Under `withAccountLock`, the commit locks and re-reads the draft, rebuilds the effective alias map and dated diff, then compares the posted review revision before writing. A changed raw file, mapping, draft answer, vocabulary meaning, folded row, date, baseline set, latest-set context or account-wide append watermark refuses; the watermark catches a backdated append that changes neither selected set. Prices are intentionally absent from the revision | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
+| A string recorded, repointed or forgotten after the commit's revision comparison | Promotion uses `on conflict do nothing`, then the commit re-reads vocabulary for the file's strings inside its transaction `for share` and refuses on any difference or absence; the throw takes promotion and draft deletion with it. Promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` (`commitUploadUnderLock`) |
 | A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
-| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts:141-159`, taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the account row, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
 | A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
@@ -2315,7 +2333,7 @@ still live in the current code:
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload`, the ingest flow's one write, run inside the account lock (§7.2) |
+| `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `commitUpload`, the ingest flow's one write. Its transaction enters through `withAccountLock`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2) |
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
@@ -2392,7 +2410,7 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
 | `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
 | `upload/instruments.tsx` | Step three: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
-| `upload/review.tsx` | Step four: the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping on Columns or upload a corrected external file against the same account. Otherwise read-only: a wrong figure is fixed back on Columns, because it is wrong in the mapping |
+| `upload/review.tsx` | Step four: the dated diff, then the commit, the flow's only history write. An undated file starts with today authorized; **Review this date** authorizes an edited date and redraws its baseline and confirmations without recording. Every removal is listed in full, and a majority removal demands a tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping or upload a corrected file against the same account. A wrong figure is fixed back on Columns |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
 | `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
 | `settings/index.tsx` | What Settings holds and what it will hold, since naming the unbuilt tabs is the honest version of a fresh install |

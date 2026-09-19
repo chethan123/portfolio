@@ -59,8 +59,9 @@ explicit acknowledgement; a filtered export can otherwise remove holdings you me
 
 ### The statement date
 
-Use the file's date when present. Otherwise enter the date at review. Dates after tomorrow are
-refused; tomorrow accommodates households ahead of the server's time zone.
+Use the file's date when present. Otherwise Review starts at today and can record that date directly.
+If you choose another date, select **Review this date** to redraw the comparison before recording.
+Dates after tomorrow are refused; tomorrow accommodates households ahead of the server's time zone.
 
 ### Record it
 
@@ -69,9 +70,11 @@ you can return to Columns to fix a mapping. A dated upload may change historical
 statement does not displace a newer current snapshot, but recording one dated behind the account's
 current statement needs its own acknowledgement — separate from a removal tick — because it
 rewrites history between its date and the next statement without changing what the account reports
-today. If the figures on screen changed underneath before you record — another upload landed, or
-the date was edited after the page was drawn — committing is refused and review redraws itself
-against what is actually true, rather than acting on what you last saw.
+today. If the file, mapping, meaning of an instrument name, date or account history changes after
+Review was drawn, recording is refused and the current review replaces it. Check the redrawn diff,
+select any confirmations again, then record. An older open form may also need a fresh review after
+an app update. [The refusal guide](when-something-is-refused.md#a-statement-must-be-reviewed-again-before-it-records)
+has the full recovery path.
 
 ## Leaving an upload half-finished
 

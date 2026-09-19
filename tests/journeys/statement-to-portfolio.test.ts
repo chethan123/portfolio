@@ -91,14 +91,15 @@ function createAnswers(raws: readonly string[]): Record<string, string> {
 }
 
 /** The review screen's data, or a failure naming where it redirected instead — a redirect here means a prior step lied about the draft's state. */
-async function reviewPage(draftId: string) {
-  const outcome = await reviewScreen(args(get(`/upload/${draftId}/review`), { draftId }));
+async function reviewPage(draftId: string, search = "") {
+  const outcome = await reviewScreen(args(get(`/upload/${draftId}/review${search}`), { draftId }));
 
   if (outcome instanceof Response) {
     throw new Error(
       `Expected the review screen, but the draft was sent to ${outcome.headers.get("Location")}.`,
     );
   }
+  if (outcome.diff === null) throw new Error("Expected a diffable review, and the draft was blocked.");
   return outcome;
 }
 
@@ -155,12 +156,16 @@ describe("a first statement, from the drop screen to the account page", () => {
       expect(review.diff.removed).toEqual([]);
       expect(await accountHasAnySet(ctx, account.id)).toBe(false);
 
+      const datedReview = await reviewPage(draftId, "?asOf=2026-01-31");
+
       const landing = await redirectTo(() =>
         commit(
           args(
             post(`/upload/${draftId}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
+              baselineSetId: datedReview.diff.baselineSetId ?? "",
+              reviewRevision: datedReview.diff.reviewRevision ?? "",
             }),
             { draftId },
           ),
@@ -222,12 +227,15 @@ describe("the same brokerage's next statement", () => {
           }),
         ),
       );
+      const firstReview = await reviewPage(firstDraft, "?asOf=2026-01-31");
       await redirectTo(() =>
         commit(
           args(
             post(`/upload/${firstDraft}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
+              baselineSetId: firstReview.diff.baselineSetId ?? "",
+              reviewRevision: firstReview.diff.reviewRevision ?? "",
             }),
             { draftId: firstDraft },
           ),
@@ -252,7 +260,7 @@ describe("the same brokerage's next statement", () => {
       expect(next).toBe(`/upload/${draftId}/review`);
 
       // instrumentsSkipped is the only surviving trace once aliases are indistinguishable from any other vocabulary (brief §7.5).
-      const review = await reviewPage(draftId);
+      const review = await reviewPage(draftId, "?asOf=2026-02-28");
       expect(review.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
       if (review.diff === null) throw new Error("The valid statement was blocked.");
 
@@ -269,6 +277,7 @@ describe("the same brokerage's next statement", () => {
               // The hidden field the real form carries from the render above (#181) — January's
               // set is what the diff was drawn against.
               baselineSetId: review.diff.baselineSetId ?? "",
+              reviewRevision: review.diff.reviewRevision ?? "",
             }),
             { draftId },
           ),

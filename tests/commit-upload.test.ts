@@ -7,12 +7,15 @@ import { sql } from "kysely";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
+import { changeAlias } from "~/lib/instrument-aliases.server";
 import { lastRecorded, setBalance } from "~/lib/balances.server";
 import {
   DraftNotReadyError,
+  StaleReviewError,
   commitUpload,
   diffForDraft,
   rememberMapping,
+  reviewForDraft,
   requireDraft,
   uploadReceipt,
 } from "~/lib/uploads.server";
@@ -23,6 +26,7 @@ import { closeTestDatabase, testDatabase, withDatabase } from "./support/databas
 import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
 
 import type { StatementMapping } from "~/lib/statement";
+import type { CommitInput } from "~/lib/uploads.server";
 import type { TestContext } from "./support/database.ts";
 import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
@@ -86,6 +90,26 @@ async function stage(
   }
 
   return draft.id;
+}
+
+async function reviewAndCommit(
+  draftId: string,
+  raw: Omit<CommitInput, "reviewRevision">,
+  db: TestContext["db"],
+) {
+  const review = await reviewForDraft(draftId, raw.asOf ?? null, db);
+  if (review.reviewRevision === null) {
+    throw new Error("A valid review did not produce its revision.");
+  }
+  return commitUpload(
+    draftId,
+    {
+      ...raw,
+      baselineSetId: raw.baselineSetId ?? review.baselineSetId ?? "",
+      reviewRevision: review.reviewRevision,
+    },
+    db,
+  );
 }
 
 describe("diffForDraft", () => {
@@ -423,6 +447,450 @@ describe("diffForDraft", () => {
 
 describe("commitUpload", () => {
   it(
+    "refuses a Settings alias repoint made after Review and preserves the draft and history",
+    withDatabase(async (ctx) => {
+      const {
+        db,
+        seedAccount,
+        seedInstrument,
+        seedInstrumentAlias,
+      } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const apple = await seedInstrument({ symbol: "AAPL", name: "Apple Inc." });
+      const microsoft = await seedInstrument({ symbol: "MSFT", name: "Microsoft Corp." });
+      const vanguard = await seedInstrument({ symbol: "VOO", name: "Vanguard S&P 500 ETF" });
+      await seedInstrumentAlias({ instrument: apple, rawString: "AAPL" });
+      await seedInstrumentAlias({ instrument: vanguard, rawString: "VOO" });
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis\nAAPL,3,\nVOO,1,\n",
+      );
+      const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
+
+      await changeAlias(
+        {
+          intent: "repoint",
+          rawString: "AAPL",
+          fromInstrumentId: apple.id,
+          instrumentId: microsoft.id,
+          confirm: "true",
+        },
+        db,
+      );
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
+
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
+    "redraws an intentionally changed date without blaming another change before recording it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "DATE", name: "Dated Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "DATE" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nDATE,3,\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBeNull();
+      expect(reviewed.asOfInput).not.toBe("2026-06-30");
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a changed-date review.");
+      expect(refusal.fieldErrors.form).toBe(
+        "This comparison was drawn for a different statement date. Here it is for 2026-06-30. " +
+          "Nothing was recorded — check it and record again.",
+      );
+      expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
+      expect(refusal.diff.baselineSetId).toBeNull();
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+
+      const written = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: "",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
+          reviewedAsOf: refusal.diff.asOfInput,
+        },
+        db,
+      );
+      expect(written.asOf).toBe("2026-06-30");
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+    }),
+  );
+
+  it(
+    "redraws a date-only change before asking for confirmations against its new baseline",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CROSS", name: "Baseline Crossing Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CROSS" });
+      const earlier = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+      const current = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "2" }],
+      });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nCROSS,3,\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBe(current.id);
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a date redraw.");
+      expect(refusal.fieldErrors.form).toContain("different statement date");
+      expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
+      expect(refusal.diff.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff.filedBehind).toEqual({
+        asOf: "2026-06-30",
+        currentAsOf: "2026-07-31",
+      });
+      expect(await lastRecorded(account.id, db)).toMatchObject({ id: current.id });
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-06-30")
+          .execute(),
+      ).toHaveLength(0);
+
+      const written = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: refusal.diff.baselineSetId ?? "",
+          reviewRevision: refusal.diff.reviewRevision ?? "",
+          reviewedAsOf: refusal.diff.asOfInput,
+          confirmFiledBehind: "true",
+        },
+        db,
+      );
+      expect(written.asOf).toBe("2026-06-30");
+      expect((await lastRecorded(account.id, db))?.id).toBe(current.id);
+      await expect(requireDraft(draftId, db)).rejects.toThrow(NotFoundError);
+    }),
+  );
+
+  it(
+    "keeps the stale warning when a baseline-crossing date change also changes the mapping",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CROSSMAP", name: "Crossed Mapping Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CROSSMAP" });
+      const earlier = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+      const current = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "2" }],
+      });
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis\nCROSSMAP,3,40\n",
+      );
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.baselineSetId).toBe(current.id);
+
+      const changed = await rememberMapping(
+        draftId,
+        {
+          ...BASE_MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis", costBasis: null },
+        },
+        db,
+      );
+      expect(changed).toEqual({ nextStep: "review" });
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+            confirmRemovals: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
+      expect(refusal.diff.baselineSetId).toBe(earlier.id);
+      expect(refusal.diff.added).toHaveLength(0);
+      expect(refusal.diff.updated[0]?.quantityAfter).toBe("40");
+      expect(await lastRecorded(account.id, db)).toMatchObject({ id: current.id });
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-06-30")
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
+    "keeps the stale warning when an interval statement lands before the newly selected date",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "INTERVAL", name: "Interval History Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "INTERVAL" });
+      const march = await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "3" }],
+      });
+      const september = await seedPositionSet({
+        account,
+        asOf: "2026-09-01",
+        holdings: [{ instrument: fund, quantity: "9" }],
+      });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nINTERVAL,8,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
+      expect(reviewed.baselineSetId).toBe(march.id);
+      expect(reviewed.filedBehind?.currentAsOf).toBe("2026-09-01");
+
+      const july = await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        holdings: [{ instrument: fund, quantity: "7" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-08-31",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+            reviewedAsOf: reviewed.asOfInput,
+            confirmFiledBehind: "true",
+          },
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
+      expect(refusal.fieldErrors.form).toContain("statement or its account changed");
+      expect(refusal.fieldErrors.form).not.toContain("different statement date");
+      expect(refusal.diff.baselineSetId).toBe(july.id);
+      expect(refusal.diff.updated[0]).toMatchObject({
+        quantityBefore: "7.00000000",
+        quantityAfter: "8",
+      });
+      expect(refusal.diff.filedBehind).toEqual({
+        asOf: "2026-08-31",
+        currentAsOf: "2026-09-01",
+      });
+      expect((await lastRecorded(account.id, db))?.id).toBe(september.id);
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .where("as_of_date", "=", "2026-08-31")
+          .execute(),
+      ).toHaveLength(0);
+    }),
+  );
+
+  it(
+    "keeps the stale warning when a date change coincides with a changed mapping",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "BOTH", name: "Concurrent Change Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "BOTH" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nBOTH,3,40\n");
+      const reviewed = await reviewForDraft(draftId, null, db);
+      expect(reviewed.added[0]?.quantity).toBe("3");
+      expect(reviewed.asOfInput).not.toBe("2026-06-30");
+
+      const changed = await rememberMapping(
+        draftId,
+        {
+          ...BASE_MAPPING,
+          columns: { instrument: "Symbol", quantity: "Basis", costBasis: null },
+        },
+        db,
+      );
+      expect(changed).toEqual({ nextStep: "review" });
+
+      const reviewedDateEvidence = [
+        { label: "current but non-reproducing", value: reviewed.asOfInput },
+        { label: "forged", value: "1999-01-01" },
+        { label: "invalid", value: "not-a-date" },
+        { label: "missing", value: undefined },
+      ] as const;
+      for (const evidence of reviewedDateEvidence) {
+        const refusal = await refusalOf(() =>
+          commitUpload(
+            draftId,
+            {
+              accountId: account.id,
+              asOf: "2026-06-30",
+              baselineSetId: "",
+              reviewRevision: reviewed.reviewRevision ?? "",
+              ...(evidence.value === undefined ? {} : { reviewedAsOf: evidence.value }),
+            },
+            db,
+          ),
+        );
+        expect(refusal, evidence.label).toBeInstanceOf(StaleReviewError);
+        if (!(refusal instanceof StaleReviewError)) {
+          throw new Error(`Expected a stale review for ${evidence.label} evidence.`);
+        }
+        expect(refusal.fieldErrors.form, evidence.label).toContain(
+          "This statement or its account changed after this review",
+        );
+        expect(refusal.fieldErrors.form, evidence.label).not.toContain(
+          "different statement date",
+        );
+        expect(refusal.diff.asOf, evidence.label).toEqual({
+          source: "asked",
+          date: "2026-06-30",
+        });
+        expect(refusal.diff.added[0]?.quantity, evidence.label).toBe("40");
+      }
+
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
+    "refuses changed raw statement bytes after Review and records nothing",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "RAW", name: "Raw File Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "RAW" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRAW,3,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
+
+      await db
+        .updateTable("upload_draft")
+        .set({ raw_file: Buffer.from("Symbol,Quantity,Basis\nRAW,4,\n") })
+        .where("id", "=", draftId)
+        .execute();
+
+      await expect(
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-06-30",
+            baselineSetId: reviewed.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
+          db,
+        ),
+      ).rejects.toThrow(StaleReviewError);
+      expect(await lastRecorded(account.id, db)).toBeNull();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
+    "keeps a Review valid when only its current quote changes",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedQuote } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "QTE", name: "Quote Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "QTE" });
+      await seedQuote({ instrument: fund, price: "10.00" });
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nQTE,3,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
+
+      await seedQuote({ instrument: fund, price: "11.00" });
+
+      const written = await commitUpload(
+        draftId,
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: reviewed.baselineSetId ?? "",
+          reviewRevision: reviewed.reviewRevision ?? "",
+        },
+        db,
+      );
+      expect(written.counts).toEqual({ added: 1, updated: 0, unchanged: 0, removed: 0 });
+    }),
+  );
+
+  it(
     "keeps an invalid legacy draft and records a corrected file only through a new draft",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
@@ -512,7 +980,7 @@ describe("commitUpload", () => {
           },
         },
       );
-      const corrected = await diffForDraft(correctedDraftId, db);
+      const corrected = await reviewForDraft(correctedDraftId, null, db);
 
       const written = await commitUpload(
         correctedDraftId,
@@ -520,6 +988,7 @@ describe("commitUpload", () => {
           accountId: account.id,
           baselineSetId: corrected.baselineSetId ?? "",
           confirmRemovals: "true",
+          reviewRevision: corrected.reviewRevision ?? "",
         },
         db,
       );
@@ -554,7 +1023,7 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, baselineSetId: prior.id },
         db,
@@ -603,7 +1072,7 @@ describe("commitUpload", () => {
       expect((await netWorth(ALL_OWNERS, db)).coverage).toEqual({ known: 1, total: 2 });
 
       await expect(
-        commitUpload(draftId, { accountId: account.id }, db),
+        reviewAndCommit(draftId, { accountId: account.id }, db),
       ).rejects.toThrow(NotFoundError);
     }),
   );
@@ -631,7 +1100,7 @@ describe("commitUpload", () => {
       });
       expect(diff.removed).toHaveLength(0);
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30", baselineSetId: diff.baselineSetId ?? "" },
         db,
@@ -695,7 +1164,7 @@ describe("commitUpload", () => {
         .execute(db);
 
       await expect(
-        commitUpload(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
       ).rejects.toThrow(/commit-upload-boom/);
 
       const sets = await db
@@ -764,7 +1233,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/Big Fund/);
       expect(refusal.fieldErrors.form).toMatch(/larger figure than this application can hold/);
@@ -791,7 +1260,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPRC,1000000000,\n");
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/Priced Fund/);
       expect(refusal.fieldErrors.form).toMatch(/current price/);
@@ -819,7 +1288,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/"4407-9913"/);
       expect(refusal.fieldErrors.form).toMatch(
@@ -845,7 +1314,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPNY,100000000000,\n");
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/Penny Income Trust/);
       expect(refusal.fieldErrors.form).toMatch(/dividend rate/);
@@ -883,7 +1352,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/Z-999/);
       expect(refusal.fieldErrors.form).toMatch(/X-111/);
@@ -915,7 +1384,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/A-111/);
       expect(refusal.fieldErrors.form).toMatch(/B-222/);
@@ -953,7 +1422,7 @@ describe("commitUpload", () => {
         { columns: { accountNumber: "Acct" } },
       );
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30" },
         db,
@@ -977,7 +1446,7 @@ describe("commitUpload", () => {
         { columns: { accountNumber: "Acct" } },
       );
 
-      await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
 
       const stored = await db
         .selectFrom("account")
@@ -1042,7 +1511,7 @@ describe("commitUpload", () => {
       const baselineSetId = (await diffForDraft(draftId, db)).baselineSetId ?? "";
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30", baselineSetId }, db),
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30", baselineSetId }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes 2 of the 3 positions this account holds/,
@@ -1055,7 +1524,7 @@ describe("commitUpload", () => {
         .execute();
       expect(sets).toHaveLength(1);
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30", baselineSetId, confirmRemovals: "true" },
         db,
@@ -1084,7 +1553,7 @@ describe("commitUpload", () => {
 
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
       const refusal = await refusalOf(() =>
-        commitUpload(
+        reviewAndCommit(
           majority,
           { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
           db,
@@ -1094,7 +1563,7 @@ describe("commitUpload", () => {
 
       const half = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\nHF2,1,\n");
       expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         half,
         { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
@@ -1130,7 +1599,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNW,5,\n");
 
       const refusal = await refusalOf(() =>
-        commitUpload(
+        reviewAndCommit(
           draftId,
           { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
           db,
@@ -1157,7 +1626,7 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2020-01-01" },
         db,
@@ -1193,7 +1662,7 @@ describe("commitUpload", () => {
       );
       expect(future.fieldErrors.asOf).toMatch(/future/);
 
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30" },
         db,
@@ -1217,7 +1686,7 @@ describe("commitUpload", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nTIE,12,\n");
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30", baselineSetId: first.id },
         db,
@@ -1264,7 +1733,7 @@ describe("uploadReceipt", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRA,12,\nRB,3,\n");
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
         db,
@@ -1307,7 +1776,7 @@ describe("uploadReceipt", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "FS" });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFS,14,\n");
-      const written = await commitUpload(
+      const written = await reviewAndCommit(
         draftId,
         { accountId: account.id, asOf: "2026-06-30" },
         db,
@@ -1369,7 +1838,7 @@ describe("commitUpload — the draft's answers", () => {
         noProbe,
         db,
       );
-      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      const written = await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
 
       expect(
         await db
@@ -1411,7 +1880,7 @@ describe("commitUpload — the draft's answers", () => {
         noProbe,
         db,
       );
-      await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
 
       const vocabulary = await db
         .selectFrom("instrument_alias")
@@ -1440,7 +1909,7 @@ describe("commitUpload — the draft's answers", () => {
       // Another upload recorded the same string first.
       await seedInstrumentAlias({ instrument: vti, rawString: "QAALIAS" });
 
-      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      const written = await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
 
       expect(
         await db
@@ -1486,7 +1955,7 @@ describe("commitUpload — the draft's answers", () => {
 
       // Removes both current positions: refused until the removals are confirmed.
       const refusal = await refusalOf(() =>
-        commitUpload(
+        reviewAndCommit(
           draftId,
           { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
           db,
@@ -1557,7 +2026,7 @@ async function commitWhileVocabularyMoves(move: string): Promise<ValidationError
       .execute(db);
 
     const refusal = await refusalOf(() =>
-      commitUpload(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
+      reviewAndCommit(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
     );
 
     const sets = await db

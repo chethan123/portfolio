@@ -609,9 +609,8 @@ the account.
 **The baseline is the account's own history at the statement's date** (CONTEXT.md, "Baseline"), not
 simply "what the account holds now": a statement dated behind the account's current one is compared
 against what the account held on its own date, and §6.4 covers what that means for the confirmation
-below. *"…holds now"* is what the sentence reads in the one moment the date is not yet known at
-all — the undated loader's first render of a file that does not date itself (§6.3), before anything
-is typed.
+below. An undated file's first render uses today, so its comparison is dated too. *"…holds now"*
+appears only while an explicitly typed date is invalid and no review revision can be issued.
 
 ### 6.1 The diff table
 
@@ -678,6 +677,14 @@ from the presence of a control whether the file was dated.
   control and its validator quoting two different rules is two rules. The sentence beside it:
   *"This file does not date itself."*
 
+An undated file's first render authorizes the date input's default, today, against the latest
+position set on or before today, so **Record this statement** can record it directly. If the reader
+changes that date, **Review this date** submits it without recording, then redraws the diff against
+the latest position set on or before the chosen date and supplies the filed-behind and removal
+confirmations that actually apply. Posting a changed date directly for commit is refused. This
+keeps the date inside the same server-rendered authorization as the figures rather than treating
+the input beside them as proof that those figures were reviewed.
+
 ### 6.4 Confirmations: filed behind, then majority removal
 
 Two independent confirmations can stack above the commit row. When both apply they draw in this
@@ -729,6 +736,9 @@ is always demanded is a tick nobody reads.
 concurrent writer or an edited date, renders unticked again against whatever is now on screen —
 never carried forward to figures it was not given for. The commit refuses that resubmit too:
 recording lands on the POST that follows the render showing these figures, whichever POST that is.
+The refusal recomputes the dated diff and collects every confirmation still required into one
+response. A **Review this date** round trip is not described as staleness merely because it
+revealed a filed-behind statement; it presents the applicable confirmation for the next submit.
 
 ### 6.5 Commit, and the receipt
 
@@ -752,10 +762,20 @@ control:
   happen.
 - **A closed account** — closed while the draft sat open — refuses in `setBalance`'s words: a
   closed account's history does not change.
-- **A stale review.** The account's recorded history moved after this review was drawn — another
-  upload or correction landed, or the typed date changed to name a different baseline — so the
-  figures on screen no longer describe what the commit would act on. The refusal names what the
-  statement is now measured against; nothing is recorded, and nothing is carried forward.
+- **A stale review.** The reviewed draft, raw file, mapping, effective instrument meanings, folded
+  rows, chosen date, dated baseline or account history changed, so the figures on screen no longer
+  describe what the commit would act on. The revision includes an account-wide append watermark:
+  the chronologically latest set alone cannot detect a backdated set inserted between two candidate
+  dates. The refusal carries the current dated diff back;
+  nothing is recorded and neither confirmation is carried forward. Quote refreshes do not make a
+  review stale, because the current values are context rather than statement data. A form rendered
+  before review revisions existed is refused in the same way and must be reviewed once more. The
+  form carries the date its comparison was drawn for, so directly pressing **Record this
+  statement** after editing an undated file's date still redraws without a write, but says the
+  comparison was drawn for a different date rather than claiming the statement or account changed
+  only when rebuilding the current state at that reviewed date reproduces the submitted revision.
+  Concurrent statement or account changes retain the stale-review warning even when the new date
+  also selects another recorded baseline.
 - **An unconfirmed filed-behind statement.** §6.4's own confirmation, refused the same way when its
   tick is missing, or was given against a baseline since superseded.
 
@@ -934,9 +954,10 @@ variant.
     in place; refusals are `.field-error` and `.form-error` where they happened; a refused action
     renders its reason in words. A dead control explains nothing — which is also why closed
     accounts are absent from the select rather than disabled inside it.
-13. **No editing figures on the review screen.** Review is read-only plus the date and the tick.
-    A wrong figure is fixed by walking back to columns, because the figure is wrong in the mapping,
-    not in the diff.
+13. **No editing figures on the review screen.** Review is read-only plus the date and the ticks.
+    An undated file starts with today authorized; changing that date and selecting **Review this
+    date** redraws the dated baseline and its confirmations without recording. A wrong figure is
+    fixed by walking back to columns, because the figure is wrong in the mapping, not in the diff.
 14. **The step count never changes.** Four entries, always; a step with nothing to do dims and
     says "· none". A flow that is sometimes three steps reads as a different flow.
 15. **No hardcoded hex anywhere.** Every fill and stroke resolves from the tokens in §1.1 so a
@@ -956,11 +977,10 @@ variant.
 
 ## 10. Reconciliation notes — for the engineer syncing this back
 
-**Nothing in this flow exists yet beyond the stub.** `/upload` is a 14-line `StubPage`; the four
-screens, the draft table and every rule above are the ingest spec (`docs/specs/0004-ingest.md` and
-`docs/specs/ingest/01`–`05`), and a generated design is reconciled against *that spec* — where a
-drawing and the spec disagree, the spec is the specification and the drawing is the thing that
-moves.
+**This flow is built.** This brief began when `/upload` was a stub; the four screens, draft-backed
+state and dated review now exist. A generated design is reconciled against the running flow and the
+ingest specs (`docs/specs/ingest/01`–`05`) — where a drawing disagrees, the drawing is the thing
+that moves.
 
 **The three things a generated design gets wrong here, in order of likelihood.**
 
@@ -1018,6 +1038,11 @@ built routes. Stitch output that renames them creates a duplicate design system:
 - **`recordedDate` and `latestRecordableDate()` exist** (`app/lib/input.server.ts`); the review's
   date input carries the bound as its `max` so the control and the refusal state one rule.
   `effectiveDate` is §5.4's and is not used anywhere in this flow.
+- **An undated file can take an intentional review round trip.** `reviewForDraft` validates today
+  on the first render and draws the diff against today's baseline. If the reader changes the date,
+  **Review this date** redraws before `commitUpload` can accept it. The control is part of Review,
+  not a fifth step: it binds the date, #350's dated baseline and both possible confirmations to one
+  server-rendered review.
 - **`formFields()` assumes string fields.** This is the application's first multipart form; the
   file handling and the size bound are new server ground (spec 01), not a design question — but
   the design must not assume a second submit while a file re-uploads, because a browser will not

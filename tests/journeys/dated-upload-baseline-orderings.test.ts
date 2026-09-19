@@ -8,7 +8,14 @@ import Review, {
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
 import { lastRecorded } from "~/lib/balances.server";
-import { RefusedUpload, commitUpload, diffForDraft, rememberMapping } from "~/lib/uploads.server";
+import {
+  RefusedUpload,
+  StaleReviewError,
+  commitUpload,
+  diffForDraft,
+  rememberMapping,
+  reviewForDraft,
+} from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post } from "../support/routes.ts";
@@ -49,6 +56,10 @@ async function stage(
   return draft.id;
 }
 
+async function revisionFor(draftId: string, asOf: string, db: TestContext["db"]): Promise<string> {
+  return (await reviewForDraft(draftId, asOf, db)).reviewRevision ?? "";
+}
+
 describe("baseline resolution against an account's history", () => {
   it(
     "reads no baseline for a date before every existing set, and says so as filed behind",
@@ -63,16 +74,21 @@ describe("baseline resolution against an account's history", () => {
         holdings: [{ instrument: fund, quantity: "100" }],
       });
 
-      // Undated: the loader's own view before a date is typed reads the account's current set,
-      // exactly as it always has — there is no date yet for the diff to compare against.
+      // The explicit unknown-mode domain read keeps the current-set view for callers that have no
+      // review date. Review itself binds today or the chosen date before issuing a revision.
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,10,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-01-01", db);
       const undatedDiff = await diffForDraft(draftId, db);
       expect(undatedDiff.firstStatement).toBe(false);
       expect(undatedDiff.filedBehind).toBeNull();
 
       // Dated ahead of every set the account holds — the diff the commit actually acts on.
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-01-01" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-01-01", reviewRevision },
+          db,
+        ),
       );
       expect(refusal.diff.baselineSetId).toBeNull();
       expect(refusal.diff.firstStatement).toBe(true);
@@ -99,8 +115,13 @@ describe("baseline resolution against an account's history", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-07-31", db);
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-07-31", reviewRevision },
+          db,
+        ),
       );
       expect(refusal.diff.baselineSetId).toBe(early.id);
       expect(refusal.diff.firstStatement).toBe(false);
@@ -125,10 +146,16 @@ describe("baseline resolution against an account's history", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-06-30", db);
       // The commit resolves the same date the file's own history already carries.
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: existing.id },
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          baselineSetId: existing.id,
+          reviewRevision,
+        },
         db,
       );
       expect(written.setId).not.toBe(existing.id);
@@ -152,11 +179,17 @@ describe("baseline resolution against an account's history", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,130,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-09-15", db);
       // The 99% case: forward-dated (but not into the future recordedDate itself refuses), so no
       // filed-behind confirmation is asked for at all.
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-09-15", baselineSetId: existing.id },
+        {
+          accountId: account.id,
+          asOf: "2026-09-15",
+          baselineSetId: existing.id,
+          reviewRevision,
+        },
         db,
       );
       expect(written.asOf).toBe("2026-09-15");
@@ -166,7 +199,7 @@ describe("baseline resolution against an account's history", () => {
 
 describe("the confirmation binds to the baseline it was drawn against", () => {
   it(
-    "refuses a confirmed submit and records nothing when the typed date changed after the refusal",
+    "redraws a changed date before accepting confirmation when it selects another baseline",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -184,8 +217,17 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
       const first = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db),
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-07-31",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
+          db,
+        ),
       );
       expect(first.diff.baselineSetId).toBe(early.id);
 
@@ -199,15 +241,18 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
             asOf: "2026-09-14",
             baselineSetId: first.diff.baselineSetId ?? "",
             confirmFiledBehind: "true",
+            reviewRevision: first.diff.reviewRevision ?? "",
+            reviewedAsOf: first.diff.asOfInput,
           },
           db,
         ),
       );
-      // 2026-09-14 is after every statement recorded, so there is nothing to be filed behind —
-      // the refusal is the stale baseline alone, not a fresh filed-behind demand.
+      // 2026-09-14 is after every statement recorded, so there is nothing to be filed behind. The
+      // revision proof still identifies the date as the only change before baseline confirmations.
       expect(second.diff.filedBehind).toBeNull();
       expect(second.diff.baselineSetId).not.toBe(early.id);
-      expect(second.fieldErrors.form).toMatch(/measured against what .+ held on 2026-09-09/);
+      expect(second.fieldErrors.form).toMatch(/different statement date/);
+      expect(second.fieldErrors.form).not.toMatch(/statement or its account changed/);
 
       const sets = await db
         .selectFrom("position_set")
@@ -219,7 +264,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
   );
 
   it(
-    "refuses a confirmed submit and records nothing when another writer landed a set in the gap",
+    "keeps the stale warning when another writer moves the baseline after review",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -237,8 +282,17 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
       const first = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db),
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-07-31",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
+          db,
+        ),
       );
       expect(first.diff.baselineSetId).toBe(early.id);
 
@@ -258,23 +312,17 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
             asOf: "2026-07-31",
             baselineSetId: first.diff.baselineSetId ?? "",
             confirmFiledBehind: "true",
+            reviewRevision: first.diff.reviewRevision ?? "",
           },
           db,
         ),
       );
       expect(second.diff.baselineSetId).not.toBe(early.id);
-      // The concurrent write left this statement filed behind the same 2026-09-09 figures it was
-      // already filed behind before — reason 2 still applies against the new baseline, and
-      // subsumes reason 1's sentence exactly as it would on an untouched first submission: the
-      // demand is to reconfirm filed-behind, not to be told history changed, even though it did.
-      // This also pins confirmedFiledBehind's own `!baselineMoved` guard (uploads.server.ts): the
-      // tick this submit carried is void because the baseline moved, so `unconfirmedFiledBehind`
-      // stays true here. The guard decides which sentence appears rather than whether the write is
-      // admitted — baselineMoved alone already refuses — so dropping it would not stop this from
-      // being refused, only swap this assertion's sentence for reason 1's.
+      // The revision mismatch takes precedence over the confirmation wording: the concurrent
+      // write must not be presented as only another filed-behind acknowledgement.
       expect(second.diff.filedBehind).not.toBeNull();
-      expect(second.fieldErrors.form).toMatch(/confirm to file it behind/);
-      expect(second.fieldErrors.form).not.toMatch(/measured against/);
+      expect(second.fieldErrors.form).toMatch(/statement or its account changed/);
+      expect(second.fieldErrors.form).not.toMatch(/confirm to file it behind/);
 
       const holdings = await db
         .selectFrom("holding")
@@ -314,8 +362,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
           { instrument: epsilon, quantity: "5" },
         ],
       });
-      // The account's current set: 3 positions, 2 of which the same file would also drop —
-      // this is what the undated loader shows before any date is typed.
+      // The account's current set: 3 positions, 2 of which the same file would also drop.
       await seedPositionSet({
         account,
         asOf: "2026-09-09",
@@ -328,15 +375,16 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nALPHA,120,\n");
 
-      // The undated review (the loader's own view, before a date is typed) shows the
-      // majority-removal box against the account's current set — 2 of its 3 positions.
+      // Keep an explicitly unknown/current diff as the stale baseline fixture, while the reviewed
+      // revision below is correctly bound to the typed date.
       const undated = await diffForDraft(draftId, db);
+      const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
       expect(undated.baselineSetId).not.toBeNull();
       expect(undated.currentCount).toBe(3);
       expect(undated.majorityRemoved).toBe(true);
 
-      // The household ticks that box, types a backdated date, and submits — the review's first
-      // POST is the round trip (there is no GET in between to re-render against the real baseline).
+      // Post that stale current baseline with the date-bound revision to isolate the baseline
+      // confirmation guard from the broader revision check.
       const response = await reviewAction(
         args(
           post(`/upload/${draftId}/review`, {
@@ -344,6 +392,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
             asOf: "2026-07-31",
             baselineSetId: undated.baselineSetId ?? "",
             confirmRemovals: "true",
+            reviewRevision: reviewed.reviewRevision ?? "",
           }),
           { draftId },
         ),
@@ -403,12 +452,18 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nALPHA,120,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
 
       // First submit: both the filed-behind and majority-removal confirmations are demanded.
       const firstResponse = await reviewAction(
-        args(post(`/upload/${draftId}/review`, { accountId: account.id, asOf: "2026-07-31" }), {
-          draftId,
-        }),
+        args(
+          post(`/upload/${draftId}/review`, {
+            accountId: account.id,
+            asOf: "2026-07-31",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          }),
+          { draftId },
+        ),
       );
       if (firstResponse instanceof Response) throw new Error("Expected data back, got a redirect.");
       expect(firstResponse.diff?.filedBehind).not.toBeNull();
@@ -430,6 +485,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
             baselineSetId: firstResponse.diff?.baselineSetId ?? "",
             confirmFiledBehind: "true",
             confirmRemovals: "true",
+            reviewRevision: firstResponse.diff?.reviewRevision ?? "",
           }),
           { draftId },
         ),
@@ -470,10 +526,15 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,10,\n");
+      const reviewed = await reviewForDraft(draftId, "2026-01-01", db);
 
       const response = await reviewAction(
         args(
-          post(`/upload/${draftId}/review`, { accountId: account.id, asOf: "2026-01-01" }),
+          post(`/upload/${draftId}/review`, {
+            accountId: account.id,
+            asOf: "2026-01-01",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          }),
           { draftId },
         ),
       );
@@ -499,7 +560,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
 
 describe("a refusal always carries a sentence", () => {
   it(
-    "names the baseline change for a forward-dated resubmit after a concurrent writer landed, with no ticks given",
+    "names a stale review for a forward-dated resubmit after a concurrent writer landed",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
       const account = await seedAccount({ kind: "brokerage" });
@@ -511,12 +572,13 @@ describe("a refusal always carries a sentence", () => {
         holdings: [{ instrument: fund, quantity: "100" }],
       });
 
-      // The undated loader's own view — Review renders this baseline before any date is typed.
+      // The explicit unknown-mode view supplies the old current baseline for this guard test.
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,100,\n");
       const undated = await diffForDraft(draftId, db);
+      const reviewed = await reviewForDraft(draftId, "2026-09-14", db);
       expect(undated.majorityRemoved).toBe(false);
 
-      // Another tab lands a set while the household is still looking at the undated review.
+      // Another tab lands a set after the dated review was assembled.
       await seedPositionSet({
         account,
         asOf: "2026-09-10",
@@ -524,23 +586,45 @@ describe("a refusal always carries a sentence", () => {
       });
 
       // A forward date, later than the concurrent set — neither filed behind nor a majority
-      // removal — with the stale undated baseline carried and no ticks given at all. Reasons 2 and
-      // 3's conditions are both false; only the baseline-changed one is true, and it must still
-      // refuse and say so. This is #181's own blocker case: `diff.filedBehind` null,
-      // `diff.majorityRemoved` false, and no confirmation posted to make the old
-      // `baselineMoved && carriedConfirmation` gate fire — the exact combination that used to throw
-      // `RefusedUpload("", diff)`, rendering no alert at all.
+      // removal. The current revision now includes the concurrent set, so that mismatch takes
+      // precedence over the stale-baseline confirmation evidence.
       const refusal = await refusalOf(() =>
         commitUpload(
           draftId,
-          { accountId: account.id, asOf: "2026-09-14", baselineSetId: undated.baselineSetId ?? "" },
+          {
+            accountId: account.id,
+            asOf: "2026-09-14",
+            baselineSetId: undated.baselineSetId ?? "",
+            reviewRevision: reviewed.reviewRevision ?? "",
+          },
           db,
         ),
       );
       expect(refusal.diff.filedBehind).toBeNull();
       expect(refusal.diff.majorityRemoved).toBe(false);
       expect(refusal.fieldErrors.form).not.toBe("");
-      expect(refusal.fieldErrors.form).toMatch(/2026-09-10/);
+      expect(refusal.fieldErrors.form).toMatch(/statement or its account changed/);
+
+      // A current revision paired with the old baseline is forged or mixed form evidence rather
+      // than a stale review. The revision guard passes, leaving the baseline confirmation guard to
+      // name exactly what moved instead of allowing the mismatched hidden field through.
+      const currentReview = await reviewForDraft(draftId, "2026-09-14", db);
+      const baselineOnly = await refusalOf(() =>
+        commitUpload(
+          draftId,
+          {
+            accountId: account.id,
+            asOf: "2026-09-14",
+            baselineSetId: undated.baselineSetId ?? "",
+            reviewRevision: currentReview.reviewRevision ?? "",
+            reviewedAsOf: currentReview.asOfInput,
+          },
+          db,
+        ),
+      );
+      expect(baselineOnly).toBeInstanceOf(RefusedUpload);
+      expect(baselineOnly.fieldErrors.form).toMatch(/2026-09-10/);
+      expect(baselineOnly.fieldErrors.form).not.toMatch(/statement or its account changed/);
 
       const sets = await db
         .selectFrom("position_set")
@@ -562,9 +646,10 @@ describe("a first statement", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "NEW" });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNEW,10,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-06-30", db);
       const written = await commitUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: "" },
+        { accountId: account.id, asOf: "2026-06-30", baselineSetId: "", reviewRevision },
         db,
       );
       expect(written.counts).toEqual({ added: 1, updated: 0, unchanged: 0, removed: 0 });
@@ -621,8 +706,13 @@ describe("a removed row against a dated baseline", () => {
       // Dated between the two, so the baseline is the 2026-06-30 set — priced and unpriced are
       // both removed against it.
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nKPT,5,\n");
+      const reviewRevision = await revisionFor(draftId, "2026-07-31", db);
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db),
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: "2026-07-31", reviewRevision },
+          db,
+        ),
       );
 
       const removed = new Map(refusal.diff.removed.map((row) => [row.instrumentId, row]));
@@ -635,12 +725,14 @@ describe("a removed row against a dated baseline", () => {
   );
 });
 
-/** The RefusedUpload a call produced, or a failure if it did not refuse that way. */
-async function refusalOf(run: () => Promise<unknown>): Promise<RefusedUpload> {
+/** The upload refusal a call produced, or a failure if it did not carry a current diff. */
+async function refusalOf(
+  run: () => Promise<unknown>,
+): Promise<RefusedUpload | StaleReviewError> {
   try {
     await run();
   } catch (error) {
-    if (error instanceof RefusedUpload) return error;
+    if (error instanceof RefusedUpload || error instanceof StaleReviewError) return error;
     throw error;
   }
   throw new Error("Expected the write to be refused with a diff attached, and it was not.");

@@ -16,7 +16,12 @@ import {
   formFields,
 } from "~/lib/input.server";
 import { parseStatement, statementMapping } from "~/lib/statement";
-import { rememberMapping, requireDraft, type UploadDraft } from "~/lib/uploads.server";
+import {
+  STALE_REVIEW_MESSAGE,
+  rememberMapping,
+  requireDraft,
+  type UploadDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { ParseProblem, StatementMapping } from "~/lib/statement";
@@ -166,6 +171,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       savedProblems: savedProblems.map((problem) => problem.message),
       savedProblemFields:
         savedMapping === null ? [] : problemFieldsOf(savedMapping, savedProblems),
+      staleReviewMessage:
+        new URL(request.url).searchParams.get("stale") === "true"
+          ? STALE_REVIEW_MESSAGE
+          : null,
       // Component can't import a `.server` module — sentinel rides down with the data.
       notInFile: NOT_IN_FILE,
     };
@@ -200,6 +209,7 @@ function problemFieldsOf(mapping: StatementMapping, problems: ParseProblem[]): s
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const draft = await requireDraft(params.draftId);
@@ -221,7 +231,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       };
     }
 
-    return redirect(`/upload/${draft.id}/${outcome.nextStep}`);
+    return redirect(`/upload/${draft.id}/${outcome.nextStep}${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
@@ -252,6 +262,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
     missingColumns,
     savedProblems,
     savedProblemFields,
+    staleReviewMessage,
     notInFile,
   } = loaderData;
 
@@ -309,6 +320,12 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
           {draft.ownerName}
         </p>
+
+        {staleReviewMessage ? (
+          <p className="form-error" role="alert">
+            {staleReviewMessage}
+          </p>
+        ) : null}
 
         {fromInstitution ? (
           <p>
