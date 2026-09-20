@@ -1497,13 +1497,15 @@ accountSeries(id, dates) / accountSessionSeries(id, session) / accountFirstRecor
 // Neither: facts about the feed and about the hand-typed prefix.
 latestObservedSession()        // which session 1D plots, off the observation log
 manualNetWorth()
+manualNetWorthAt('2026-02-14') // the hand-typed value in force on a date
 ```
 
 `owners` is the **owner filter** (spec 0013, ADR-0008), required and with no default on every
 household-scoped read: `ALL_OWNERS` is the whole household and is a word somebody typed rather than
 an argument somebody forgot. An account-scoped read does not take it, because an account already has
-exactly one owner; `manualNetWorth` and `latestObservedSession` do not either, and
-`manualNetWorth`'s docstring says why for both. Three of the household-scoped reads,
+exactly one owner; the two `manualNetWorth` readers and `latestObservedSession` do not either, and
+`manualNetWorth`'s comment says why for the hand-typed pair — `manual_networth` has no owner column,
+so a narrowed read of it could only be declined. Three of the household-scoped reads,
 `firstRecordedDate`, `netWorthSeries` and `netWorthSessionSeries`, keep that same signature, but a
 screen no longer supplies the argument itself: `chart-series.server.ts` (spec 0015) calls them in the
 loader's place, off a `reading` the loader names as a required field of the `ChartScope` it hands that
@@ -1537,11 +1539,12 @@ id past the type's range answers "no such row" in SQL rather than erroring insid
 The seam is `ValuedSource`: `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
 type, so a read built on it works for both. The reads that sit beside it rather than on it fall
 into three groups. `accountTotals`, `accountTotal` and `netWorthChange` hand-write aggregates the seam cannot
-express. `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` deliberately read
-elsewhere: `manual_networth` for the pre-app series, and `position_set` for "when does history
-start", which must not depend on anything being priced. And `latestObservedSession`,
-`netWorthSessionSeries` and `accountSessionSeries` read the observation log, which the seam cannot
-reach at all: `ValuedSource`'s two adapters both price per *date*, and a session is priced per
+express. `manualNetWorth`, `manualNetWorthAt`, `firstRecordedDate` and `accountFirstRecordedDate`
+deliberately read elsewhere: `manual_networth` for the pre-app series and for the hand-typed value
+in force on a date, and `position_set` for "when does history start", which must not depend on
+anything being priced — `netWorthChange` resolves its baseline out of both tables before it
+aggregates anything. And `latestObservedSession`, `netWorthSessionSeries` and
+`accountSessionSeries` read the observation log, which the seam cannot reach at all: `ValuedSource`'s two adapters both price per *date*, and a session is priced per
 instant.
 
 `netWorthSeries` batches distinct input dates into one SQL request, evaluating
@@ -2332,7 +2335,7 @@ still live in the current code:
 | File | Role |
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
-| `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
+| `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `manualNetWorthAt`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `commitUpload`, the ingest flow's one write. Its transaction enters through `withAccountLock`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2) |
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |

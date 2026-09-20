@@ -527,6 +527,53 @@ describe("the two series on one chart", () => {
   );
 });
 
+describe("where the change chip measures from", () => {
+  it(
+    "says so only when it had to measure later than the range asked for",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // 5Y is greyed out at this reach; the address is how it is reached anyway (spec 0008).
+      const clamped = await loader(args(get("/?range=5y")));
+
+      expect(clamped.change.basis).toBe("clamped");
+      expect(clamped.change.basisDate).toBe(daysAgo(200));
+      expect(renderRoute(Overview, "/", clamped)).toContain("Measured from");
+
+      // Older than the whole window, so the line never draws it — and it is still the baseline.
+      await ctx.seedManualNetWorth({ date: daysAgo(2000), amount: "5000.0000" });
+      await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "8000.0000" });
+
+      const carried = await loader(args(get("/?range=5y")));
+
+      expect(carried.change.basis).toBe("manual");
+      expect(carried.change.basisDate).toBe(daysAgo(2000));
+      expect(carried.change.previous).toBe("5000.0000");
+      expect(carried.manual.map((point) => point.date)).not.toContain(daysAgo(2000));
+
+      // A hand-typed baseline is the value in force, not an apology — no label (issue #347).
+      expect(renderRoute(Overview, "/", carried)).not.toContain("Measured from");
+    }),
+  );
+
+  it(
+    "measures a household younger than the default year from its first statement, with no range asked for",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // The landing screen: no query string, no cookie. 1Y is greyed out and the default resolves
+      // to a `since` 1Y reaches anyway, so the clamp is where a first-run household lands.
+      const data = await loader(args(get("/")));
+
+      expect(data.range).toBe("1y");
+      expect(data.change.basis).toBe("clamped");
+      expect(data.change.basisDate).toBe(daysAgo(200));
+      expect(data.change.percent).toBe("0.0000");
+      expect(renderRoute(Overview, "/", data)).toContain("Measured from");
+    }),
+  );
+});
+
 describe("the range in the query string", () => {
   it(
     "falls back to the default year when the range is not one the page offers",

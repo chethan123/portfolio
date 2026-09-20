@@ -8,8 +8,22 @@ What the household is worth today, and the line behind it.
 
 **Total net worth** adds the current value of open accounts. Loans subtract. The change chip
 compares current value with the value at the range's start. This remains true for Custom ranges
-ending in the past. The chip is not the change between the chart's endpoints. If the starting
-value is zero, only the amount is shown.
+ending in the past. The chip is not the change between the chart's endpoints.
+
+**Three things can be that starting value, in this order.** A statement recorded on or before that
+date: your positions, valued there. Failing that — the range reaches back past your first statement
+— the most recent hand-typed point on or before that date, held forward the way a price is. That
+point need not be one the line draws. It is the value in force at the start, not the first dot on
+the chart.
+
+Failing both, the chip measures from the earliest date it can value, and says which under the
+figure: "Measured from 12 Oct 2023". That is what you see when the range starts before anything at
+all was recorded, as the default year does while nothing — no statement, no hand-typed point — is
+older than a year, and when you have narrowed to an owner and the range reaches back past that
+owner's first statement, since the hand-typed history is the household's and has no owner.
+
+If the starting value is genuinely zero — nothing was held then — only the amount is shown, with no
+percentage.
 
 The **As of** line is the oldest provider timestamp among currently held feed-priced instruments,
 across the household. A successful refresh need not advance it. [Prices](prices.md).

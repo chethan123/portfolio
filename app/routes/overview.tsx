@@ -31,7 +31,7 @@ import {
   type RangeKey,
 } from "~/lib/chart-range";
 import { chartReach, chartSeries, type ChartScope } from "~/lib/chart-series.server";
-import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
+import { formatDate, formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import { ALL_OWNERS, isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
@@ -409,6 +409,13 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           </p>
 
           <NarrowedTo owners={narrowedTo} />
+
+          {change.basis === "clamped" && change.basisDate !== null ? (
+            <p className="coverage-note">
+              Nothing was recorded at the start of this range. Measured from{" "}
+              {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
+            </p>
+          ) : null}
 
           <PriceFreshness freshness={freshness} />
         </div>

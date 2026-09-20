@@ -706,6 +706,8 @@ export async function accountGrainedSeries(
 }
 
 // The hand-typed prefix series (§7), raw — the overlap rule is a display rule, not a fact here.
+// No owner filter: manual_networth has no owner column, so a narrowed read of it could only be
+// declined, never narrowed (ADR-0008). Its callers decline it.
 export async function manualNetWorth(
   db: Kysely<Database> = getDb(),
 ): Promise<ManualPoint[]> {
@@ -718,6 +720,26 @@ export async function manualNetWorth(
   return rows.map((row) => ({ date: row.date, amount: String(row.amount) }));
 }
 
+// The hand-typed value in force on a date — carried forward like a price, so the point need not be
+// one the line draws. Unfiltered for manualNetWorth's reason above; the gate is netWorthChange's.
+export async function manualNetWorthAt(
+  at: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<ManualPoint | null> {
+  const row = await db
+    .selectFrom("manual_networth")
+    .select([sql<string>`cast(date as text)`.as("date"), "amount"])
+    .where("date", "<=", at)
+    .orderBy("date", "desc")
+    .limit(1)
+    .executeTakeFirst();
+
+  return row === undefined ? null : { date: row.date, amount: String(row.amount) };
+}
+
+// Which series `previous` came from. "clamped" is measured later than asked — the caller says so.
+export type ChangeBasis = "computed" | "manual" | "clamped" | "none";
+
 // In SQL numeric (§4.1); divides by abs(previous) so climbing out of net debt reads as a rise.
 export type NetWorthChange = {
   current: string;
@@ -725,12 +747,60 @@ export type NetWorthChange = {
   difference: string;
   // Null when previous is zero: undefined, not 0% or infinite.
   percent: string | null;
+  basis: ChangeBasis;
+  // What `previous` is measured at, which is `since` only when basis is "computed".
+  basisDate: IsoDate | null;
 };
 
+type Baseline =
+  | { basis: ChangeBasis; date: IsoDate; amount?: undefined }
+  | { basis: ChangeBasis; date: IsoDate | null; amount: string };
+
+// §7 rules 2 and 3, narrowed to one date: positions win wherever they reach, the hand-typed history
+// covers only what precedes them, and a range reaching past both is measured from where it can be.
 export async function netWorthChange(
   filter: OwnerFilter,
   since: IsoDate,
   db: Kysely<Database> = getDb(),
+): Promise<NetWorthChange> {
+  // Narrowed asks nothing of manual_networth at all: the hand-typed history is the household's
+  // and has no owner (ADR-0008).
+  const [firstSet, inForce] = await Promise.all([
+    firstRecordedDate(filter, db),
+    isFiltered(filter) ? null : manualNetWorthAt(since, db),
+  ]);
+
+  // min(as_of_date) <= since is exactly "some set at or before since" — no second exists query.
+  if (firstSet !== null && firstSet <= since) {
+    return readChange(db, filter, { basis: "computed", date: since });
+  }
+
+  if (inForce !== null) {
+    return readChange(db, filter, { basis: "manual", date: inForce.date, amount: inForce.amount });
+  }
+
+  // Cold path only, so the whole tiny series rather than a third near-identical reader.
+  const firstManual = isFiltered(filter) ? undefined : (await manualNetWorth(db))[0];
+
+  if (firstManual !== undefined && (firstSet === null || firstManual.date < firstSet)) {
+    return readChange(db, filter, {
+      basis: "clamped",
+      date: firstManual.date,
+      amount: firstManual.amount,
+    });
+  }
+
+  if (firstSet !== null) {
+    return readChange(db, filter, { basis: "clamped", date: firstSet });
+  }
+
+  return readChange(db, filter, { basis: "none", date: null, amount: "0" });
+}
+
+async function readChange(
+  db: Kysely<Database>,
+  filter: OwnerFilter,
+  past: Baseline,
 ): Promise<NetWorthChange> {
   // Both ends narrowed, or the delta compares one owner against the whole household.
   const owned = ownedBy("holding_valued.owner_id", filter);
@@ -743,17 +813,21 @@ export async function netWorthChange(
         .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
     )
     .with("past", (qb) =>
-      narrow(qb.selectFrom(valuedAt(since)))
-        .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
+      past.amount === undefined
+        ? narrow(qb.selectFrom(valuedAt(past.date)))
+            .select(sql<string>`coalesce(sum(value), 0)`.as("amount"))
+        : qb.selectNoFrom(sql<string>`cast(${past.amount} as numeric(20, 4))`.as("amount")),
     )
     .selectFrom(["present", "past"])
     .select([
       sql<string>`cast(present.amount as numeric(20, 4))`.as("current"),
       sql<string>`cast(past.amount as numeric(20, 4))`.as("previous"),
       sql<string>`cast(present.amount - past.amount as numeric(20, 4))`.as("difference"),
+      // Same width as the three amounts above it: a baseline of pennies makes the ratio enormous,
+      // and a percentage Postgres refuses to cast is a 500 on the Overview rather than a big number.
       sql<string | null>`case
         when past.amount = 0 then null
-        else cast((present.amount - past.amount) / abs(past.amount) * 100 as numeric(10, 4))
+        else cast((present.amount - past.amount) / abs(past.amount) * 100 as numeric(20, 4))
       end`.as("percent"),
     ])
     .executeTakeFirstOrThrow();
@@ -763,6 +837,8 @@ export async function netWorthChange(
     previous: row.previous,
     difference: row.difference,
     percent: row.percent,
+    basis: past.basis,
+    basisDate: past.date,
   };
 }
 

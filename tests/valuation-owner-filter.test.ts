@@ -279,7 +279,48 @@ describe("netWorthChange narrowed", () => {
         previous: "10000.0000",
         difference: "5000.0000",
         percent: "50.0000",
+        basis: "computed",
+        basisDate: "2026-01-31",
       });
+    }),
+  );
+
+  it(
+    "never measures a narrowed window from the household's hand-typed history",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, seedDailyClose, seedManualNetWorth, usdInstrument }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const usd = await usdInstrument();
+      const hers = await seedAccount({ name: "Alice Savings", owner: alice, kind: "bank" });
+
+      await seedPositionSet({
+        account: hers,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "10000.00000000" }],
+      });
+      await seedPositionSet({
+        account: hers,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: usd, quantity: "15000.00000000" }],
+      });
+      await seedDailyClose({ instrument: usd, date: "2026-01-31", close: "1.0000" });
+      // Loud enough that a leak into a narrowed baseline could not be read as anything else.
+      await seedManualNetWorth({ date: "2020-01-01", amount: "999999.0000" });
+
+      // 5Y-shaped, narrowed: clamped to Alice's own first set, not to the household's 2020 point.
+      expect(await netWorthChange([alice.id], "2021-01-01", db)).toEqual({
+        current: "15000.0000",
+        previous: "10000.0000",
+        difference: "5000.0000",
+        percent: "50.0000",
+        basis: "clamped",
+        basisDate: "2026-01-31",
+      });
+
+      // "All", narrowed: since is already her first recorded date, so this is untouched by any of it.
+      expect((await netWorthChange([alice.id], "2026-01-31", db)).basis).toBe("computed");
+
+      // Unfiltered, the same window does reach the hand-typed point — the gate is the filter, not the date.
+      expect((await netWorthChange(ALL_OWNERS, "2021-01-01", db)).basis).toBe("manual");
     }),
   );
 });
