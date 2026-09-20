@@ -5,7 +5,7 @@
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { closeAccount } from "~/lib/accounts.server";
+import { closeAccount, getAccount, withAccountLock } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
@@ -22,7 +22,7 @@ import { RACE_PREFIX, clearRaces, makeFixtures } from "./support/fixtures.ts";
 import type { Database } from "~/lib/db.server";
 import type { StatementMapping } from "~/lib/statement";
 import type { Kysely } from "kysely";
-import type { SeededAccount, SeededInstrument } from "./support/fixtures.ts";
+import type { SeededAccount, SeededInstrument, SeededPerson } from "./support/fixtures.ts";
 
 beforeAll(async () => clearRaces(await testDatabase()));
 afterAll(async () => {
@@ -129,6 +129,21 @@ async function plant(database: Kysely<Database>, tag: string): Promise<Planted> 
   });
 
   return { account, x, y, z, baselineSetId: seeded.id };
+}
+
+/** `waits` runs against the account while an uncommitted owner change to `owner` holds its row (#332). */
+function behindAnOwnerChange<T>(
+  database: Kysely<Database>,
+  account: SeededAccount,
+  owner: SeededPerson,
+  waits: Writer<T>,
+): Promise<T> {
+  return behindTheLock(
+    database,
+    (trx) =>
+      trx.updateTable("account").set({ owner_id: owner.id }).where("id", "=", account.id).execute(),
+    waits,
+  );
 }
 
 const MAPPING: StatementMapping = {
@@ -394,6 +409,121 @@ describe("the account lock", () => {
 
       expect(refusal.fieldErrors.form).toMatch(/closed/);
       expect(await positionSetCount(database, account.id)).toBe(1);
+    },
+    20_000,
+  );
+
+  it(
+    "records a balance that was waiting while the account changed owner",
+    async () => {
+      const database = await testDatabase();
+      const fixtures = makeFixtures(database);
+      const name = (part: string) => `${RACE_PREFIX}owner-then-balance-${part}`;
+      const account = await fixtures.seedAccount({
+        name: name("account"),
+        kind: "bank",
+        // Named, not defaulted: an auto-seeded "Person N" is outside the sweep and strands a row.
+        owner: await fixtures.seedPerson({ name: name("owner") }),
+      });
+      const newOwner = await fixtures.seedPerson({ name: name("new-owner") });
+
+      await behindAnOwnerChange(database, account, newOwner, (trx) =>
+        setBalance(account.id, { amount: "300", asOf: today() }, trx),
+      );
+
+      expect(await positionSetCount(database, account.id)).toBe(1);
+      expect((await getAccount(account.id, database)).ownerId).toBe(newOwner.id);
+    },
+    20_000,
+  );
+
+  it(
+    "records a correction that was waiting while the account changed owner",
+    async () => {
+      const database = await testDatabase();
+      const { account, x, y } = await plant(database, "owner-then-correction");
+      const newOwner = await makeFixtures(database).seedPerson({
+        name: `${RACE_PREFIX}owner-then-correction-new-owner`,
+      });
+
+      await behindAnOwnerChange(database, account, newOwner, (trx) =>
+        revisePosition(account.id, x.id, { quantity: "11", costBasisPerShare: "" }, trx),
+      );
+
+      expect(await latestQuantities(database, account.id)).toEqual({
+        [x.id]: "11.00000000",
+        [y.id]: "20.00000000",
+      });
+      expect((await getAccount(account.id, database)).ownerId).toBe(newOwner.id);
+    },
+    20_000,
+  );
+
+  it(
+    "records an upload commit that was waiting while the account changed owner",
+    async () => {
+      const database = await testDatabase();
+      const { account, x, y, baselineSetId } = await plant(database, "owner-then-upload");
+      const newOwner = await makeFixtures(database).seedPerson({
+        name: `${RACE_PREFIX}owner-then-upload-new-owner`,
+      });
+      const draftId = await stagedUpload(database, account, [
+        [x.name, "100"],
+        [y.name, "200"],
+      ]);
+      const reviewRevision = await revisionFor(database, draftId, today());
+
+      await behindAnOwnerChange(database, account, newOwner, (trx) =>
+        commitUpload(
+          draftId,
+          { accountId: account.id, asOf: today(), baselineSetId, reviewRevision },
+          trx,
+        ),
+      );
+
+      expect(await latestQuantities(database, account.id)).toEqual({
+        [x.id]: "100.00000000",
+        [y.id]: "200.00000000",
+      });
+      expect((await getAccount(account.id, database)).ownerId).toBe(newOwner.id);
+    },
+    20_000,
+  );
+
+  it(
+    "closes an account that changed owner while the closure waited",
+    async () => {
+      const database = await testDatabase();
+      const { account } = await plant(database, "owner-then-close");
+      const newOwner = await makeFixtures(database).seedPerson({
+        name: `${RACE_PREFIX}owner-then-close-new-owner`,
+      });
+
+      const closed = await behindAnOwnerChange(database, account, newOwner, (trx) =>
+        closeAccount(account.id, { confirmClose: "true" }, trx),
+      );
+
+      expect(closed.isClosed).toBe(true);
+      expect((await getAccount(account.id, database)).ownerId).toBe(newOwner.id);
+    },
+    20_000,
+  );
+
+  it(
+    "hands the lock body the owner the account gained while the writer waited",
+    async () => {
+      const database = await testDatabase();
+      const { account } = await plant(database, "owner-then-lock");
+      const newOwner = await makeFixtures(database).seedPerson({
+        name: `${RACE_PREFIX}owner-then-lock-new-owner`,
+      });
+
+      const handed = await behindAnOwnerChange(database, account, newOwner, (trx) =>
+        withAccountLock(account.id, trx, async (locked) => locked),
+      );
+
+      expect(handed.ownerId).toBe(newOwner.id);
+      expect(handed.ownerName).toBe(newOwner.name);
     },
     20_000,
   );

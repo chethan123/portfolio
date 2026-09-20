@@ -205,27 +205,21 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   // Skipped deliberately, not just for shape: this is the one request an un-granted browser can hammer.
   if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;
 
-  let firstRun: FirstRunStep = null;
-
-  try {
-    firstRun = await firstRunStep();
-  } catch (error) {
+  const firstRunPromise = firstRunStep().catch((error) => {
     console.error("First-run check failed; continuing without the prompt:", error);
-  }
-
-  const { masked, maskingPolicy, resolved: maskingResolved } = await maskingForRequest(
-    request,
-    context,
-  );
+    return null;
+  });
+  const maskingPromise = maskingForRequest(request, context);
 
   // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again
   // rather than passed down from the middleware so `tests/support/routes.ts`'s `args()` can call this loader directly.
-  let hasPasskey = false;
-  try {
-    hasPasskey = await isLocked();
-  } catch (error) {
+  const hasPasskeyPromise = isLocked().catch((error) => {
     console.error("Lock check failed; hiding the lock-now control rather than guessing:", error);
-  }
+    return false;
+  });
+
+  const [firstRun, { masked, maskingPolicy, resolved: maskingResolved }, hasPasskey] =
+    await Promise.all([firstRunPromise, maskingPromise, hasPasskeyPromise]);
 
   return {
     gated: getConfig().AUTH_GATE === "external",
