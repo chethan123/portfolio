@@ -4,8 +4,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { formatQuantity } from "~/lib/holdings-view";
 import { perShareAmountRule } from "~/lib/decimal-input";
+import { formatQuantity } from "~/lib/format";
 import { ValidationError, parseInput, perShareAmount, signedQuantity } from "~/lib/input.server";
 
 const quantity = z.object({ quantity: signedQuantity("A quantity") });

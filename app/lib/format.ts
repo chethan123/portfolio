@@ -75,6 +75,17 @@ export function formatSignedMoney(decimal: string, dp = 2): string {
   return `${lead}$${group(parts.int)}${fraction}`;
 }
 
+export function formatQuantity(decimal: string, preservePlaces = false): string {
+  const parsed = parse(decimal);
+  const parts = {
+    ...parsed,
+    frac: preservePlaces ? parsed.frac : parsed.frac.replace(/0+$/, ""),
+  };
+  const fraction = parts.frac ? `.${parts.frac}` : "";
+
+  return `${sign(parts)}${group(parts.int)}${fraction}`;
+}
+
 const COMPACT_SUFFIXES = ["", "K", "M", "B"];
 
 // Shifts the decimal point left by `scale` groups of three, then rounds to `dp`.
@@ -123,6 +134,18 @@ export function formatPercent(decimal: string, dp = 1): string {
   const fraction = parts.frac ? `.${parts.frac}` : "";
 
   return `${lead}${group(parts.int)}${fraction}%`;
+}
+
+// Strips storage padding without rounding, so a settings box preserves what was typed.
+export function rateDigits(ratePercent: string): string {
+  const [whole = "0", fraction = ""] = ratePercent.trim().split(".");
+  const kept = fraction.replace(/0+$/, "");
+
+  return kept === "" ? whole : `${whole}.${kept}`;
+}
+
+export function formatRate(ratePercent: string): string {
+  return `${rateDigits(ratePercent)}%`;
 }
 
 export function isNegative(decimal: string): boolean {

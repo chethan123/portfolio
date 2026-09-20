@@ -22,6 +22,8 @@ describe("the sign shown for a money delta", () => {
   it("classifies the rounded figure rather than a hidden fraction of a cent", () => {
     expect(printedSign("-0.0040")).toBe("");
     expect(deltaDirection("-0.0040")).toBe("flat");
+    expect(printedSign("-0.0040", 4)).toBe("−");
+    expect(deltaDirection("-0.0040", 4)).toBe("loss");
     expect(printedSign("-0.0050")).toBe("−");
     expect(deltaDirection("-0.0050")).toBe("loss");
     expect(printedSign("0.0050")).toBe("+");

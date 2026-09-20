@@ -291,17 +291,3 @@ function add(running: string | null, next: string | null): string | null {
 
   return render(toUnits(running, MONEY_SCALE) + toUnits(next, MONEY_SCALE), MONEY_SCALE);
 }
-
-// e.g. "23.800000" -> "23.8": strips padding, nothing rounded — formatPercent rounds to one
-// place, which would corrupt a rate a person typed if shown back through a settings box.
-export function rateDigits(ratePercent: string): string {
-  const [whole = "0", fraction = ""] = ratePercent.trim().split(".");
-  const kept = fraction.replace(/0+$/, "");
-
-  return kept === "" ? whole : `${whole}.${kept}`;
-}
-
-// rateDigits plus "%", not formatPercent, so the heading and the Settings box never disagree.
-export function formatRate(ratePercent: string): string {
-  return `${rateDigits(ratePercent)}%`;
-}

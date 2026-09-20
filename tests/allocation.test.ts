@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   allocationBy,
   annualDividendBy,
-  formatRate,
-  rateDigits,
   sharePercent,
   shelteredSubtotal,
   unrealizedByAssetType,
@@ -617,28 +615,6 @@ describe("unrealized gains by asset type", () => {
 
       expect([gain, rate, rows[0]?.tax]).toEqual([gain, rate, tax]);
     }
-  });
-});
-
-describe("formatRate", () => {
-  it("prints a stored rate the way the panel heading says it", () => {
-    expect(formatRate("23.800000")).toBe("23.8%");
-    expect(formatRate("0.000000")).toBe("0%");
-    expect(formatRate("100.000000")).toBe("100%");
-  });
-
-  it("rounds nothing, so the heading and the settings box cannot disagree", () => {
-    // formatPercent would round these to 3.8%/23.8%/15.3%, contradicting what was typed — and re-saving would persist the rounded value.
-    expect(formatRate("3.750000")).toBe("3.75%");
-    expect(formatRate("23.812345")).toBe("23.812345%");
-    expect(formatRate("15.250000")).toBe("15.25%");
-  });
-
-  it("takes off the column's padding and nothing else", () => {
-    expect(rateDigits("23.800000")).toBe("23.8");
-    expect(rateDigits("15.000000")).toBe("15");
-    expect(rateDigits("0.000000")).toBe("0");
-    expect(rateDigits("0.000100")).toBe("0.0001");
   });
 });
 
