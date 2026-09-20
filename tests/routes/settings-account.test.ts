@@ -61,6 +61,16 @@ describe("closing an account from its editor", () => {
 });
 
 describe("the account number the save form was drawn with", () => {
+  /** Every field the save form posts, so a test can vary only what it is about. */
+  const saveForm = (ownerId: string, over: Record<string, string>) => ({
+    name: "Fidelity Taxable",
+    institution: "Test Institution",
+    kind: "brokerage",
+    ownerId,
+    taxTreatment: "taxable",
+    ...over,
+  });
+
   it(
     "renders the recorded number as the value the box was drawn with",
     withDatabase(async ({ seedPerson, seedAccount }) => {
@@ -112,6 +122,47 @@ describe("the account number the save form was drawn with", () => {
       const now = await getAccount(account.id, db);
       expect(now.externalAccountNumber).toBe("Z-999");
       expect(now.name).toBe("Fidelity Taxable");
+    }),
+  );
+
+  it(
+    "keeps saying what the box was drawn with when a refusal on another field re-renders the form",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const owner = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ name: "Fidelity Taxable", owner });
+      const path = `/settings/accounts/${account.id}`;
+      const blankBox = { externalAccountNumber: "", fromExternalAccountNumber: "" };
+
+      // The form drawn before any number was recorded, sent back with an unrelated mistake.
+      const refused = await action(
+        args(post(path, saveForm(owner.id, { ...blankBox, name: "" })), {
+          accountId: account.id,
+        }),
+      );
+      expect(refused).toMatchObject({ errors: { name: "An account name is required." } });
+
+      // A commit captures one while that page sits there (uploads.server.ts); this stands in for
+      // it, and the loader revalidation under the refusal then sees it.
+      const capture = { externalAccountNumber: "Z-999", fromExternalAccountNumber: "" };
+      await action(args(post(path, saveForm(owner.id, capture)), { accountId: account.id }));
+
+      const revalidated = await loader(args(get(path), { accountId: account.id }));
+      expect(renderRoute(AccountDetail, path, revalidated, { actionData: refused })).toContain(
+        '<input type="hidden" name="fromExternalAccountNumber" value=""/>',
+      );
+
+      // The same page, its name corrected and sent again with what it draws: the box is still
+      // the blank it was drawn with, not a clear typed over "Z-999".
+      const saved = await action(
+        args(post(path, saveForm(owner.id, { ...blankBox, name: "Renamed" })), {
+          accountId: account.id,
+        }),
+      );
+
+      expect(saved).toMatchObject({ saved: true });
+      const now = await getAccount(account.id, db);
+      expect(now.externalAccountNumber).toBe("Z-999");
+      expect(now.name).toBe("Renamed");
     }),
   );
 });
