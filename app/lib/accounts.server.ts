@@ -137,7 +137,8 @@ export async function getAccount(
 // the read a writer decides on to its insert, so the later writer's read is the earlier's commit.
 // NO KEY, not FOR UPDATE: the stronger mode also blocks the FOR KEY SHARE an insert referencing
 // the account takes, stalling createDraft and any out-of-app insert behind a commit in flight.
-// Hands back the row it locked, read after any wait.
+// Bare row locked, then the account read, not one locked join: a join re-checked on being granted
+// keeps the person tuple its first scan pinned, so an owner change mid-wait 404'd the account (#332).
 // READ COMMITTED only: the re-read must see the writer ahead. Several accounts: lock ids in order.
 export async function withAccountLock<T>(
   accountId: string,
@@ -147,13 +148,15 @@ export async function withAccountLock<T>(
   if (!/^\d+$/.test(accountId)) throw new NotFoundError(`No account with id ${accountId}.`);
 
   const locked = async (trx: Kysely<Database>): Promise<T> => {
-    const row = await selectAccounts(trx)
-      .where("account.id", "=", accountId)
-      .forNoKeyUpdate("account")
+    const row = await trx
+      .selectFrom("account")
+      .select("id")
+      .where("id", "=", accountId)
+      .forNoKeyUpdate()
       .executeTakeFirst();
     if (row === undefined) throw new NotFoundError(`No account with id ${accountId}.`);
 
-    return body(toAccount(row), trx);
+    return body(await getAccount(accountId, trx), trx);
   };
 
   return inTransaction(db, locked);
