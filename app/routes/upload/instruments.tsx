@@ -228,7 +228,11 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     <input
                       id={`symbol-${index}`}
                       name={`symbol-${index}`}
-                      defaultValue={values?.[`symbol-${index}`] ?? ""}
+                      defaultValue={
+                        values !== undefined
+                          ? (values[`symbol-${index}`] ?? "")
+                          : (item.suggestedSymbol ?? "")
+                      }
                       aria-invalid={invalid(`symbol-${index}`)}
                       autoComplete="off"
                     />

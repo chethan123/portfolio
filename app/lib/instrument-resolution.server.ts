@@ -6,6 +6,7 @@
 import { isAssetClass } from "./account-options.ts";
 import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError } from "./input.server.ts";
+import { isWellFormedSymbol } from "../../server/symbol-pattern.ts";
 
 import type { ProbeSymbols } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
@@ -71,6 +72,7 @@ export async function unresolvedStrings(
 export type UnresolvedPosition = {
   // Instrument cell exactly as the file wrote it — what gets stored.
   raw: string;
+  suggestedSymbol: string | null;
   name: string | null;
   quantity: string;
 };
@@ -115,6 +117,7 @@ export async function resolutionScreen(
     const position = byRaw.get(raw);
     return {
       raw,
+      suggestedSymbol: isWellFormedSymbol(raw) ? raw : null,
       name: position?.name ?? null,
       quantity: position?.quantity ?? "0",
     };

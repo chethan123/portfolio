@@ -999,10 +999,16 @@ describe("resolutionScreen", () => {
       expect(screen.unresolved).toEqual([
         {
           raw: "VXUS",
+          suggestedSymbol: "VXUS",
           name: "Vanguard Total International Stock ETF",
           quantity: "120.000",
         },
-        { raw: "CASH & CASH INVESTMENTS", name: null, quantity: "4210.55" },
+        {
+          raw: "CASH & CASH INVESTMENTS",
+          suggestedSymbol: null,
+          name: null,
+          quantity: "4210.55",
+        },
       ]);
 
       expect(screen.instruments.map((entry) => entry.id)).toContain(vti.id);
