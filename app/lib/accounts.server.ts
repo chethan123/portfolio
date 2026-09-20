@@ -182,6 +182,20 @@ export async function createAccount(
   return getAccount(row.id, db);
 }
 
+// What the account-number box was drawn with, echoed back by the edit form: evidence about the
+// page the browser was shown, never authorization (#312). optionalText's shape minus the bound —
+// it has to normalise identically or a trailing space reads as an edit, and a captured number
+// longer than the visible box's 64 has to stay clearable rather than refuse under a key
+// AccountFields never draws.
+const accountUpdateInput = accountInput.extend({
+  fromExternalAccountNumber: z
+    .string()
+    .trim()
+    .transform((value) => (value === "" ? null : value))
+    .nullish()
+    .transform((value) => value ?? null),
+});
+
 // Kind is the one field guarded beyond field validation: both views apply it retroactively to
 // every date, so relabelling used to let setBalance sell out a brokerage, or file assets as debt
 // with no write at all (SET-1). The two refusals below close exactly those two holes — an account
@@ -193,7 +207,7 @@ export async function updateAccount(
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
   const existing = await getAccount(id, db);
-  const input = parseInput(accountInput, raw);
+  const input = parseInput(accountUpdateInput, raw);
   await requireOwner(input.ownerId, db);
 
   // Checked against the new kind and the rows, never existing.kind — otherwise a two-hop edit
@@ -239,18 +253,55 @@ export async function updateAccount(
     }
   }
 
-  await db
+  const fields = {
+    name: input.name,
+    institution: input.institution ?? "",
+    kind: input.kind,
+    owner_id: input.ownerId,
+    tax_treatment: input.taxTreatment,
+  };
+
+  // Box came back holding what was rendered into it: not an instruction. The column stays out of
+  // the write, so a number a commit captured while this form sat open (uploads.server.ts)
+  // survives the save (#312). A submission carrying neither field reads as untouched too, which
+  // is the safe default.
+  if (input.externalAccountNumber === input.fromExternalAccountNumber) {
+    await db.updateTable("account").set(fields).where("id", "=", existing.id).execute();
+    return getAccount(existing.id, db);
+  }
+
+  // An edit: compare-and-set on what the form was drawn with — the alias confirm's shape
+  // (ARCHITECTURE.md §7.2), not a second lock. The typed value matches too, so a column another
+  // writer already moved to it reads as the edit done rather than as a conflict. Zero rows means
+  // the column is neither, which is the refusal.
+  const written = await db
     .updateTable("account")
-    .set({
-      name: input.name,
-      institution: input.institution ?? "",
-      kind: input.kind,
-      owner_id: input.ownerId,
-      tax_treatment: input.taxTreatment,
-      external_account_number: input.externalAccountNumber,
-    })
+    .set({ ...fields, external_account_number: input.externalAccountNumber })
     .where("id", "=", existing.id)
-    .execute();
+    .where((eb) =>
+      eb.or(
+        [input.fromExternalAccountNumber, input.externalAccountNumber].map((value) =>
+          value === null
+            ? eb("external_account_number", "is", null)
+            : eb("external_account_number", "=", value),
+        ),
+      ),
+    )
+    .executeTakeFirst();
+
+  if (written.numUpdatedRows === 0n) {
+    // Re-read rather than quote `existing`: a 404 if the account went, the number now otherwise.
+    const now = await getAccount(existing.id, db);
+    throw new ValidationError({
+      // Under the box, not the form: the route hands fieldErrors straight to AccountFields.
+      externalAccountNumber:
+        `${now.name}'s account number changed while this page was open — it is ` +
+        (now.externalAccountNumber === null
+          ? "not recorded any more"
+          : `now recorded as "${now.externalAccountNumber}"`) +
+        ". Nothing was saved. Reload the account and make the change against what is recorded now.",
+    });
+  }
 
   return getAccount(existing.id, db);
 }

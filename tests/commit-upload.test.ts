@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { closeAccount } from "~/lib/accounts.server";
+import { closeAccount, updateAccount } from "~/lib/accounts.server";
 import { changeAlias } from "~/lib/instrument-aliases.server";
 import { lastRecorded, setBalance } from "~/lib/balances.server";
 import {
@@ -1454,6 +1454,47 @@ describe("commitUpload", () => {
         .where("id", "=", account.id)
         .executeTakeFirstOrThrow();
       expect(stored.external_account_number).toBe("Z-999");
+    }),
+  );
+
+  it(
+    "still refuses a mismatched statement after a stale settings save left the captured number alone",
+    withDatabase(async (ctx) => {
+      const { db, seedPerson, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const owner = await seedPerson({ name: "Alex Rivera" });
+      const account = await seedAccount({ name: "Schwab", owner, kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CAP", name: "Captured Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CAP" });
+
+      const captured = await stage(ctx, account, "Symbol,Quantity,Basis,Acct\nCAP,10,,Z-999\n", {
+        columns: { accountNumber: "Acct" },
+      });
+      await reviewAndCommit(captured, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      // The settings form that loaded before the upload, saved with its blank box untouched.
+      await updateAccount(
+        account.id,
+        {
+          name: "Schwab",
+          institution: "Test Institution",
+          kind: "brokerage",
+          ownerId: owner.id,
+          taxTreatment: "taxable",
+          externalAccountNumber: "",
+          fromExternalAccountNumber: "",
+        },
+        db,
+      );
+
+      const next = await stage(ctx, account, "Symbol,Quantity,Basis,Acct\nCAP,12,,A-111\n", {
+        columns: { accountNumber: "Acct" },
+      });
+
+      const refusal = await refusalOf(() =>
+        reviewAndCommit(next, { accountId: account.id, asOf: "2026-07-31" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/"A-111"/);
+      expect(refusal.fieldErrors.form).toMatch(/recorded as account "Z-999"/);
     }),
   );
 

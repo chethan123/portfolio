@@ -101,6 +101,15 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
             idPrefix={`account-${account.id}`}
           />
 
+          {/* What the account-number box was drawn with, so an untouched box can't erase a number
+              an upload captured since (#312). From the loader, never `values`: a refused save
+              re-renders against what is recorded now, so the retry can succeed. */}
+          <input
+            type="hidden"
+            name="fromExternalAccountNumber"
+            value={account.externalAccountNumber ?? ""}
+          />
+
           <button type="submit" className="button">
             Save changes
           </button>
