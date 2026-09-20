@@ -22,10 +22,40 @@ const touchGrantOverride = vi.hoisted(() => ({
   impl: undefined as ((id: string, db?: unknown) => Promise<unknown>) | undefined,
 }));
 
+const loaderReadOverrides = vi.hoisted(() => ({
+  firstRunStep: undefined as (() => Promise<"people" | "accounts" | null>) | undefined,
+  readMaskingPolicy: undefined as (() => Promise<"masked" | "unmasked" | "as_last_left">) | undefined,
+  isLocked: undefined as (() => Promise<boolean>) | undefined,
+}));
+
+vi.mock("~/lib/first-run.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/first-run.server")>();
+  return {
+    ...actual,
+    firstRunStep: (...callArgs: Parameters<typeof actual.firstRunStep>) =>
+      loaderReadOverrides.firstRunStep
+        ? loaderReadOverrides.firstRunStep()
+        : actual.firstRunStep(...callArgs),
+  };
+});
+
+vi.mock("~/lib/settings.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/settings.server")>();
+  return {
+    ...actual,
+    readMaskingPolicy: (...callArgs: Parameters<typeof actual.readMaskingPolicy>) =>
+      loaderReadOverrides.readMaskingPolicy
+        ? loaderReadOverrides.readMaskingPolicy()
+        : actual.readMaskingPolicy(...callArgs),
+  };
+});
+
 vi.mock("~/lib/lock.server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/lock.server")>();
   return {
     ...actual,
+    isLocked: (...callArgs: Parameters<typeof actual.isLocked>) =>
+      loaderReadOverrides.isLocked ? loaderReadOverrides.isLocked() : actual.isLocked(...callArgs),
     touchGrant: (...callArgs: Parameters<typeof actual.touchGrant>) =>
       touchGrantOverride.impl ? touchGrantOverride.impl(...callArgs) : actual.touchGrant(...callArgs),
   };
@@ -38,11 +68,60 @@ const { stopPricePoller } = await import("~/lib/price-poller.server");
 
 // The middleware array's last member also starts the refresh loop (§6.2) — a real 15-minute
 // interval, unref'd but otherwise outliving this file. Stopped after every test.
-afterEach(stopPricePoller);
+afterEach(() => {
+  loaderReadOverrides.firstRunStep = undefined;
+  loaderReadOverrides.readMaskingPolicy = undefined;
+  loaderReadOverrides.isLocked = undefined;
+  stopPricePoller();
+});
 
 afterAll(closeTestDatabase);
 
 describe("the shell's loader", () => {
+  it("starts every independent read before waiting for any one of them", async () => {
+    const firstRun = Promise.withResolvers<"accounts">();
+    const maskingPolicy = Promise.withResolvers<"unmasked">();
+    const locked = Promise.withResolvers<true>();
+    const firstRunStep = vi.fn(() => firstRun.promise);
+    const readMaskingPolicy = vi.fn(() => maskingPolicy.promise);
+    const isLocked = vi.fn(() => locked.promise);
+    loaderReadOverrides.firstRunStep = firstRunStep;
+    loaderReadOverrides.readMaskingPolicy = readMaskingPolicy;
+    loaderReadOverrides.isLocked = isLocked;
+
+    const pending = loader(args(get("/")));
+    try {
+      expect(firstRunStep).toHaveBeenCalledOnce();
+      expect(readMaskingPolicy).toHaveBeenCalledOnce();
+      expect(isLocked).toHaveBeenCalledOnce();
+    } finally {
+      firstRun.resolve("accounts");
+      maskingPolicy.resolve("unmasked");
+      locked.resolve(true);
+      await pending;
+    }
+  });
+
+  it("keeps the masking and lock results when the first-run read fails", async () => {
+    const failure = new Error("first-run unavailable");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    loaderReadOverrides.firstRunStep = () => Promise.reject(failure);
+    loaderReadOverrides.readMaskingPolicy = async () => "unmasked";
+    loaderReadOverrides.isLocked = async () => true;
+
+    try {
+      expect(await loader(args(get("/")))).toMatchObject({
+        firstRun: null,
+        masked: false,
+        maskingPolicy: "unmasked",
+        maskingResolved: true,
+        hasPasskey: true,
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("reports no first-run step rather than propagating, when the database cannot be reached", async () => {
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
 
