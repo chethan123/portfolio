@@ -3,15 +3,17 @@
 // preselects resolving by position instead of column name would map quantity onto cost basis and read as correct.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { action, loader } from "../../app/routes/upload/columns.tsx";
-import { NOT_IN_FILE } from "~/lib/column-mapping.server";
-import { rememberMapping } from "~/lib/uploads.server";
+import Columns, { action, loader } from "../../app/routes/upload/columns.tsx";
+import { NOT_IN_FILE, findMapping, headerFingerprint } from "~/lib/column-mapping.server";
+import { parseDraft, rememberMapping, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
-import { args, get, post } from "../support/routes.ts";
+import { renderRoute } from "../support/render.tsx";
+import { args, get, outcomeOf, post } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
+import type { AccountKind } from "~/lib/valuation.server";
 
 afterAll(closeTestDatabase);
 
@@ -41,14 +43,15 @@ type StageOptions = {
   mapped?: boolean;
   /** Scopes the remembered mapping, so one test's draft cannot prefill another's. */
   institution?: string;
+  kind?: AccountKind;
 };
 
 /** A draft over {@link CSV}, with the columns step passed unless `mapped` is false. */
 async function stageDraft(
   ctx: Pick<TestContext, "db" | "seedAccount" | "seedUploadDraft">,
-  { mapped = true, institution = "Fidelity" }: StageOptions = {},
+  { mapped = true, institution = "Fidelity", kind = "brokerage" }: StageOptions = {},
 ): Promise<string> {
-  const account = await ctx.seedAccount({ kind: "brokerage", institution });
+  const account = await ctx.seedAccount({ kind, institution });
   const draft = await ctx.seedUploadDraft({
     account,
     filename: "Positions.csv",
@@ -64,6 +67,15 @@ async function stageDraft(
 
   return draft.id;
 }
+
+const postedMapping = {
+  headerRow: "1",
+  instrument: "Symbol",
+  quantity: "Quantity",
+  costBasis: "Cost Basis",
+  costBasisIs: "per_share",
+  owedAsPositive: "true",
+};
 
 /** The screen as this request would draw it. */
 function screen(draftId: string, query = "") {
@@ -192,6 +204,124 @@ describe("saving a mapping", () => {
         .where("id", "=", draft.id)
         .executeTakeFirstOrThrow();
       expect(stored).toEqual({ mapping: null, had_first_sightings: null });
+    }),
+  );
+
+  it(
+    "hides the liability sign control for an asset account but shows it checked for a liability",
+    withDatabase(async (ctx) => {
+      const brokerage = await stageDraft(ctx, {
+        mapped: false,
+        institution: "Brokerage UI",
+      });
+      const brokerageMarkup = renderRoute(
+        Columns,
+        `/upload/${brokerage}/columns`,
+        await screen(brokerage),
+      );
+      expect(brokerageMarkup).not.toContain('name="owedAsPositive"');
+      expect(brokerageMarkup).not.toContain("This file lists what is owed");
+
+      const liability = await stageDraft(ctx, {
+        mapped: false,
+        institution: "Liability UI",
+        kind: "liability",
+      });
+      const liabilityMarkup = renderRoute(
+        Columns,
+        `/upload/${liability}/columns`,
+        await screen(liability),
+      );
+      expect(liabilityMarkup).toContain('name="owedAsPositive"');
+      expect(liabilityMarkup).toContain('name="owedAsPositive" checked="" value="true"');
+      expect(liabilityMarkup).toContain("This file lists what is owed");
+    }),
+  );
+
+  it(
+    "ignores a forged positive-debt flag for a brokerage in parsing and both saved mappings",
+    withDatabase(async (ctx) => {
+      const institution = "Forged Broker";
+      const draftId = await stageDraft(ctx, { mapped: false, institution });
+
+      const response = await outcomeOf(() =>
+        action(
+          args(post(`/upload/${draftId}/columns`, postedMapping), { draftId }),
+        ),
+      );
+      expect(response).toBeInstanceOf(Response);
+
+      const draft = await requireDraft(draftId, ctx.db);
+      expect(draft.mapping).toMatchObject({ owedAsPositive: false });
+      const remembered = await findMapping(
+        institution,
+        headerFingerprint(["Symbol", "Quantity", "Cost Basis"]),
+        ctx.db,
+      );
+      expect(remembered?.owedAsPositive).toBe(false);
+
+      const result = await parseDraft(draft, ctx.db);
+      expect(result.step).toBe("instruments");
+      if (!("parsed" in result)) throw new Error("The saved mapping did not parse.");
+      expect(result.mapping.owedAsPositive).toBe(false);
+      expect(result.parsed.positions[0]?.quantity).toBe("100");
+    }),
+  );
+
+  it(
+    "keeps the positive-debt flag and negates quantities for a liability",
+    withDatabase(async (ctx) => {
+      const draftId = await stageDraft(ctx, {
+        mapped: false,
+        institution: "Liability Parser",
+        kind: "liability",
+      });
+
+      const response = await outcomeOf(() =>
+        action(
+          args(post(`/upload/${draftId}/columns`, postedMapping), { draftId }),
+        ),
+      );
+      expect(response).toBeInstanceOf(Response);
+
+      const draft = await requireDraft(draftId, ctx.db);
+      expect(draft.mapping).toMatchObject({ owedAsPositive: true });
+      const result = await parseDraft(draft, ctx.db);
+      if (!("parsed" in result)) throw new Error("The saved mapping did not parse.");
+      expect(result.mapping.owedAsPositive).toBe(true);
+      expect(result.parsed.positions[0]?.quantity).toBe("-100");
+    }),
+  );
+
+  it(
+    "re-scopes a saved liability mapping when the account later becomes an asset",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({
+        kind: "liability",
+        institution: "Changed Kind",
+      });
+      const draft = await ctx.seedUploadDraft({
+        account,
+        filename: "Positions.csv",
+        bytes: encode(CSV),
+      });
+      const saved = await rememberMapping(
+        draft.id,
+        { ...MAPPING, owedAsPositive: true },
+        ctx.db,
+      );
+      expect(saved).not.toHaveProperty("problems");
+
+      await ctx.db
+        .updateTable("account")
+        .set({ kind: "brokerage" })
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+
+      const result = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
+      if (!("parsed" in result)) throw new Error("The saved mapping did not parse.");
+      expect(result.mapping.owedAsPositive).toBe(false);
+      expect(result.parsed.positions[0]?.quantity).toBe("100");
     }),
   );
 });
