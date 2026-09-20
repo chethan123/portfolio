@@ -16,7 +16,7 @@ import {
   type GainGroups,
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
-import { groupingBy } from "~/lib/holdings-view";
+import { dimensionLabel, groupingBy } from "~/lib/holdings-view";
 import { ALL_OWNERS, isFiltered } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { readCapitalGainsRate } from "~/lib/settings.server";
@@ -227,7 +227,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Net worth by owner"
             count={plural(byPerson.length, "owner", "owners")}
-            heading="Owner"
+            heading={dimensionLabel("owner")}
             amountHeading="Value"
             slices={byPerson}
             total={total}
@@ -237,7 +237,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Value by account type"
             count={plural(byAccountKind.length, "account type", "account types")}
-            heading="Account type"
+            heading={dimensionLabel("kind")}
             amountHeading="Value"
             slices={byAccountKind}
             total={total}
@@ -247,7 +247,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Value by asset class"
             count={plural(byAssetClass.length, "asset class", "asset classes")}
-            heading="Asset class"
+            heading={dimensionLabel("assetClass")}
             amountHeading="Value"
             slices={byAssetClass}
             total={total}
@@ -257,7 +257,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Value by classification"
             count={plural(byClassification.length, "classification", "classifications")}
-            heading="Classification"
+            heading={dimensionLabel("classification")}
             amountHeading="Value"
             slices={byClassification}
             total={total}
