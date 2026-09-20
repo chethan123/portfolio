@@ -1,6 +1,9 @@
 // netWorthChange resolves its baseline over several statements before it aggregates anything
 // (#347). Two connections and committed rows, because withDatabase's one rolled-back transaction
 // cannot contend with itself; every row planted here carries RACE_PREFIX and is swept at both ends.
+// Keep it that way: inOneSnapshot short-circuits on an outer transaction, so a case moved under
+// withDatabase inherits READ COMMITTED and stops reaching REPEATABLE READ at all. This file is the
+// only coverage of that isolation level, and it would go on passing without it.
 import { sql } from "kysely";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
