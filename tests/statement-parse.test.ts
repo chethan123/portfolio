@@ -509,6 +509,23 @@ describe("row handling", () => {
 
     expect(parsed.problems[0]?.message).toMatch(/larger than this application can store/);
   });
+
+  it("strips the line breaks a quoted cell carries, which a form's box would drop anyway", () => {
+    // RFC 4180 lets a quoted field hold a newline, and the reader keeps it. A text input does
+    // not: what settings draws into its box comes back without it, so a number recorded with
+    // one could never be saved back unchanged (#312).
+    const { rows } = readCsv(
+      new TextEncoder().encode('Symbol,Qty,Account\nVTI,1,"Z12-345678\r\n(joint)"\n'),
+    );
+    const parsed = parseStatement(
+      rows,
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty", accountNumber: "Account" } }),
+    );
+
+    expect(rows[1]?.[2]).toBe("Z12-345678\r\n(joint)");
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.positions[0]?.accountNumber).toBe("Z12-345678(joint)");
+  });
 });
 
 describe("cost basis", () => {

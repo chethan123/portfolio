@@ -257,8 +257,13 @@ export function parseStatement(
   const skipped: SkippedRow[] = [];
   const asOfSightings: Array<{ row: number; value: string }> = [];
 
+  // Line breaks go, the way a text input's value sanitization strips them (HTML Standard, the
+  // input element): a quoted cell may hold one, and a value that keeps it can never come back
+  // from a form unchanged — the account number it records would read as an edit against its own
+  // box, or as a conflict no retry resolves (#312). Both sides of the upload's mismatch check
+  // read this, so the comparison stays one of like with like.
   const optionalCell = (cells: ReadonlyArray<string>, index: number | null): string | null => {
-    const value = index === null ? "" : (cells[index] ?? "").trim();
+    const value = index === null ? "" : (cells[index] ?? "").replace(/[\r\n]/g, "").trim();
     return value === "" ? null : value;
   };
 
