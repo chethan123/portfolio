@@ -1,6 +1,9 @@
 import type { Config } from "@react-router/dev/config";
 
 export default {
+  // Small route tree: load its metadata once instead of discovering links through /__manifest.
+  routeDiscovery: { mode: "initial" },
+
   // DESIGN.md §9.
   ssr: true,
 
