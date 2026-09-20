@@ -186,14 +186,16 @@ export async function createAccount(
 // page the browser was shown, never authorization (#312). optionalText's shape minus the bound —
 // it has to normalise identically or a trailing space reads as an edit, and a captured number
 // longer than the visible box's 64 has to stay clearable rather than refuse under a key
-// AccountFields never draws.
+// AccountFields never draws. Absent stays undefined rather than collapsing to null: a form drawn
+// before this field existed said nothing about its box, which is not the same as saying it was
+// empty.
 const accountUpdateInput = accountInput.extend({
   fromExternalAccountNumber: z
     .string()
     .trim()
     .transform((value) => (value === "" ? null : value))
-    .nullish()
-    .transform((value) => value ?? null),
+    .nullable()
+    .optional(),
 });
 
 // Kind is the one field guarded beyond field validation: both views apply it retroactively to
@@ -261,11 +263,30 @@ export async function updateAccount(
     tax_treatment: input.taxTreatment,
   };
 
+  // No baseline and a blank box: a form drawn before that field existed, saying nothing about
+  // what its box held. An untouched stale box and a deliberate clear post exactly the same
+  // thing, and keeping the number while answering "Saved." would report a clear that did not
+  // happen. Refused instead, so the one submission nothing can read is the one nobody claims.
+  if (
+    input.fromExternalAccountNumber === undefined &&
+    input.externalAccountNumber === null &&
+    existing.externalAccountNumber !== null
+  ) {
+    throw new ValidationError({
+      externalAccountNumber:
+        `${existing.name}'s account number is recorded as "${existing.externalAccountNumber}", ` +
+        "and this page is too old to say whether its box was cleared or drawn empty. Nothing " +
+        "was saved. Reload the account, and clear the box again to remove the number.",
+    });
+  }
+
+  const drawnWith = input.fromExternalAccountNumber ?? null;
+
   // Box came back holding what was rendered into it: not an instruction. The column stays out of
   // the write, so a number a commit captured while this form sat open (uploads.server.ts)
   // survives the save (#312). A submission carrying neither field reads as untouched too, which
-  // is the safe default.
-  if (input.externalAccountNumber === input.fromExternalAccountNumber) {
+  // is the safe default — the refusal above has already taken the case where it isn't.
+  if (input.externalAccountNumber === drawnWith) {
     await db.updateTable("account").set(fields).where("id", "=", existing.id).execute();
     return getAccount(existing.id, db);
   }
@@ -280,7 +301,7 @@ export async function updateAccount(
     .where("id", "=", existing.id)
     .where((eb) =>
       eb.or(
-        [input.fromExternalAccountNumber, input.externalAccountNumber].map((value) =>
+        [drawnWith, input.externalAccountNumber].map((value) =>
           value === null
             ? eb("external_account_number", "is", null)
             : eb("external_account_number", "=", value),

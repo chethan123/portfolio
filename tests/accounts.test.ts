@@ -398,6 +398,33 @@ describe("an account number saved against the form's own copy", () => {
       expect((await getAccount(account.id, db)).externalAccountNumber).toBeNull();
     }),
   );
+
+  it(
+    "refuses a blank box from a form that carries no copy of what it was drawn with",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({
+        name: "Fidelity Taxable",
+        owner: alice,
+        externalAccountNumber: "Z-999",
+      });
+
+      // A page drawn before the form carried its own copy: an emptied box and an untouched one
+      // are the same submission, so keeping the number and reporting a save would report a
+      // clear that did not happen.
+      const errors = await refusalOf(
+        updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "" }, db),
+      );
+
+      expect(errors.externalAccountNumber).toBe(
+        `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
+          "to say whether its box was cleared or drawn empty. Nothing was saved. Reload the " +
+          "account, and clear the box again to remove the number.",
+      );
+      expect(errors.form).toBeUndefined();
+      expect((await getAccount(account.id, db)).externalAccountNumber).toBe("Z-999");
+    }),
+  );
 });
 
 describe("changing an account's kind", () => {
