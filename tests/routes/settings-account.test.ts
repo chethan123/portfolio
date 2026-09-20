@@ -2,6 +2,8 @@
 // (no ack, no close; a number that moved is refused) are accounts.server.ts's; this covers only the route's
 // wiring: a ticked close redirects to the list, a refused close reports closeError with values left undefined
 // (see below), and the save form carries the recorded number back so the domain can tell a stale box from an edit.
+// The number's own normalisation is input.server.ts's; it is asserted here because this POST is the only door a
+// line break no single-line box could have sent can reach the column through.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -163,6 +165,49 @@ describe("the account number the save form was drawn with", () => {
       const now = await getAccount(account.id, db);
       expect(now.externalAccountNumber).toBe("Z-999");
       expect(now.name).toBe("Renamed");
+    }),
+  );
+
+  it(
+    "reads a line break in either number box as the number without it",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const owner = await seedPerson({ name: "Alice" });
+
+      // Only a forged post carries one: a single-line box strips newlines on the way out, and
+      // statement.ts strips them on the way in. A break that reached the column would be a
+      // spelling the upload's mismatch check reads as another account (#312), and 0015 cleans
+      // the rows written before the parser stripped them — this is the door they came through.
+      const blank = await seedAccount({ name: "Fidelity Taxable", owner });
+      await action(
+        args(
+          post(
+            `/settings/accounts/${blank.id}`,
+            saveForm(owner.id, { externalAccountNumber: "Z-9\n99", fromExternalAccountNumber: "" }),
+          ),
+          { accountId: blank.id },
+        ),
+      );
+      expect((await getAccount(blank.id, db)).externalAccountNumber).toBe("Z-999");
+
+      // The same break in the copy the form was drawn with: still what is recorded, so the
+      // compare-and-set matches and the edit lands rather than reading as a conflict.
+      const recorded = await seedAccount({ name: "Schwab", owner, externalAccountNumber: "Z-999" });
+      const saved = await action(
+        args(
+          post(
+            `/settings/accounts/${recorded.id}`,
+            saveForm(owner.id, {
+              name: "Schwab",
+              externalAccountNumber: "A-111",
+              fromExternalAccountNumber: "Z-9\n99",
+            }),
+          ),
+          { accountId: recorded.id },
+        ),
+      );
+
+      expect(saved).toMatchObject({ saved: true });
+      expect((await getAccount(recorded.id, db)).externalAccountNumber).toBe("A-111");
     }),
   );
 

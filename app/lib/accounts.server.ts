@@ -193,6 +193,7 @@ const accountUpdateInput = accountInput.extend({
   fromExternalAccountNumber: z
     .string()
     .trim()
+    .transform((value) => value.replace(/[\r\n]/g, ""))
     .transform((value) => (value === "" ? null : value))
     .nullable()
     .optional(),

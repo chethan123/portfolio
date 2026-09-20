@@ -4,6 +4,8 @@
 -- CR, and the compare-and-set predicate matches neither value -- and uploads.server.ts refuses the
 -- account's own next statement, since the file's cell is now canonicalised and the column is not.
 -- Same rule as the parser's, so both sides of that check read one spelling again.
+-- nullif because the domain has no "": a value that was only breaks would arm the upload's guard
+-- against a number the form could never clear, both sides normalising it back to absent.
 update account
-set external_account_number = translate(external_account_number, E'\r\n', '')
+set external_account_number = nullif(translate(external_account_number, E'\r\n', ''), '')
 where external_account_number ~ E'[\r\n]';
