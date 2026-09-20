@@ -1749,8 +1749,9 @@ The advisory lock keys are arbitrary constants that must not change, and must no
 one-directional rather than mutual: the migration takes a blocking `pg_advisory_lock` and would queue
 behind a poll, while the poller takes `pg_try_advisory_lock` and would simply drop its tick.
 
-**`inTransaction` and the test seam.** One helper in `db.server.ts`, used by `prices.server.ts`,
-`instrument-resolution.server.ts` and `withAccountLock`:
+**`inTransaction`, `inOneSnapshot` and the test seam.** Two helpers in `db.server.ts`, one branch
+each. `inTransaction` is the writer's — one transaction from the read a writer decides on to its
+insert — used by `prices.server.ts`, `instrument-resolution.server.ts` and `withAccountLock`:
 
 ```ts
 db.isTransaction ? body(db) : db.transaction().execute(body)
@@ -1759,11 +1760,11 @@ db.isTransaction ? body(db) : db.transaction().execute(body)
 Kysely refuses `.transaction()` on a handle that is already one, and the primary test seam *is* a
 transaction (§9). The check is therefore load-bearing rather than defensive.
 
-`inOneSnapshot` is the same branch at `repeatable read` and `read only`, for a read that asks
-several questions and must not see a commit land between two of them — `netWorthChange` is the only
-caller so far. Read-only is what makes the level safe here: the changed error semantics that keep
-`repeatable read` out of the writer paths (#332) are a writer's, and Postgres raises no
-serialization failure for a transaction that only reads.
+`inOneSnapshot` is the reader's: the same branch at `repeatable read` and `read only`, for a read
+that asks several questions and must not see a commit land between two of them — `netWorthChange`
+is the only caller so far. Read-only is what makes the level safe here: the changed error
+semantics that keep `repeatable read` out of the writer paths (#332) are a writer's, and Postgres
+raises no serialization failure for a transaction that only reads.
 
 ### 7.3 Idempotency
 
@@ -2143,9 +2144,10 @@ which checks the `Caddyfile`'s body caps against a stub upstream.
 │  migrations.test.ts · numeric.test.ts                                    │
 │  They open their own pool because what they test IS the pool and the     │
 │  migration runner — the things withDatabase depends on.                  │
-│  lock · lock-schema · account-lock, and one price-backfill case: they    │
-│  commit (races on two connections, a real ledger write) and sweep        │
-│  their own rows, so the database is still left as found                  │
+│  lock · lock-schema · account-lock · net-worth-change-race, and          │
+│  one price-backfill case: they commit (races on two connections,         │
+│  a real ledger write) and sweep their own rows, so the database          │
+│  is still left as found                                                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
