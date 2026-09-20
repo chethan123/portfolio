@@ -13,7 +13,7 @@ import { applyPendingMigrations } from "../../server/migrations.ts";
 
 import { makeFixtures, type Fixtures } from "./fixtures.ts";
 
-import type { Kysely } from "kysely";
+import type { Kysely, RawBuilder } from "kysely";
 import type { Pool } from "pg";
 
 export const TEST_DATABASE_URL =
@@ -109,7 +109,45 @@ export async function backendPid(handle: Kysely<Database>): Promise<number> {
 export async function waitUntilBlocked(
   watcher: Kysely<Database>,
   pid: number,
-  { timeoutMs = 5_000, unless }: { timeoutMs?: number; unless?: Promise<unknown> } = {},
+  options: LockWait = {},
+): Promise<void> {
+  await waitUntilLocked(
+    watcher,
+    sql<{ blocked: boolean }>`
+      select exists (
+        select 1 from pg_stat_activity where pid = ${pid} and wait_event_type = 'Lock'
+      ) as blocked
+    `,
+    `Backend ${pid}`,
+    options,
+  );
+}
+
+/** The same wait for a read whose connection the pool picks, so no pid can be read ahead of it: pg_locks names the relation it queues on instead. */
+export async function waitUntilRelationBlocked(
+  watcher: Kysely<Database>,
+  relation: string,
+  options: LockWait = {},
+): Promise<void> {
+  await waitUntilLocked(
+    watcher,
+    sql<{ blocked: boolean }>`
+      select exists (
+        select 1 from pg_locks where relation = ${relation}::regclass and not granted
+      ) as blocked
+    `,
+    `A reader of ${relation}`,
+    options,
+  );
+}
+
+type LockWait = { timeoutMs?: number; unless?: Promise<unknown> };
+
+async function waitUntilLocked(
+  watcher: Kysely<Database>,
+  probe: RawBuilder<{ blocked: boolean }>,
+  subject: string,
+  { timeoutMs = 5_000, unless }: LockWait,
 ): Promise<void> {
   let outcome: string | undefined;
   unless?.then(
@@ -123,22 +161,18 @@ export async function waitUntilBlocked(
 
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const result = await sql<{ blocked: boolean }>`
-      select exists (
-        select 1 from pg_stat_activity where pid = ${pid} and wait_event_type = 'Lock'
-      ) as blocked
-    `.execute(watcher);
+    const result = await probe.execute(watcher);
     if (result.rows[0]?.blocked === true) return;
     if (outcome !== undefined) {
       throw new Error(
-        `Backend ${pid} ${outcome} before it blocked on a lock — the race this test drives ` +
+        `${subject} ${outcome} before it blocked on a lock — the race this test drives ` +
           "no longer contends on the row it expects to.",
       );
     }
     if (Date.now() >= deadline) {
       throw new Error(
-        `Timed out after ${timeoutMs}ms waiting for backend ${pid} to block on a lock — ` +
-          "either the race this test drives no longer contends on the row it expects to, " +
+        `Timed out after ${timeoutMs}ms — ${subject} never blocked on a lock. Either the race ` +
+          "this test drives no longer contends on the row it expects to, " +
           "or something is genuinely stuck.",
       );
     }

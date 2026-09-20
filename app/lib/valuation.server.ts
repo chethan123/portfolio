@@ -5,7 +5,7 @@ import { sql } from "kysely";
 
 import { numberTail } from "./account-label.ts";
 import { couldBeId } from "./database-id.ts";
-import { getDb, type Database } from "./db.server.ts";
+import { getDb, inOneSnapshot, type Database } from "./db.server.ts";
 import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
 import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from "kysely";
@@ -763,38 +763,46 @@ export async function netWorthChange(
   since: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthChange> {
-  // Narrowed asks nothing of manual_networth at all: the hand-typed history is the household's
-  // and has no owner (ADR-0008).
-  const [firstSet, inForce] = await Promise.all([
-    firstRecordedDate(filter, db),
-    isFiltered(filter) ? null : manualNetWorthAt(since, db),
-  ]);
+  // Several statements, one snapshot. A first upload committing between the discovery of the
+  // baseline and the sum of the totals would otherwise leave "nothing was recorded" answering for
+  // a portfolio that is no longer empty — #347 again, arrived at from the other side.
+  return inOneSnapshot(db, async (trx) => {
+    const firstSet = await firstRecordedDate(filter, trx);
 
-  // min(as_of_date) <= since is exactly "some set at or before since" — no second exists query.
-  if (firstSet !== null && firstSet <= since) {
-    return readChange(db, filter, { basis: "computed", date: since });
-  }
+    // min(as_of_date) <= since is exactly "some set at or before since" — no second exists query.
+    if (firstSet !== null && firstSet <= since) {
+      return readChange(trx, filter, { basis: "computed", date: since });
+    }
 
-  if (inForce !== null) {
-    return readChange(db, filter, { basis: "manual", date: inForce.date, amount: inForce.amount });
-  }
+    // Narrowed asks nothing of manual_networth at all: the hand-typed history is the household's
+    // and has no owner (ADR-0008).
+    const inForce = isFiltered(filter) ? null : await manualNetWorthAt(since, trx);
 
-  // Cold path only, so the whole tiny series rather than a third near-identical reader.
-  const firstManual = isFiltered(filter) ? undefined : (await manualNetWorth(db))[0];
+    if (inForce !== null) {
+      return readChange(trx, filter, {
+        basis: "manual",
+        date: inForce.date,
+        amount: inForce.amount,
+      });
+    }
 
-  if (firstManual !== undefined && (firstSet === null || firstManual.date < firstSet)) {
-    return readChange(db, filter, {
-      basis: "clamped",
-      date: firstManual.date,
-      amount: firstManual.amount,
-    });
-  }
+    // Cold path only, so the whole tiny series rather than a third near-identical reader.
+    const firstManual = isFiltered(filter) ? undefined : (await manualNetWorth(trx))[0];
 
-  if (firstSet !== null) {
-    return readChange(db, filter, { basis: "clamped", date: firstSet });
-  }
+    if (firstManual !== undefined && (firstSet === null || firstManual.date < firstSet)) {
+      return readChange(trx, filter, {
+        basis: "clamped",
+        date: firstManual.date,
+        amount: firstManual.amount,
+      });
+    }
 
-  return readChange(db, filter, { basis: "none", date: null, amount: "0" });
+    if (firstSet !== null) {
+      return readChange(trx, filter, { basis: "clamped", date: firstSet });
+    }
+
+    return readChange(trx, filter, { basis: "none", date: null, amount: "0" });
+  });
 }
 
 async function readChange(

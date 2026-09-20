@@ -1739,6 +1739,7 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
 | A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
+| A household's first statement committing while the Overview's change chip is resolving its baseline | `inOneSnapshot`: one `repeatable read`, read-only transaction over the whole resolution, so the baseline's four steps and the totals it is compared against read one committed state. Otherwise the discovery finds nothing recorded while the aggregate finds the new portfolio, and the chip reports the entire net worth as a gain from zero — [#347](https://github.com/chethan123/portfolio/issues/347) arrived at from the other side | `valuation.server.ts` (`netWorthChange`) |
 | A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:190`; [#311](https://github.com/chethan123/portfolio/issues/311) |
 | An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:190`; [#312](https://github.com/chethan123/portfolio/issues/312) |
 | An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:268` |
@@ -1757,6 +1758,12 @@ db.isTransaction ? body(db) : db.transaction().execute(body)
 
 Kysely refuses `.transaction()` on a handle that is already one, and the primary test seam *is* a
 transaction (§9). The check is therefore load-bearing rather than defensive.
+
+`inOneSnapshot` is the same branch at `repeatable read` and `read only`, for a read that asks
+several questions and must not see a commit land between two of them — `netWorthChange` is the only
+caller so far. Read-only is what makes the level safe here: the changed error semantics that keep
+`repeatable read` out of the writer paths (#332) are a writer's, and Postgres raises no
+serialization failure for a transaction that only reads.
 
 ### 7.3 Idempotency
 
@@ -2334,7 +2341,7 @@ still live in the current code:
 
 | File | Role |
 |---|---|
-| `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
+| `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and the two transaction-or-reuse branches the test seam forces: `inTransaction` for every writer, `inOneSnapshot` for a multi-statement read that needs one snapshot (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `manualNetWorthAt`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `commitUpload`, the ingest flow's one write. Its transaction enters through `withAccountLock`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2) |
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
