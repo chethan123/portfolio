@@ -1461,7 +1461,7 @@ describe("commitUpload", () => {
     "refuses a closed account in setBalance's words, before anything else",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
-      const account = await seedAccount({ kind: "brokerage" });
+      const account = await seedAccount({ kind: "brokerage", name: "Closed Brokerage" });
       const fund = await seedInstrument({ symbol: "CLS", name: "Closed-off Fund" });
       await seedInstrumentAlias({ instrument: fund, rawString: "CLS" });
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nCLS,10,\n");
@@ -1471,7 +1471,10 @@ describe("commitUpload", () => {
       const refusal = await refusalOf(() =>
         commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
-      expect(refusal.fieldErrors.form).toMatch(/closed account's history does not change/);
+      expect(refusal.fieldErrors.form).toBe(
+        "Closed Brokerage is closed, and a closed account's history does not change. " +
+          "If this account is still active, add it again under Settings → Accounts for future records.",
+      );
 
       const sets = await db
         .selectFrom("position_set")

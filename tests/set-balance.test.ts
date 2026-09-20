@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ValidationError, NotFoundError } from "~/lib/input.server";
+import { closeAccount } from "~/lib/accounts.server";
 import { lastRecorded, setBalance } from "~/lib/balances.server";
 import { accountTotal, netWorth } from "~/lib/valuation.server";
 
@@ -364,12 +365,19 @@ describe("setBalance", () => {
   it(
     "refuses a closed account, whose history does not change",
     withDatabase(async ({ db, seedAccount }) => {
-      const bank = await seedAccount({ kind: "bank", closedAt: "2026-01-01" });
+      const bank = await seedAccount({ kind: "bank", name: "Old Savings" });
+      await closeAccount(bank.id, { confirmClose: "true" }, db);
 
       const refusal = await refusalOf(() =>
         setBalance(bank.id, { amount: "1000.00", asOf: "2026-08-16" }, db),
       );
-      expect(refusal.fieldErrors.form).toMatch(/is closed/);
+      expect(refusal.fieldErrors.form).toBe(
+        "Old Savings is closed, and a closed account's history does not change. " +
+          "If this account is still active, add it again under Settings → Accounts for future records.",
+      );
+      expect(
+        await db.selectFrom("position_set").select("id").where("account_id", "=", bank.id).execute(),
+      ).toHaveLength(0);
     }),
   );
 

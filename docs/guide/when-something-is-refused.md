@@ -10,9 +10,10 @@ This page is for the handful where the message is clear but the *cause* is somew
 Starting an upload clears unfinished drafts more than 24 hours old. Committing removes its draft
 immediately. A draft can also become unavailable if its account closes.
 
-Open the account to check whether the statement landed. If it did not, start another upload;
-saved mappings and instrument names remain. For a closed account, the message suggests reopening
-it from Settings, but that control does not exist yet. See [closed-account recovery](people-and-accounts.md#correcting-or-retiring-an-account).
+If the account is open, open it to check whether the statement landed. If it did not, start another
+upload; saved mappings and instrument names remain. If the account is closed, add another under
+Settings → Accounts for future records only if it is still active; the closed account keeps its
+earlier history. See [closed-account recovery](people-and-accounts.md#correcting-or-retiring-an-account).
 
 ## A securities account will not let you type a balance
 

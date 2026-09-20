@@ -42,6 +42,13 @@ export type Account = {
   isClosed: boolean;
 };
 
+export function closedAccountRefusal(accountName: string): string {
+  return (
+    `${accountName} is closed, and a closed account's history does not change. ` +
+    "If this account is still active, add it again under Settings → Accounts for future records."
+  );
+}
+
 // Kind/taxTreatment/owner required: a later figure can't be computed without them and a guess
 // would be worse than an obvious gap. Institution/account number are free text.
 export const accountInput = z.object({
