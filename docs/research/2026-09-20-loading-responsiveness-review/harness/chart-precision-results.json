@@ -1,0 +1,49 @@
+{
+  "measuredAt": "2026-09-20T21:08:56.377Z",
+  "sourceUrl": "http://127.0.0.1:3417/?range=1d",
+  "nodeVersion": "v24.21.0",
+  "responseSha256": "96b756b300eef84784469fce093526ec809e64b4299b23d2a7f02a1649dd9012",
+  "method": "Existing response fetched once; chart geometry serialization simulated in memory. Neither app implementation nor served response changed.",
+  "compressionCaveat": "Both versions recompressed locally with identical settings. Brotli quality 4 figures are estimates, not observed transfer sizes; live streaming and flush behavior can change them.",
+  "before": {
+    "rawBytes": 778088,
+    "gzipLevel6Bytes": 94466,
+    "brotliQuality4Bytes": 59599
+  },
+  "after": {
+    "rawBytes": 659504,
+    "gzipLevel6Bytes": 50996,
+    "brotliQuality4Bytes": 37649
+  },
+  "saved": {
+    "rawBytes": 118584,
+    "gzipLevel6Bytes": 43470,
+    "brotliQuality4Bytes": 21950
+  },
+  "preserved": {
+    "targetsBefore": 1620,
+    "targetsAfter": 1620,
+    "linePointCountsBefore": [
+      1620
+    ],
+    "linePointCountsAfter": [
+      1620
+    ],
+    "dateReadoutCount": 1621,
+    "amountReadoutCount": 1621,
+    "exactDateReadoutStringsEqual": true,
+    "exactAmountReadoutStringsEqual": true,
+    "newlyZeroWidthTargets": 0,
+    "targetWidthsTotalPercentBefore": 100.00000000000234,
+    "targetWidthsTotalPercentAfterExactDecimal": 100
+  },
+  "geometry": {
+    "svgCoordinateValuesChanged": 6476,
+    "maxSvgCoordinateErrorViewBoxUnits": 0.004996666369436298,
+    "svgErrorInterpretation": "Theoretical maximum is 0.005 viewBox units per coordinate; CSS-pixel errors are 0.005 * renderedWidth / 1000 horizontally and 0.005 * renderedHeight / 300 vertically.",
+    "maxGuideOrMarkerErrorPercentagePoints": 0.0004992113900925688,
+    "maxHitEdgeErrorPercentagePoints": 0.0004994671554463537,
+    "maxHitWidthErrorPercentagePoints": 0.000737243701796615,
+    "percentErrorInterpretation": "Guide/marker offsets and cumulative hit edges move at most 0.0005 percentage points, or 0.000005 * rendered dimension CSS pixels. Individual widths are differences of rounded edges and can differ by up to 0.001 percentage points; total width stays exactly 100 percent."
+  }
+}
