@@ -165,4 +165,46 @@ describe("the account number the save form was drawn with", () => {
       expect(now.name).toBe("Renamed");
     }),
   );
+
+  it(
+    "draws no copy at all for a submission that carried none, rather than inventing a blank one",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const owner = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({
+        name: "Fidelity Taxable",
+        owner,
+        externalAccountNumber: "Z-999",
+      });
+      const path = `/settings/accounts/${account.id}`;
+
+      // A page from before the form carried its copy: the box emptied on purpose, the name not
+      // filled in. Only the name is reported, so the emptied box comes back for another try.
+      const refused = await action(
+        args(post(path, saveForm(owner.id, { externalAccountNumber: "", name: "" })), {
+          accountId: account.id,
+        }),
+      );
+      expect(refused).toMatchObject({ errors: { name: "An account name is required." } });
+
+      const revalidated = await loader(args(get(path), { accountId: account.id }));
+      expect(renderRoute(AccountDetail, path, revalidated, { actionData: refused })).not.toContain(
+        'name="fromExternalAccountNumber"',
+      );
+
+      // Sent again as that page sends it: still a blank box nothing explains, so still refused.
+      const again = await action(
+        args(post(path, saveForm(owner.id, { externalAccountNumber: "", name: "Renamed" })), {
+          accountId: account.id,
+        }),
+      );
+
+      expect(again).toMatchObject({
+        saved: false,
+        errors: { externalAccountNumber: expect.stringContaining('recorded as "Z-999"') },
+      });
+      const now = await getAccount(account.id, db);
+      expect(now.externalAccountNumber).toBe("Z-999");
+      expect(now.name).toBe("Fidelity Taxable");
+    }),
+  );
 });
