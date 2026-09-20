@@ -816,18 +816,20 @@ async function readChange(
       past.amount === undefined
         ? narrow(qb.selectFrom(valuedAt(past.date)))
             .select(sql<string>`coalesce(sum(value), 0)`.as("amount"))
-        : qb.selectNoFrom(sql<string>`cast(${past.amount} as numeric(20, 4))`.as("amount")),
+        : qb.selectNoFrom(sql<string>`round(cast(${past.amount} as numeric), 4)`.as("amount")),
     )
     .selectFrom(["present", "past"])
     .select([
-      sql<string>`cast(present.amount as numeric(20, 4))`.as("current"),
-      sql<string>`cast(past.amount as numeric(20, 4))`.as("previous"),
-      sql<string>`cast(present.amount - past.amount as numeric(20, 4))`.as("difference"),
-      // Same width as the three amounts above it: a baseline of pennies makes the ratio enormous,
-      // and a percentage Postgres refuses to cast is a 500 on the Overview rather than a big number.
+      // round, not cast(… as numeric(20, 4)): scale fixed, width not. Any width here is a cliff the
+      // schema does not have — a hand-loaded baseline of a ten-thousandth against a balance the app
+      // accepts (12 integer digits) puts the ratio past 16 of them, and holding_valued guards each
+      // holding below the money column but never their sum. Overflowing is a 500 on the Overview.
+      sql<string>`round(present.amount, 4)`.as("current"),
+      sql<string>`round(past.amount, 4)`.as("previous"),
+      sql<string>`round(present.amount - past.amount, 4)`.as("difference"),
       sql<string | null>`case
         when past.amount = 0 then null
-        else cast((present.amount - past.amount) / abs(past.amount) * 100 as numeric(20, 4))
+        else round((present.amount - past.amount) / abs(past.amount) * 100, 4)
       end`.as("percent"),
     ])
     .executeTakeFirstOrThrow();

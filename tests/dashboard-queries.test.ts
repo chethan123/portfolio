@@ -376,34 +376,68 @@ describe("netWorthChange", () => {
   );
 
   it(
-    "measures a rise from a hand-typed baseline of pennies without overflowing the percentage",
+    "states the ratio between a hand-typed ten-thousandth and the largest balance the app takes, rather than overflowing",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, seedManualNetWorth, usdInstrument }) => {
       const owner = await seedPerson();
       const usd = await usdInstrument();
       const account = await seedAccount({ owner, kind: "bank" });
 
+      // Twelve integer digits, which is what a typed balance may carry (moneyMagnitudeRule).
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
-        holdings: [{ instrument: usd, quantity: "500.00000000" }],
+        holdings: [{ instrument: usd, quantity: "999999999999.99000000" }],
       });
 
       // The oldest hand-typed point is the one carried forward, and decades on it can be a rounding
-      // error beside today's total — a ratio the percentage has to state rather than refuse.
-      await seedManualNetWorth({ date: "1995-12-31", amount: "0.0499" });
+      // error beside today's total. Eighteen integer digits of ratio: past anything a fixed numeric
+      // width in this query would take, and a percentage Postgres refuses is a 500 on the Overview.
+      await seedManualNetWorth({ date: "1995-12-31", amount: "0.0001" });
       await seedManualNetWorth({ date: "2000-12-31", amount: "-0.0001" });
 
       expect(await netWorthChange(ALL_OWNERS, "1999-01-01", db)).toEqual({
-        current: "500.0000",
-        previous: "0.0499",
-        difference: "499.9501",
-        percent: "1001904.0080",
+        current: "999999999999.9900",
+        previous: "0.0001",
+        difference: "999999999999.9899",
+        percent: "999999999999989900.0000",
         basis: "manual",
         basisDate: "1995-12-31",
       });
 
-      // abs(previous) reads a climb out of debt as a rise at this width too.
-      expect((await netWorthChange(ALL_OWNERS, "2024-09-20", db)).percent).toBe("500000100.0000");
+      // abs(previous) reads a climb out of debt as a rise at this magnitude too.
+      expect((await netWorthChange(ALL_OWNERS, "2024-09-20", db)).percent).toBe(
+        "999999999999990100.0000",
+      );
+    }),
+  );
+
+  it(
+    "totals two holdings that each fit the money column but together do not",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet, seedQuote, seedDailyClose }) => {
+      const owner = await seedPerson();
+      // fitsTheMoneyColumn guards one holding below numeric(20, 4); nothing guards their sum, so
+      // neither the totals nor the difference between them can carry a width either.
+      const trust = await seedInstrument({ symbol: "TRUST", name: "Closely Held Trust" });
+      await seedQuote({ instrument: trust, price: "9999999.9999" });
+      await seedDailyClose({ instrument: trust, date: "2026-01-31", close: "9999999.9999" });
+
+      for (const name of ["First", "Second"]) {
+        const account = await seedAccount({ name, owner });
+        await seedPositionSet({
+          account,
+          asOf: "2026-01-31",
+          holdings: [{ instrument: trust, quantity: "1000000000.00000000" }],
+        });
+      }
+
+      expect(await netWorthChange(ALL_OWNERS, "2026-02-01", db)).toEqual({
+        current: "19999999999800000.0000",
+        previous: "19999999999800000.0000",
+        difference: "0.0000",
+        percent: "0.0000",
+        basis: "computed",
+        basisDate: "2026-02-01",
+      });
     }),
   );
 
