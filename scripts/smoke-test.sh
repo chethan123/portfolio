@@ -222,7 +222,8 @@ migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' |
 [[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
 printf 'migration .sql files in the image: %s\n' "$migration_count"
 
-for path in /app/server/migrate.ts /app/server/yahoo-client.ts \
+for path in /app/server/server-build.ts /app/server/action-origins.ts \
+  /app/server/migrate.ts /app/server/yahoo-client.ts \
   /app/server/symbol-pattern.ts /app/server/price-worker.ts; do
   run_in_image "test -f $path" || fail "missing from the runtime image: $path"
 done
