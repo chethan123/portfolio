@@ -33,22 +33,30 @@ const NYSE_HOLIDAYS: ReadonlySet<IsoDate> = new Set([
   "2030-06-19", "2030-07-04", "2030-09-02", "2030-11-28", "2030-12-25",
 ]);
 
+// One per zone: options fixed, so the zone is the whole key. Constructing is the expensive half;
+// the chart converts per plotted point (#371).
+const partsFormatters = new Map<string, Intl.DateTimeFormat>();
+
 /**
  * Wall clock in a named zone, as parts. `Intl`, not epoch arithmetic: the offset moves twice a
  * year. `en-CA` gives zero-padded ISO-ordered numerics, so the parts reassemble as `YYYY-MM-DD`.
  */
 function partsIn(instant: Date, timeZone: string): Record<string, string> {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    // `h23`, not `hour12: false` — that formats midnight as "24" on some engines.
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    weekday: "short",
-  });
+  let formatter = partsFormatters.get(timeZone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      // `h23`, not `hour12: false` — that formats midnight as "24" on some engines.
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      weekday: "short",
+    });
+    partsFormatters.set(timeZone, formatter);
+  }
 
   const parts: Record<string, string> = {};
   for (const { type, value } of formatter.formatToParts(instant)) parts[type] = value;
