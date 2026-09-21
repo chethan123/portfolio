@@ -18,6 +18,16 @@ import type { ChartPoint, SessionAxis } from "~/lib/chart-range";
 const WIDTH = 1000;
 const HEIGHT = 300;
 
+// Drawing coordinates, never money. Two decimals is below a pixel at any width the layout allows,
+// and the digits past it are random enough to survive Brotli nearly whole (#207). Not `toFixed`:
+// it pads the zeros this exists to drop.
+const coordinate = (value: number) => Math.round(value * 100) / 100;
+
+// One quantum for every percentage here. A hit target's width is right edge minus left edge: a
+// right edge and the next left edge are the same expression, so they round alike and the widths
+// telescope to exactly 100%. Rounding each width alone drifts off it.
+const milliPercent = (value: number, extent: number) => Math.round((value / extent) * 100_000);
+
 const PADDING = 0.08;
 
 // Fractions of the drawn value domain — feeds both grid and axis labels, so a rule always has a label.
@@ -187,7 +197,9 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
 }
 
 const toPolyline = (points: ChartPoint[], scale: Scale) =>
-  points.map((point) => `${scale.x(point.date)},${scale.y(point.amount)}`).join(" ");
+  points
+    .map((point) => `${coordinate(scale.x(point.date))},${coordinate(scale.y(point.amount))}`)
+    .join(" ");
 
 export type HitTarget = {
   left: number;
@@ -217,10 +229,12 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 
   if (first === undefined || last === undefined) return "";
 
-  const line = points.map((point) => `L${scale.x(point.date)},${scale.y(point.amount)}`);
+  const line = points.map(
+    (point) => `L${coordinate(scale.x(point.date))},${coordinate(scale.y(point.amount))}`,
+  );
 
-  return `M${scale.x(first.date)},${HEIGHT} ${line.join(" ")} L${scale.x(
-    last.date,
+  return `M${coordinate(scale.x(first.date))},${HEIGHT} ${line.join(" ")} L${coordinate(
+    scale.x(last.date),
   )},${HEIGHT} Z`;
 }
 
@@ -404,8 +418,8 @@ export function NetWorthChart({
           <span
             className="chart-marker"
             style={{
-              left: `${(scale.x(last.date) / WIDTH) * 100}%`,
-              top: `${(scale.y(last.amount) / HEIGHT) * 100}%`,
+              left: `${milliPercent(scale.x(last.date), WIDTH) / 1000}%`,
+              top: `${milliPercent(scale.y(last.amount), HEIGHT) / 1000}%`,
             }}
           />
         ) : null}
@@ -417,11 +431,13 @@ export function NetWorthChart({
               key={index}
               className="chart-hit"
               tabIndex={-1}
-              style={{ width: `${((target.right - target.left) / WIDTH) * 100}%` }}
+              style={{
+                width: `${(milliPercent(target.right, WIDTH) - milliPercent(target.left, WIDTH)) / 1000}%`,
+              }}
             >
               <span
                 className="chart-guide"
-                style={{ left: `${(scale.x(target.point.date) / WIDTH) * 100}%` }}
+                style={{ left: `${milliPercent(scale.x(target.point.date), WIDTH) / 1000}%` }}
               />
               <span className="chart-point-readout">
                 <Readout target={target} masked={masked} session={session} />

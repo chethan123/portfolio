@@ -513,3 +513,84 @@ describe("a grained axis (spec 0022, ADR-0014)", () => {
     expect(markup).toContain('<span class="chart-readout-date">4 Jun 2026</span>');
   });
 });
+
+describe("the serialized drawing geometry", () => {
+  const render = (computed: ChartPoint[]) =>
+    renderToStaticMarkup(
+      <NetWorthChart
+        manual={[]}
+        computed={computed}
+        label="Net worth"
+        masked={false}
+        session={null}
+        id="test"
+      />,
+    );
+
+  const linePoints = (markup: string) =>
+    markup.match(/<polyline class="chart-line" points="([^"]*)"/)?.[1] ?? "";
+
+  const areaPath = (markup: string) => markup.match(/<path class="chart-area"[^>]*d="([^"]*)"/)?.[1] ?? "";
+
+  const hitWidths = (markup: string) =>
+    [...markup.matchAll(/<div class="chart-hit"[^>]*style="width:(-?[\d.]+)%"/g)].map(
+      (match) => match[1] ?? "",
+    );
+
+  const DAY = 86_400_000;
+
+  const daily = (count: number, amount = (index: number) => `${100000 + index * 7}.37`) =>
+    Array.from({ length: count }, (_, index) => ({
+      date: new Date(Date.UTC(2026, 0, 1) + index * DAY).toISOString().slice(0, 10),
+      amount: amount(index),
+    }));
+
+  it("serializes every coordinate at two decimals, neither of them a padded zero", () => {
+    // four consecutive days put x on thirds of 1000, which no decimal expansion terminates on.
+    // The pattern is the whole rule: at most two decimals, and never a trailing zero, which
+    // `Math.round(v * 100) / 100` cannot produce and `toFixed(2)` always would.
+    const markup = render(daily(4));
+    const tokens = linePoints(markup).split(" ");
+
+    const numbers = [
+      ...tokens.flatMap((token) => token.split(",")),
+      ...areaPath(markup).split(/[MLZ,\s]+/),
+    ].filter((number) => number !== "");
+
+    // a token per point and a path that was actually found: neither half asserts over nothing
+    expect(tokens).toHaveLength(4);
+    expect(areaPath(markup)).not.toBe("");
+    for (const number of numbers) expect(number).toMatch(/^-?\d+(\.\d?[1-9])?$/);
+  });
+
+  it("rounds to nearest rather than truncating, so the error does not all fall one way", () => {
+    // the padded domain puts these at y=279.310344… and y=20.689655…: one rounds up, one down,
+    // and a truncating shortcut would move both toward the floor
+    expect(linePoints(render(rising))).toBe("0,279.31 1000,20.69");
+  });
+
+  it("keeps the hit targets tiling the plot to exactly one hundred percent", () => {
+    // summed as thousandths: at these counts the floats' own sum misses 100 by an ulp or two
+    for (const count of [2, 3, 7, 180, 181]) {
+      const total = hitWidths(render(daily(count)))
+        .map((width) => Math.round(Number(width) * 1000))
+        .reduce((sum, width) => sum + width, 0);
+
+      expect(total).toBe(100_000);
+    }
+  });
+
+  it("keeps a hair-thin target positive, because a collapsed target cannot be tapped", () => {
+    // three instants two seconds apart inside a day-wide span: the middle target is 0.0023% of the
+    // plot, close to the narrowest the 1D range actually draws, and a coarser quantum erases it
+    const crowded: ChartPoint[] = [
+      { date: "2026-01-01T00:00:00.000Z", amount: "100000.00" },
+      { date: "2026-01-01T12:00:00.000Z", amount: "100100.00" },
+      { date: "2026-01-01T12:00:02.000Z", amount: "100200.00" },
+      { date: "2026-01-01T12:00:04.000Z", amount: "100300.00" },
+      { date: "2026-01-02T00:00:00.000Z", amount: "100400.00" },
+    ];
+
+    expect(hitWidths(render(crowded))[2]).toBe("0.002");
+  });
+});
