@@ -108,9 +108,12 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * React Router 7.18.2 makes this same `Origin` check for document mutations/single-fetch actions,
- * but not resource routes (`/lock-now`, `/masking`, `/refresh`). Compares hosts, not `PUBLIC_ORIGIN`,
- * to agree with the framework behind the proxy; a missing `Origin` continues, `Origin: null` is refused.
+ * React Router makes an `Origin` check of its own for document mutations/single-fetch actions, but
+ * not resource routes (`/lock-now`, `/masking`, `/refresh`) — the gap this fills. Since 7.18.3 the
+ * framework's compares whole origins where this compares hosts, so behind the proxy the two agree
+ * only because `server/server-build.ts` allows this deployment's host. Hosts, not `PUBLIC_ORIGIN`:
+ * the suite addresses the instance over http while the config names https. A missing `Origin`
+ * continues, `Origin: null` is refused.
  */
 const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
   if (!MUTATION_METHODS.has(request.method.toUpperCase())) return;

@@ -256,7 +256,7 @@ sequenceDiagram
     E->>DB: node server/migrate.ts
     Note right of E: Ledger ensured, advisory lock taken,<br/>then each .sql file in its own transaction
     DB-->>E: schema current
-    E->>S: exec react-router-serve ./build/server/index.js
+    E->>S: exec react-router-serve ./server/server-build.ts
     S-->>C: GET /healthz → 200
     Note over C: caddy depends_on app: service_healthy
 ```
@@ -388,7 +388,7 @@ table with a single grep. They come in three tiers.
 | Importing `yahoo-finance2` | `server/yahoo-client.ts:47` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it, quotes and daily history, and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts`, the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all, since it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export, `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it, the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
-| Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes, which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
+| Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes, which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. Since 7.18.3 the framework's own check compares whole origins, so behind a TLS-terminating proxy — where the app only ever sees `http` — it refused the instance's own pages. `server/server-build.ts` hands it this deployment's **host** as `allowedActionOrigins`, which is the same answer this middleware already gives, not a third one. |
 | Arming the scheduled price refresh | `app/root.tsx`'s `middleware` export, `pricePollerMiddleware`, listed **last**, after `crossOriginMutationMiddleware` and `lockMiddleware` | Last so a refusal never carries the side effect: `lockMiddleware` throws for a locked, grant-less request before calling `next()`, and only a request that reaches `next()` all the way through the array arms the poller. Being last still means `/healthz` and `/unlock`, the lock's own exemptions, arm it, which is the shipped healthcheck's situation. A second site (a route or loader calling `startPricePoller` on its own) would race the same idempotent guard for no benefit and could reintroduce the render-only bootstrap this row replaces (`app/lib/price-poller.server.ts`). |
 
 **Owned by a module, upheld by its callers.**
@@ -1994,7 +1994,7 @@ Three stages, each with one job:
 same `ghcr.io/chethan123/portfolio-app` image with `entrypoint:` replaced in `compose.yaml`, dropping
 the image's own `CMD` in favour of `node ./server/price-worker.ts` and `node ./server/egress-proxy.ts`
 respectively (§3.1). One version to tag, one image to pull three times, and one release train: a fix
-to either process ships and rolls back exactly as an app fix does. The nine `server/*.ts` files in the
+to either process ships and rolls back exactly as an app fix does. The eleven `server/*.ts` files in the
 runtime image are why `server/config.ts` and `server/db.ts` are dependency-light and side-effect free:
 `config.ts`, `db.ts` and `migrations.ts` are executed two different ways, bundled into the server
 build by Vite for the app and run directly by Node underneath the entrypoint's config gate and
@@ -2317,6 +2317,8 @@ still live in the current code:
 
 | File | Role |
 |---|---|
+| `server-build.ts` | What the image's `CMD` serves: the built server re-exported with `allowedActionOrigins` set from `PUBLIC_ORIGIN`. A wrapper rather than a custom server, so `react-router-serve` keeps owning compression, the immutable year on hashed assets and signal handling |
+| `action-origins.ts` | The one rule behind that: the **host**, never the origin, so the framework's check agrees with `crossOriginMutationMiddleware` and with the suite, which addresses the instance over http while the config names https |
 | `config.ts` | The whole configuration API. `loadConfig(env)` is pure, since it neither reads `process.env` nor exits, which is what lets it run under Node's type stripping at container start; `getConfig()` is the one place a value is read and cached |
 | `db.ts` | The only Postgres pool construction site, because the type-parser overrides are registered here |
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
