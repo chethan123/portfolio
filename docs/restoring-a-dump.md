@@ -8,8 +8,8 @@ A **dump** is the archive on this host. A **backup** is a copy your own tool has
 ([`CONTEXT.md`](../CONTEXT.md)). This document restores from either, because they are the same file;
 where it matters that the file has travelled, it says so.
 
-Every command runs from the repository root, where `compose.yaml` is, as the account that owns
-`./volumes/dumps`.
+Every command runs from the repository root, where `compose.yaml` is. Run them as root, or as the
+account that owns `./volumes/dumps` — `DUMP_UID` decides what owns the directory, not who types.
 
 Read [Before you start](#before-you-start) and [Every restore starts here](#every-restore-starts-here)
 even if you are mid-incident. What follows those is ordered by which situation you are in:
@@ -40,11 +40,10 @@ you want the symptom, that is [`runbook.md`](runbook.md).
 | `last-error.json` | the last failure, with the `stage` it failed at |
 
 The stamp is UTC whatever `TZ` says. All of them land `0640` owned by `DUMP_UID:DUMP_GID`, in a
-`0750` directory that is yours to create — so **every command below runs as that account**, markers
-included, and as anyone else the first `cat` is a permission error rather than a missing file. When
-that account is not available to you,
+`0750` directory that is yours to create. Root reads them regardless; so does that account. **Any
+third account gets a permission error on the first `cat`, not a missing file** — and
 [When your shell cannot read the archive](#when-your-shell-cannot-read-the-archive) is the way
-round it.
+round it without widening the mode.
 
 **`last-error.json` is never cleared by a later success.** Judge a run by `last-attempt.json`'s
 `outcome`, not by whether an error file exists.
@@ -78,8 +77,16 @@ cat volumes/dumps/last-success.json
 
 `last-success.json` names the newest archive a run actually verified, which is usually the one you
 want. Its `server_version` is the full version of the server that wrote it — `17.11`, not `17` —
-and the major in front is the floor: restoring into that major or a newer one is supported, into an
-older one is not.
+and the major in front is the floor. Restoring into that major or a newer one is supported, into an
+older one is not, so check what you are restoring *into* before you commit to an archive:
+
+```sh
+docker compose run --rm --no-deps --entrypoint postgres db --version
+```
+
+On a rebuild you have not created `./volumes/dumps` yet when you first read this, so run Step 1
+after the copy in [Rebuilding a machine from nothing](#rebuilding-a-machine-from-nothing); the two
+steps are the same either way, only their moment differs.
 
 **An archive you are still deciding about can be pruned out from under you.** Retention deletes by
 the stamp in the filename, not by mtime, so copying files around does not buy time. What is safe:
@@ -110,8 +117,9 @@ without restoring it anywhere, which is the check that matters for a file that n
 same code the nightly run uses before it publishes anything.
 
 **`verify` prints nothing at all, whichever way it goes**, so read `$?` and not the screen: `0` is a
-whole archive, `1` is a bad one, and the two look identical. A missing file is also `1`, so if you
-get one, check the path before you conclude the archive is bad.
+whole archive, `1` is a bad one, and the two look identical. The `Container portfolio-db-1 Healthy`
+lines you do see are Compose narrating its own startup, not the check talking. A missing file is
+also `1`, so if you get one, check the path before you conclude the archive is bad.
 
 **A missing sidecar reads as a corrupt archive.** With no `.dump.json` beside it, the hash line
 feeds `sha256sum -c -` nothing and it exits `1` saying `no properly formatted checksum lines
@@ -226,7 +234,8 @@ docker compose exec -T app node -e \
   "fetch('http://127.0.0.1:3000/healthz').then(async r=>console.log(r.status, await r.text()))"
 
 docker compose exec -T db psql -U portfolio -d portfolio -c "
-  select (select count(*) from account)          as accounts,
+  select (select count(*) from person)           as people,
+         (select count(*) from account)          as accounts,
          (select count(*) from holding)          as holdings,
          (select count(*) from position_set)     as position_sets,
          (select coalesce(sum(value),0)
@@ -234,14 +243,23 @@ docker compose exec -T db psql -U portfolio -d portfolio -c "
 ```
 
 `/healthz` answering `200` with `"migrations":"current"` says the schema is whole and the app is
-reading it. The counts are the part worth pausing on: compare them against what the household
-should have, because nothing above this line would have told you they were zero. Then open a screen
-and look for a name you recognise.
+reading it; `"quotes":"not_attempted"` beside it is the price poller not having run yet, not a
+restore problem. The counts are the part worth pausing on: compare them against what the household
+should have, because nothing above this line would have told you they were zero.
+
+Then prove a page is actually served, which no count does. Ask from inside the container, so the
+answer does not depend on your proxy or your DNS being back:
+
+```sh
+docker compose exec -T app node -e \
+  "fetch('http://127.0.0.1:3000/').then(r=>r.text()).then(t=>console.log(t.length, t.includes('A NAME YOU KNOW')))"
+```
 
 **Check the dumper caught up.** `cat volumes/dumps/last-attempt.json`; the freshness checks a
-collector runs are [`operating.md`](operating.md#what-to-point-your-collector-at)'s. A restored
-instance starts the dumper with a marker from before the restore, so the next run is the one that
-tells you anything.
+collector runs are [`operating.md`](operating.md#what-to-point-your-collector-at)'s. If you carried
+the markers across, the one you are reading predates the restore and the *next* run is the first to
+tell you anything; on a directory that had none, the dumper has already run and this marker is that
+run.
 
 **If you stepped back to a much smaller database, reset the shrink baseline.** The dumper refuses
 any archive less than half the size of the last successful one at the same compression — a
@@ -283,8 +301,14 @@ docker volume ls | grep db-store        # nothing? skip to the next step
 
 docker compose down -v                  # in the OLD checkout: drops the record, leaves the data
 # or, if that directory is gone
-docker volume rm portfolio_db-store
+docker volume rm portfolio_db-store     # the project is always `portfolio`, whatever you cloned into
 ```
+
+**`-v` is safe here only because `db-store` is bound to a path in the checkout**, so the record goes
+and the directory stays. An instance old enough to still keep its cluster in a Docker-managed
+`portfolio_db-data` has no such protection and `-v` would destroy it; that case is
+[`operating.md`](operating.md#moving-an-instance-that-predates-the-local-path)'s, and `docker volume
+ls` above tells you which you have.
 
 `down -v` discarding the record rather than the directory is
 [`operating.md`](operating.md#where-the-database-lives). Moving a cluster you still have, rather
@@ -296,34 +320,43 @@ Install Docker, clone this repository, and work from its root. Three things have
 before a single `docker compose` command will run:
 
 ```sh
-cp /path/to/your/kept/.env /path/to/your/kept/allowed-emails.txt .
+cp /path/to/your/kept/.env /path/to/your/kept/allowed-emails.txt .   # both at the repo root
+chmod 0600 .env                         # POSTGRES_PASSWORD and the gate's secrets live in it
+
+grep PUBLIC_ORIGIN .env                 # is this the hostname THIS machine will serve at?
 
 mkdir -p ./volumes/db/data ./volumes/dumps
 cp /path/to/your/archive/portfolio-20260922T021850Z.dump* ./volumes/dumps/
 
-chown -R 1001:1001 ./volumes/dumps      # the DUMP_UID:DUMP_GID pair in .env, whatever yours is
+# after the copy, and read out of .env rather than typed, so it cannot disagree with it
+chown -R "$(grep '^DUMP_UID=' .env | cut -d= -f2):$(grep '^DUMP_GID=' .env | cut -d= -f2)" ./volumes/dumps
 chmod 0750 ./volumes/dumps
 ```
+
+**Stop on that `grep` if the answer is no.** A different hostname orphans every enrolled passkey and
+leaves the instance locked with none that work — read
+[`runbook.md`](runbook.md#i-need-to-move-to-another-machine) before you go further, not after.
+`./volumes/db/data` needs no ownership of its own; the database container sets it up.
 
 **The trailing `*` on the copy is load-bearing**: the archive and its `.dump.json` travel together,
 because [Step 2](#step-2-prove-the-archive-before-you-trust-it) reads the recorded hash out of the
 sidecar and `verify` reads the archive at `/dumps/…`, which is this directory seen from inside the
 container. An archive parked anywhere else on the host cannot be checked.
 
-**Pick `DUMP_UID` before you `up`, and do not use `id -u` blindly.** `up` checks only that the pair
-is *set*, so a stale one from the old machine starts the container and then kills it —
-`/dumps is not writable as 4242:4242`, and `refusing to run as root` if you are root and copied
-`0` — with `restart: on-failure` turning that into a crash loop whose `start_period` keeps
-`docker compose ps` looking plausible for a quarter of an hour. Any non-root account will do,
-including the one the old machine used; what matters is that `.env`'s pair, the `chown` above and
-the account you are typing as all name it. **Self-hosting as root is the case to watch**: `id -u`
-answers `0`, which the dumper refuses by design, so choose a uid (`1001` is as good as any), own
-the directory as it, and put it in `.env`.
+**The `.env` you carried already chose `DUMP_UID`; make the directory match it, not the reverse.**
+`up` checks only that the pair is *set*, so a value the directory does not honour starts the
+container and then kills it — `/dumps is not writable as 4242:4242` — with `restart: on-failure`
+turning that into a crash loop whose `start_period` keeps `docker compose ps` looking plausible for
+a quarter of an hour. The `chown` above reads the pair out of `.env` for exactly that reason.
+
+Only if `.env` has no pair do you choose one, and then **`id -u` is not the answer when you are
+root**: `0` is refused by design (`refusing to run as root`). Any non-root uid will do — `1001` is
+as good as any — set in `.env` and owning the directory.
 
 ### Then the database on its own, and the restore into it
 
 ```sh
-docker compose up -d db
+docker compose up -d --wait db          # --wait, or the next line races initdb
 
 DUMP=volumes/dumps/portfolio-20260922T021850Z.dump     # your archive, not this stamp
 
@@ -335,8 +368,20 @@ docker compose exec -T db createdb -U portfolio -O portfolio portfolio
 docker compose exec -T db pg_restore --exit-on-error --single-transaction \
   -U portfolio -d portfolio < "$DUMP"
 
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "select (select count(*) from person) as people, (select count(*) from account) as accounts"
+
 docker compose up -d
+docker compose ps
 ```
+
+**`pg_restore` is silent on success too** — exit `0` and no output. The `psql` line is there because
+this is the last moment backing out is free: if those counts are zero you restored an archive of an
+empty database, and starting `app` on it only makes that harder to see.
+
+Without `--wait`, `up -d db` returns as soon as the container starts while `initdb` is still
+running, and the first `exec` answers
+`connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed`.
 
 This is [Restoring in place](#restoring-in-place) without the `stop` and `start` lines, written out
 so you can run it rather than assemble it — there is nothing to stop, because nothing is up yet.
@@ -360,6 +405,20 @@ The closing `docker compose up -d` starts the dumper, which dumps at once on a d
 boot dump back for the rest of the hour it records, and `last-success.json`, which arms the shrink
 guard against your first run. Neither is a fault; both are worth knowing before you conclude the
 dumper is broken. See [After any restore](#after-any-restore).
+
+> **That boot dump puts the archive you just carried here in reach of retention.** Being the newest
+> matching archive is the only thing protecting it, and the boot dump takes that from it. The run
+> after — tomorrow at `DUMP_AT`, or the next restart — prunes it along with its `.dump.json` if its
+> stamp is older than `DUMP_KEEP_DAYS`. Measured: a fourteen-day-old archive beside a fresh one is
+> gone in a single pass, sidecar and all. So unless your collector still holds a copy elsewhere,
+> **rename it out of the pattern before that `up -d`**, which is what keeps it:
+>
+> ```sh
+> cp volumes/dumps/portfolio-20260922T021850Z.dump ./restored-from.dump
+> ```
+>
+> Any name that is not exactly `portfolio-<YYYYMMDDTHHMMSSZ>.dump` is invisible to retention
+> ([Step 1](#step-1-choose-the-archive)).
 
 ---
 
