@@ -5,6 +5,7 @@ balances, and see holdings, allocation, estimated gains, and projected income.
 
 - [User guide](docs/guide/README.md): using the app.
 - [Operating guide](docs/operating.md): installation, backups, and upgrades.
+- [Restoring from a dump](docs/restoring-a-dump.md): the recovery procedure, and the drill.
 - [Architecture](ARCHITECTURE.md): code and data flows.
 - [Design](DESIGN.md): domain rules, decisions, and limitations.
 
@@ -289,7 +290,9 @@ To build from this checkout:
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-Back up before upgrading. See [Upgrading](docs/operating.md#upgrading).
+Back up before upgrading. See [Upgrading](docs/operating.md#upgrading). The dump service writes a
+verified archive nightly into `./volumes/dumps/`; copying those off the host is yours, and
+[Restoring from a dump](docs/restoring-a-dump.md) is how one comes back.
 
 ### Who gets in, and where that is decided
 

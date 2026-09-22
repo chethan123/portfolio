@@ -383,11 +383,12 @@ The stack cannot do these for you.
 6. **Keep the address allowlist short.** It is the whole of who may enter; there is no second check
    behind it.
 
-[`operating.md`](operating.md) covers three of these and points somewhere useful for a fourth:
-"Reverse proxy and TLS" for terminating it yourself, its allowlist section for who may enter, and
-its recovery section for why the second passkey matters. The rest are genuinely yours. There is no
-disk-encryption procedure there, "Backups" says nothing about encrypting a dump or moving it off the
-host, and "Upgrading" documents the floating `APP_VERSION` tag rather than pinning to a digest.
+[`operating.md`](operating.md) covers some of these and points somewhere useful for others:
+"Reverse proxy and TLS" for terminating it yourself, its allowlist section for who may enter, its
+recovery section for why the second passkey matters, and "Backups" for what a collector must carry
+off the host. The rest are genuinely yours. There is no disk-encryption procedure there, nothing
+anywhere says how to encrypt a dump once it has left, and "Upgrading" documents the floating
+`APP_VERSION` tag rather than pinning to a digest.
 
 ## 9. Checking this yourself
 
