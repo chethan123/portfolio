@@ -776,6 +776,15 @@ printf 'dump healthcheck: %s\n' "$dump_health"
 # "Not dump on every boot" is the loop's own rule, and it rests entirely on parsing the attempt
 # marker's timestamp. Parsed wrong it reads as epoch 0, every restart dumps, and nothing else
 # notices — so both directions are asserted against the marker this run just wrote.
+# Waited for, not assumed: run_once writes last-success.json *before* the attempt marker, and
+# everything above gates on the former, so the outcome can still read `started` by now.
+deadline=$((SECONDS + 30))
+while ((SECONDS < deadline)); do
+  grep -q '"outcome":"success"' "${DUMPS_DIR}/last-attempt.json" 2>/dev/null && break
+  sleep 1
+done
+grep -q '"outcome":"success"' "${DUMPS_DIR}/last-attempt.json" 2>/dev/null ||
+  fail "the attempt marker never recorded the dump that is on disk"
 if docker compose run --rm -T --no-deps dump catch-up >/dev/null 2>&1; then
   fail "a boot dump reads as due minutes after a successful one"
 fi
