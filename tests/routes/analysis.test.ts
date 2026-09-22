@@ -5,6 +5,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import Analysis, { loader } from "../../app/routes/analysis.tsx";
 
+import { dimensionLabel } from "~/lib/holdings-view";
+
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, ownerParam, redirectTo } from "../support/routes.ts";
@@ -100,7 +102,14 @@ describe("every panel narrows", () => {
       // Owner is the role, person the record — the one place pre-glossary wording survived in the UI.
       expect(markup).toContain("Net worth by owner");
       expect(markup).not.toContain("Net worth by person");
-      expect(markup).toContain(">Owner</th>");
+      const headings = [...markup.matchAll(/<th scope="col">([^<]+)<\/th>/g)].map(
+        ([, heading]) => heading,
+      );
+      expect(headings.slice(0, 4)).toEqual(
+        (["owner", "kind", "assetClass", "classification"] as const).map((dimension) =>
+          dimensionLabel(dimension),
+        ),
+      );
       expect(markup).toContain("2 owners");
       expect(markup).not.toContain("2 people");
     }),

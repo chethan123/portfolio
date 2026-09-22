@@ -144,13 +144,21 @@ export const GROUPINGS: ReadonlyArray<Dimension> = [OWNER, ...DIMENSIONS];
 
 const DIMENSION_BY_ID = new Map(GROUPINGS.map((dimension) => [dimension.id, dimension]));
 
-// One dimension's accessor, for a breakdown built outside this module (allocation.ts); throws on
-// an id no dimension carries — unreachable from a closed union, unlike groupHoldings's empty-table answer to the same impossible lookup.
-export function groupingBy(id: DimensionId): Grouping {
+function dimensionBy(id: DimensionId): Dimension {
   const dimension = DIMENSION_BY_ID.get(id);
   if (dimension === undefined) throw new Error(`No such holdings dimension: ${id}`);
 
-  return dimension.of;
+  return dimension;
+}
+
+// One dimension's accessors, for a breakdown built outside this module (allocation.ts); throw on
+// an id no dimension carries — unreachable from a closed union, unlike groupHoldings's empty-table answer to the same impossible lookup.
+export function groupingBy(id: DimensionId): Grouping {
+  return dimensionBy(id).of;
+}
+
+export function dimensionLabel(id: DimensionId): string {
+  return dimensionBy(id).label;
 }
 
 export type SortKey =

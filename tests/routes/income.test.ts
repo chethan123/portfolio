@@ -4,6 +4,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import Income, { loader } from "../../app/routes/income.tsx";
 
+import { dimensionLabel } from "~/lib/holdings-view";
+
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, ownerParam, redirectTo } from "../support/routes.ts";
@@ -101,6 +103,14 @@ describe("every figure narrows", () => {
       const hers = await at(`?owner=${alice.id}`);
       expect(hers.byAccount.map((slice) => slice.label)).toEqual(["Alice Brokerage"]);
       expect(hers.byTaxTreatment.map((slice) => slice.label)).toEqual(["Taxable"]);
+
+      const markup = renderRoute(Income, `/income?owner=${alice.id}`, hers);
+      const headings = [...markup.matchAll(/<th scope="col">([^<]+)<\/th>/g)].map(
+        ([, heading]) => heading,
+      );
+      expect(headings).toEqual(
+        (["tax", "account"] as const).map((dimension) => dimensionLabel(dimension)),
+      );
     }),
   );
 });

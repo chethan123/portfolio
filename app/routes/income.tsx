@@ -13,7 +13,7 @@ import {
   weightedYield,
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
-import { groupingBy, summarise } from "~/lib/holdings-view";
+import { dimensionLabel, groupingBy, summarise } from "~/lib/holdings-view";
 import { ALL_OWNERS, isFiltered } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
@@ -165,7 +165,7 @@ export default function Income({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Annual dividend by tax treatment"
             count={plural(byTaxTreatment.length, "tax treatment", "tax treatments")}
-            heading="Tax treatment"
+            heading={dimensionLabel("tax")}
             amountHeading="Annual dividend"
             slices={byTaxTreatment}
             total={total}
@@ -177,7 +177,7 @@ export default function Income({ loaderData }: Route.ComponentProps) {
           <Breakdown
             title="Annual dividend by account"
             count={plural(byAccount.length, "account", "accounts")}
-            heading="Account"
+            heading={dimensionLabel("account")}
             amountHeading="Annual dividend"
             slices={byAccount}
             total={total}
