@@ -580,20 +580,6 @@ export function projectGroup(group: HoldingsGroup, available: boolean): GroupPro
   };
 }
 
-// Not in format.ts, which renders money — a quantity takes no currency mark. Same U+2212 as
-// format.ts so signs read alike; shared with Account detail's cell, which drifted with its own copy.
-export function formatQuantity(decimal: string, preservePlaces = false): string {
-  const trimmed = decimal.trim();
-  const negative = trimmed.startsWith("-") || trimmed.startsWith("−");
-  const [int = "0", frac = ""] = trimmed.replace(/^[-+−]/, "").split(".");
-  const fraction = preservePlaces ? frac : frac.replace(/0+$/, "");
-  const zero = /^0*$/.test(int) && /^0*$/.test(fraction);
-
-  return `${negative && !zero ? "−" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${
-    fraction ? `.${fraction}` : ""
-  }`;
-}
-
 // Shared with Account detail's same caption. Words are load-bearing (§6.2), colour never carries them (§12).
 export function holdingNote(holding: {
   assetClass: ValuedHolding["assetClass"];
