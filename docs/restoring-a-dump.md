@@ -8,12 +8,15 @@ A **dump** is the archive on this host. A **backup** is a copy your own tool has
 ([`CONTEXT.md`](../CONTEXT.md)). This document restores from either, because they are the same file;
 where it matters that the file has travelled, it says so.
 
+Every command runs from the repository root, where `compose.yaml` is, as the account that owns
+`./volumes/dumps`.
+
 Read [Before you start](#before-you-start) and [Every restore starts here](#every-restore-starts-here)
 even if you are mid-incident. What follows those is ordered by which situation you are in:
 
 - [The instance is running and you want to step it back](#restoring-in-place) — one outage.
 - [The machine is gone and you are rebuilding it](#rebuilding-a-machine-from-nothing) — no outage to
-  cause, but two files that are not in the dump.
+  cause, but three things to put back that no archive carries.
 - [Nothing is wrong and you want to prove it works](#the-drill-rehearse-without-an-outage) — no
   outage at all. Do this one quarterly.
 
@@ -104,7 +107,15 @@ docker compose run --rm dump verify "/dumps/$(basename "$DUMP")"
 The first says the bytes are the bytes the dump service wrote — the check that matters for a file
 that has been off this machine and come back. The second decodes every data block in the archive
 without restoring it anywhere, which is the check that matters for a file that never left: it is the
-same code the nightly run uses before it publishes anything. Both exit non-zero on failure.
+same code the nightly run uses before it publishes anything.
+
+**`verify` prints nothing at all, whichever way it goes**, so read `$?` and not the screen: `0` is a
+whole archive, `1` is a bad one, and the two look identical. A missing file is also `1`, so if you
+get one, check the path before you conclude the archive is bad.
+
+**A missing sidecar reads as a corrupt archive.** With no `.dump.json` beside it, the hash line
+feeds `sha256sum -c -` nothing and it exits `1` saying `no properly formatted checksum lines
+found`, which is the file's absence and not the archive's condition.
 
 **Do not substitute `pg_restore --list`.** It reads only the table of contents at the front of the
 archive. An archive truncated to half its length, or to nine tenths, lists everything and exits `0`;
@@ -206,6 +217,27 @@ archive from an older release restores into the current one with no manual step.
 ledger travels inside the dump, so an archive that is already current applies nothing — the log says
 `skip … (already applied)` for every file, and `/healthz` reports `migrations: current`.
 
+**Prove the instance is serving the data, not merely running.** A restore that lands cleanly into
+the wrong database, or an archive of a database that was already empty, reaches this point looking
+exactly like a good one. Ask the application, then ask the data:
+
+```sh
+docker compose exec -T app node -e \
+  "fetch('http://127.0.0.1:3000/healthz').then(async r=>console.log(r.status, await r.text()))"
+
+docker compose exec -T db psql -U portfolio -d portfolio -c "
+  select (select count(*) from account)          as accounts,
+         (select count(*) from holding)          as holdings,
+         (select count(*) from position_set)     as position_sets,
+         (select coalesce(sum(value),0)
+            from holding_valued)                 as net_worth"
+```
+
+`/healthz` answering `200` with `"migrations":"current"` says the schema is whole and the app is
+reading it. The counts are the part worth pausing on: compare them against what the household
+should have, because nothing above this line would have told you they were zero. Then open a screen
+and look for a name you recognise.
+
 **Check the dumper caught up.** `cat volumes/dumps/last-attempt.json`; the freshness checks a
 collector runs are [`operating.md`](operating.md#what-to-point-your-collector-at)'s. A restored
 instance starts the dumper with a marker from before the restore, so the next run is the one that
@@ -239,52 +271,16 @@ where it bites hardest.
 
 ## Rebuilding a machine from nothing
 
-Install Docker and clone this repository. Then, before anything else, put back the two files the
-dump does not carry and make the directories Compose refuses to create for you:
+**If this machine ever ran an instance, clear the old volume record before anything else.**
+`db-store` is a named volume bound to an absolute path, and the record outlives
+`docker compose down`, so a second checkout does not get a cluster of its own. With the old checkout
+deleted, `up` fails to mount and says which path it wanted. **With the old checkout still there,
+`up` succeeds against it**: the new one comes up serving the old data, its own `volumes/db/data`
+stays empty, and the restore you are about to run lands in the directory you were trying to leave.
 
 ```sh
-cp /path/to/your/kept/.env /path/to/your/kept/allowed-emails.txt .
-mkdir -p ./volumes/db/data ./volumes/dumps
-chmod 0750 ./volumes/dumps
-id -u; id -g                            # these two are DUMP_UID and DUMP_GID in .env
-```
+docker volume ls | grep db-store        # nothing? skip to the next step
 
-**`up` does not check that `DUMP_UID` is right, only that it is set.** A stale pair copied from the
-old machine starts the container and then kills it — `/dumps is not writable as 4242:4242`, or
-`refusing to run as root` for `0` — and `restart: on-failure` turns that into a crash loop whose
-`start_period` keeps `docker compose ps` looking plausible for a quarter of an hour. The directory
-is the operator's own account on *this* machine; make `.env` agree with the `id` above before you
-go on. Then bring up the database **on its own**, and restore into it:
-
-```sh
-docker compose up -d db
-# Step 2, then the restore in Restoring in place, minus the stop and start lines
-docker compose up -d
-```
-
-A plain `docker compose up -d` first would start `app`, which creates and migrates an empty schema
-you are about to drop and holds a connection while you try to drop it. Bringing up `db` alone avoids
-both. It also leaves `dump` down, which is what you want until the data is in.
-
-On a cluster this fresh, `initdb` has already made an empty `portfolio`, so the `dropdb` and
-`createdb` pair is a no-op that costs nothing — running the one procedure is worth more than saving
-two lines.
-
-The closing `docker compose up -d` starts the dumper, which dumps at once on a directory holding no
-`last-attempt.json` — the usual case, when you carried one archive across. Carry the whole
-`volumes/dumps/` directory instead and you carry both markers: `last-attempt.json`, which holds the
-boot dump back for the rest of the hour it records, and `last-success.json`, which arms the shrink
-guard against your first run. Neither is a fault; both are worth knowing before you conclude the
-dumper is broken. See [After any restore](#after-any-restore).
-
-**On the same machine, clear the old volume record first.** `db-store` is a named volume bound to
-an absolute path, and the record outlives `docker compose down`, so a second checkout does not get
-a cluster of its own. With the old checkout deleted, `up` fails to mount and says which path it
-wanted. **With the old checkout still there, `up` succeeds against it**: the new one comes up
-serving the old data, its own `volumes/db/data` stays empty, and the restore you are about to run
-lands in the directory you were trying to leave. Either way, before anything else:
-
-```sh
 docker compose down -v                  # in the OLD checkout: drops the record, leaves the data
 # or, if that directory is gone
 docker volume rm portfolio_db-store
@@ -293,6 +289,77 @@ docker volume rm portfolio_db-store
 `down -v` discarding the record rather than the directory is
 [`operating.md`](operating.md#where-the-database-lives). Moving a cluster you still have, rather
 than restoring one, is [`operating.md`](operating.md#moving-an-instance-that-predates-the-local-path).
+
+### Then put back everything the archive does not carry
+
+Install Docker, clone this repository, and work from its root. Three things have to be in place
+before a single `docker compose` command will run:
+
+```sh
+cp /path/to/your/kept/.env /path/to/your/kept/allowed-emails.txt .
+
+mkdir -p ./volumes/db/data ./volumes/dumps
+cp /path/to/your/archive/portfolio-20260922T021850Z.dump* ./volumes/dumps/
+
+chown -R 1001:1001 ./volumes/dumps      # the DUMP_UID:DUMP_GID pair in .env, whatever yours is
+chmod 0750 ./volumes/dumps
+```
+
+**The trailing `*` on the copy is load-bearing**: the archive and its `.dump.json` travel together,
+because [Step 2](#step-2-prove-the-archive-before-you-trust-it) reads the recorded hash out of the
+sidecar and `verify` reads the archive at `/dumps/…`, which is this directory seen from inside the
+container. An archive parked anywhere else on the host cannot be checked.
+
+**Pick `DUMP_UID` before you `up`, and do not use `id -u` blindly.** `up` checks only that the pair
+is *set*, so a stale one from the old machine starts the container and then kills it —
+`/dumps is not writable as 4242:4242`, and `refusing to run as root` if you are root and copied
+`0` — with `restart: on-failure` turning that into a crash loop whose `start_period` keeps
+`docker compose ps` looking plausible for a quarter of an hour. Any non-root account will do,
+including the one the old machine used; what matters is that `.env`'s pair, the `chown` above and
+the account you are typing as all name it. **Self-hosting as root is the case to watch**: `id -u`
+answers `0`, which the dumper refuses by design, so choose a uid (`1001` is as good as any), own
+the directory as it, and put it in `.env`.
+
+### Then the database on its own, and the restore into it
+
+```sh
+docker compose up -d db
+
+DUMP=volumes/dumps/portfolio-20260922T021850Z.dump     # your archive, not this stamp
+
+sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$DUMP.json" | sed "s|\$|  $DUMP|" | sha256sum -c -
+docker compose run --rm dump verify "/dumps/$(basename "$DUMP")"
+
+docker compose exec -T db dropdb   -U portfolio portfolio
+docker compose exec -T db createdb -U portfolio -O portfolio portfolio
+docker compose exec -T db pg_restore --exit-on-error --single-transaction \
+  -U portfolio -d portfolio < "$DUMP"
+
+docker compose up -d
+```
+
+This is [Restoring in place](#restoring-in-place) without the `stop` and `start` lines, written out
+so you can run it rather than assemble it — there is nothing to stop, because nothing is up yet.
+
+A plain `docker compose up -d` at the start would instead bring up `app`, which creates and migrates
+an empty schema you are about to drop and holds a connection while you try to drop it. Bringing up
+`db` alone avoids both, and leaves `dump` down until the data is in.
+
+On a cluster this fresh, `initdb` has already made an empty `portfolio`, so the `dropdb` and
+`createdb` pair is a no-op that costs nothing — running the one procedure is worth more than saving
+two lines.
+
+**`last-success.json` will not exist here**, so `cat`ting it in
+[Step 1](#step-1-choose-the-archive) fails, and that is expected rather than a missing archive: the
+marker stays on the machine that wrote it. Every field you would have read from it — `sha256`,
+`bytes`, `compress`, `server_version` — is in the `.dump.json` beside the archive, which travelled.
+
+The closing `docker compose up -d` starts the dumper, which dumps at once on a directory holding no
+`last-attempt.json` — the usual case, when you carried one archive across. Carry the whole
+`volumes/dumps/` directory instead and you carry both markers: `last-attempt.json`, which holds the
+boot dump back for the rest of the hour it records, and `last-success.json`, which arms the shrink
+guard against your first run. Neither is a fault; both are worth knowing before you conclude the
+dumper is broken. See [After any restore](#after-any-restore).
 
 ---
 
