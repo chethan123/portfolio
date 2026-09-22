@@ -8,9 +8,8 @@ A **dump** is the archive on this host. A **backup** is a copy your own tool has
 ([`CONTEXT.md`](../CONTEXT.md)). This document restores from either, because they are the same file;
 where it matters that the file has travelled, it says so.
 
-Read [Before you start](#before-you-start) and
-[Step 2](#step-2-prove-the-archive-before-you-trust-it) even if you are mid-incident.
-Everything else is ordered by which situation you are in:
+Read [Before you start](#before-you-start) and [Every restore starts here](#every-restore-starts-here)
+even if you are mid-incident. What follows those is ordered by which situation you are in:
 
 - [The instance is running and you want to step it back](#restoring-in-place) — one outage.
 - [The machine is gone and you are rebuilding it](#rebuilding-a-machine-from-nothing) — no outage to
@@ -59,7 +58,11 @@ What each of those costs to recover is
 
 ---
 
-## Step 1: choose the archive
+## Every restore starts here
+
+Both steps run whichever of the three situations you are in.
+
+### Step 1: choose the archive
 
 ```sh
 ls -l volumes/dumps/portfolio-*.dump
@@ -81,9 +84,7 @@ So if the one you want is neither the newest nor within `DUMP_KEEP_DAYS`, copy i
 rename it before you do anything slow. Deleting an archive also deletes its `.dump.json`, and
 without that sidecar you have no recorded hash to check the file against.
 
----
-
-## Step 2: prove the archive before you trust it
+### Step 2: prove the archive before you trust it
 
 Two checks, and they catch different things. Run both.
 
@@ -132,18 +133,19 @@ docker compose start app dump
 not choose — once on container start, once at `DUMP_AT`, and at +15, +30 and +60 minutes after any
 failure — and `pg_dump` holds a lock on every table for its whole run. A run that lands in the
 middle of this either makes your `dropdb` fail or writes an archive of a half-restored database,
-which then becomes the newest file in the directory and the one a collector takes. Because the last line starts services by name,
-leaving `dump` out of it leaves the dumper stopped indefinitely: `restart: on-failure` does not
-bring back a container you stopped on purpose.
+which then becomes the newest file in the directory and the one a collector takes. Because the
+last line starts services by name, leaving `dump` out of it leaves the dumper stopped
+indefinitely: `restart: on-failure` does not bring back a container you stopped on purpose.
 
 `docker compose stop dump` takes the full stop timeout and the container exits `137`. That is its
 sleep being killed, not a fault.
 
-**`dropdb` is not a safety net.** It refuses while something is connected — but the app holds a
-single pooled connection that it drops and reopens around its own healthcheck, so whether you get
-the refusal is a matter of timing. Run against a healthy `app` three times in a row, it refused
-twice and succeeded once, dropping the live database out from under a running application. Stop
-`app` because the procedure says to, not because you expect `dropdb` to stop you.
+**Stop `app` because it writes to the database you are replacing** — on every request and on the
+price poller's own schedule, neither of which waits for you. `dropdb` refusing is not what enforces
+that. It refuses only while a connection happens to be open, and the app holds a single pooled one
+that it drops and reopens around its own healthcheck: run against a healthy `app` three times in a
+row, it refused twice and succeeded once, dropping the live database out from under a running
+application. Treat a `dropdb` that goes through as proof of nothing.
 
 **Keep `--exit-on-error --single-transaction`.** Left to itself `pg_restore` continues past
 failures and reports a count at the end, which is exactly the half-old, half-new schema this is
@@ -284,10 +286,11 @@ docker compose exec -T db psql -U portfolio -d portfolio_drill \
 docker compose exec -T db dropdb -U portfolio portfolio_drill
 ```
 
-The count is the point. An archive that restores cleanly into an empty schema and then produces no
-rows will not be noticed any other way; compare it against the same query on `portfolio` and be
-suspicious of a large gap. For a stronger comparison, run the same few aggregates on both — row
-counts per table and one money total — rather than a single count.
+The count is the point, and truncation is the failure it exists for: an archive that restores
+cleanly into an *empty* schema and then produces no rows will not be noticed any other way.
+Compare it against the same query on `portfolio` and be suspicious of a large gap. For a stronger
+comparison, run the same few aggregates on both — row counts per table and one money total —
+rather than a single count.
 
 `portfolio_drill` is never migrated and the app is never pointed at it. It exists for the length of
 the drill and is dropped at the end.

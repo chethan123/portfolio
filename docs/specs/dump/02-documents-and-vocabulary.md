@@ -65,25 +65,30 @@ service lands they would describe an intention.
 
 **Operator-facing, and the instructions this design falsifies**
 
-- [ ] The Backups section's `pg_restore --list` check — "if it prints the objects, the file is a
+The restore procedure these boxes assign to `docs/operating.md`'s Restoring section now lives in
+[`docs/restoring-a-dump.md`](../../restoring-a-dump.md), which owns it; Restoring is a pointer that
+keeps the two facts about the deployment a restore rests on. The boxes below are ticked where the
+work landed, wherever it landed.
+
+- [x] The Backups section's `pg_restore --list` check — "if it prints the objects, the file is a
       real archive" — and `docs/runbook.md`'s copy of it become `pg_restore -f /dev/null`, because
       a truncated archive passes `--list`
-- [ ] The compression paragraph, which argues a custom dump is far smaller than the table on the
+- [x] The compression paragraph, which argues a custom dump is far smaller than the table on the
       assumption of default compression this design turns off
-- [ ] What the collector must be pointed at (`volumes/dumps/`, `.env`, `allowed-emails.txt`), what
+- [x] What the collector must be pointed at (`volumes/dumps/`, `.env`, `allowed-emails.txt`), what
       it must exclude (`volumes/db/`, a torn cluster), a copy-pasteable staleness check on the
       success marker, and the retention it must keep — the local window is a hand-off, not the
       history
-- [ ] Verification recipes name `docker compose ps -a`, or a disabled dumper is indistinguishable
+- [x] Verification recipes name `docker compose ps -a`, or a disabled dumper is indistinguishable
       from one that was never there
-- [ ] The restore drill gains a cadence: quarterly, and after any Postgres major upgrade
-- [ ] Restoring says how to read a dump when the operator's account does not own it
-- [ ] Upgrading and Restoring both say to stop `dump` first — `pg_dump` holds `ACCESS SHARE` for its
+- [x] The restore drill gains a cadence: quarterly, and after any Postgres major upgrade
+- [x] Restoring says how to read a dump when the operator's account does not own it
+- [x] Upgrading and Restoring both say to stop `dump` first — `pg_dump` holds `ACCESS SHARE` for its
       whole run and a migration's `ACCESS EXCLUSIVE` queues behind it — and, because a bare
       `docker compose up -d` would start it again mid-migration and the restore recipe ends with a
       targeted `start app` that would leave it stopped for good, both procedures name the services
       they start and end with an explicit `docker compose start dump`
-- [ ] `docs/runbook.md` gains "my dumps have stopped" — the markers, the healthcheck under `ps -a`,
+- [x] `docs/runbook.md` gains "my dumps have stopped" — the markers, the healthcheck under `ps -a`,
       and the free-space refusal are the three things to look at
 - [x] `README.md`'s "the whole deployment" list gained the script and the dumps directory, with
       ticket 01, for the same reason
@@ -95,8 +100,9 @@ service lands they would describe an intention.
       documentation obey them, and until it lands the glossary and the runbook disagree
 - [ ] Every use of "backup" meaning the local archive is renamed, found by searching the repository
       rather than by working through a list — an enumeration here would be a fifth place to keep in
-      step. The ones already known: `docs/runbook.md`'s "I need to restore from a backup" heading
-      and its cross-references, `README.md`'s "Take a backup first" and its "`pg_dump` backup and
-      restore procedure", and the uses in `docs/guide/upload.md`, `docs/google-sign-in.md` and
+      step. `docs/runbook.md`'s "I need to restore from a backup" heading and its cross-references
+      were renamed with the restore procedure; still outstanding are `README.md`'s "Take a backup
+      first" and its "`pg_dump` backup and restore procedure", `docs/operating.md`'s Upgrading
+      section, and the uses in `docs/guide/upload.md`, `docs/google-sign-in.md` and
       `docs/developing.md`
 - [ ] `docs/specs/README.md`'s slice table and ticket-directory list carry 0014 and `dump/`

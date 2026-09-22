@@ -2,7 +2,8 @@
 
 Everything a self-hoster needs that is not in the [README](../README.md): what the containers are,
 what to put in `.env`, how it sits behind your own proxy, the security decisions that are yours
-rather than the code's, what to watch, backing the data up, and upgrading.
+rather than the code's, what to watch, backing the data up, and upgrading. Restoring what was
+backed up is one procedure long enough to own a document, and hands over to it here.
 
 When something is already broken and you want a procedure, that is [`runbook.md`](runbook.md). When
 the procedure is a restore, it is [`restoring-a-dump.md`](restoring-a-dump.md). This file is how the
@@ -1237,11 +1238,12 @@ it is the one that also survives a Postgres major upgrade.
 
 **Budget for the dump growing faster than it used to.** The price observation log is the largest
 table on an instance that has been running a while ([Growth and limits](#growth-and-limits)), and it
-is mostly archived JSON, which compresses well, so a custom-format dump is far smaller than the
-table, and still on a path to gigabytes rather than megabytes. Nothing about the commands below
-changes; what changes is how long they take and where you can afford to keep the output. If you keep
-a dump per day for a year, size the destination against the table, not against the 11 MB the demo
-household weighs.
+is mostly archived JSON. A nightly archive is uncompressed by default, so it tracks that table
+rather than undercutting it, and is on a path to gigabytes rather than megabytes; `DUMP_COMPRESS`
+buys most of it back at the price of the deduplication a collector would otherwise get. Nothing
+about the commands below changes; what changes is how long they take and where you can afford to
+keep the output. If you keep a dump per day for a year, size the destination against the table, not
+against the 11 MB the demo household weighs.
 
 ### What to point your collector at
 
@@ -1286,10 +1288,11 @@ docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
 always matches the server version. The custom format is what `pg_restore` reads; for a plain-SQL
 dump you can read yourself, use `--format=plain` and restore it with `psql`.
 
-**Compression is the one thing this file differs from the service's archives in.** A hand-taken
-custom-format dump is compressed by default; the service's are not, because `DUMP_COMPRESS` defaults
-to `0` so a deduplicating collector sees a stable byte stream. Both are custom-format archives and
-`pg_restore` reads either with the same command — there is nothing to decompress first.
+**A hand-taken archive differs from the service's in one way: compression.** This one is compressed,
+because that is `pg_dump`'s own default for the custom format; the service's are not, because
+`DUMP_COMPRESS` defaults to `0` so a deduplicating collector sees a stable byte stream. Both are
+custom-format archives and `pg_restore` reads either with the same command — there is nothing to
+decompress first.
 
 **The `>` creates the file whether or not the dump worked.** The shell opens the redirect before
 `pg_dump` runs, so a dump that dies halfway leaves a plausible-looking file of plausible size behind,
@@ -1332,7 +1335,7 @@ costs to recover, once a command runs again:
 
 Keep them wherever you keep passwords, which is not the directory you keep the dumps in.
 
-> **A backup you have never restored is not a backup.** Rehearse it. The
+> **An archive you have never restored is not a backup.** Rehearse it. The
 > [drill](restoring-a-dump.md#the-drill-rehearse-without-an-outage) does that without taking the
 > instance down; quarterly, and after any Postgres major upgrade.
 
@@ -1345,19 +1348,17 @@ rebuilding a machine from nothing, and the drill that rehearses all of it withou
 [`restoring-a-dump.md`](restoring-a-dump.md). It is one document because a restore is one procedure,
 and splitting it is how half of it goes stale.
 
-Three things about it decide how this instance is run, and so are stated here as well:
+Two things it rests on are facts about how this instance is built rather than steps, so they are
+here rather than there:
 
-- **A restore goes into an empty database, never over a live one**, under
-  `pg_restore --exit-on-error --single-transaction`, so it either lands whole or leaves the empty
-  database alone. Left to itself `pg_restore` continues past failures and reports a count, which is
-  a half-old, half-new schema.
-- **`app` and `dump` both come down for it, and both go back up by name.** `app` holds a pooled
-  connection; `dump` opens one at times you do not choose. `worker` may keep running — it holds no
-  database connection at all. `caddy` stays up and answers `502` for the window, which is the
-  restore working rather than a second fault.
-- **Migrations the archive predates are applied when `app` starts**, so an archive from an older
-  release restores into the current one with no manual step. The migration ledger travels inside the
-  archive, which is why a restore of schema and data separately is the one way to desynchronise it
+- **`app` and `dump` are stopped for the length of it because they write to the database being
+  replaced** — `app` on every request and on its price-poller's own schedule, `dump` whenever a run
+  starts. Neither is stopped by anything but you: a `dropdb` that refuses is timing, not a guard.
+  `worker` holds no database connection at all, and `caddy` answering `502` throughout is the
+  restore working.
+- **The migration ledger travels inside the archive**, so `app` applies on start exactly the
+  migrations the archive predates and nothing else. Restoring schema and data separately is the one
+  way to desynchronise that ledger from the schema
   ([`runbook.md`](runbook.md#a-migration-failed)).
 
 What is *in* an archive, and how to read one without the application in front of it, is

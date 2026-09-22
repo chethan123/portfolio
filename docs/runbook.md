@@ -281,7 +281,7 @@ running image does not carry.
 
 Editing the ledger is not a third option.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](restoring-a-dump.md).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -809,28 +809,18 @@ Why: [Environment variables](operating.md#environment-variables), [Backups](oper
 The procedure is [`restoring-a-dump.md`](restoring-a-dump.md). Run it from there rather than from
 here. This entry lists only what people get wrong.
 
-- **Stop `app` and `dump`, and start both by name.** `app` holds a pooled connection; `dump` opens
-  one on container start, at `DUMP_AT`, and on each rung of its retry ladder. `docker compose start
-  app` alone leaves the dumper stopped for good, because `restart: on-failure` does not bring back a
-  container you stopped on purpose. `worker` may keep running: it holds no database connection and
-  nothing about a restore reaches it, so there is no `stop worker` line to add.
-- **`dropdb` refusing is not what keeps `app` out.** It refuses only while a connection happens to
-  be open, and the app's pool closes and reopens one around its own healthcheck. A `dropdb` that
-  succeeds against a running `app` is the normal case, not proof that you stopped it.
-- **Keep `--exit-on-error --single-transaction` on `pg_restore`.** Without both, it continues past
-  failures and leaves a half-old, half-new schema, which is the thing the restore is avoiding.
-- **The site answers `502` for the whole window.** `caddy` stays up and retries its upstream. That
-  is the restore working, not a second fault.
-- **Check the archive before you trust it**, with its recorded hash and a full decode — never with
-  `pg_restore --list`, which reads only the table of contents and passes an archive truncated
-  anywhere after it:
-
-  ```sh
-  DUMP=volumes/dumps/portfolio-20260922T021850Z.dump
-  sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$DUMP.json" | sed "s|\$|  $DUMP|" | sha256sum -c -
-  docker compose run --rm dump verify "/dumps/$(basename "$DUMP")"
-  ```
-
+- **`dump` comes down with `app`, and both go back up by name.** `docker compose start app` alone
+  leaves the dumper stopped for good. `worker` stays up; there is no `stop worker` line to add.
+- **A `dropdb` that goes through is not proof you stopped `app`.** It refuses only while a
+  connection happens to be open, and the app's pool closes and reopens one around its own
+  healthcheck.
+- **Keep `--exit-on-error --single-transaction` on `pg_restore`.** Without both it continues past
+  failures and leaves a half-old, half-new schema.
+- **The site answers `502` for the whole window.** That is the restore working, not a second fault.
+- **`pg_restore --list` is not the check.** It reads only the table of contents and passes an
+  archive truncated anywhere after it. Both commands
+  [Step 2](restoring-a-dump.md#step-2-prove-the-archive-before-you-trust-it) gives are the check,
+  and running one of the two is not running it.
 - **On a fresh machine, bring up `db` alone first** with `docker compose up -d db`, so `app` does
   not create and migrate an empty schema you are about to drop.
 - **An archive from an older release is fine.** On start, `app` applies the migrations it predates.
@@ -852,33 +842,26 @@ cat volumes/dumps/last-error.json
 docker compose logs --tail=50 dump
 ```
 
-- `Exited (0)` is `DUMP_ENABLED=false` doing what it says. A plain `docker compose ps` hides it
-  entirely, which is why this reads `ps -a`.
-- `last-attempt.json` is the outcome of the last run and the only honest summary.
-  **`last-error.json` is never cleared by a later success**, so its presence alone proves nothing;
-  compare its `failed_at` against the attempt marker.
-- The container being `healthy` proves nothing either. That check is the *age of the newest archive*
-  and grants 30 hours, so a run that refuses to publish anything leaves it green for more than a day.
+- `Exited (0)` is `DUMP_ENABLED=false`. A plain `docker compose ps` hides it, which is why this
+  reads `ps -a`.
+- A crash loop is a bad knob, and the log's last line names the variable.
+- `last-attempt.json`'s `outcome` is the answer. `last-error.json` outlives a later success, so read
+  its `failed_at` against the attempt marker before believing it.
+- `healthy` is not evidence. That check is the age of the newest archive and grants 30 hours.
 
-**Do.** The `stage` in `last-error.json` names the fault:
+**Do.** `last-error.json`'s `stage` names the fault, and every one it can carry is below:
 
-- `space` — the run refuses unless the filesystem has twice the database's size plus a gibibyte
-  free, and it does not retry, because retrying is the one thing that cannot help. Free disk, or
-  shorten `DUMP_KEEP_DAYS`, or set `DUMP_COMPRESS` to `6` and accept CPU instead.
-- `shrink` — the archive came out under half the size of the last successful one at the same
-  compression. Legitimate after a restore that stepped back; otherwise treat it as data loss and
-  find out why before you clear it. `rm volumes/dumps/last-success.json` resets the baseline and
-  nothing else, then `docker compose restart dump`.
-- `pg_dump`, `database` — `db` was unreachable or refused. The message carries Postgres's own.
-- `verify` — the archive did not decode whole. The run deleted it and published nothing, which is
-  the design; a repeat means the disk, not the dumper.
-- `publish` — the archive was written but could not be renamed, hashed or recorded. Check the
-  directory is still writable by `DUMP_UID`.
+- `space` — free disk, shorten `DUMP_KEEP_DAYS`, or set `DUMP_COMPRESS` to `6`. This one does not
+  retry on its own.
+- `shrink` — expected after a restore that stepped back; otherwise stop and find out what shrank.
+  To accept it: `rm volumes/dumps/last-success.json`, then `docker compose restart dump`.
+- `database`, `pg_dump` — `db` was unreachable or refused; the message carries Postgres's own.
+- `verify`, `size` — the archive did not decode whole, or could not be measured. Nothing was
+  published. A repeat is the disk.
+- `publish` — the archive was written but could not be renamed, hashed or recorded. Check
+  `./volumes/dumps` is still writable by `DUMP_UID`.
 
-A crash on startup is a bad knob rather than a bad database: the script validates and exits naming
-the variable, and `restart: on-failure` turns that into a visible crash loop.
-
-Why: [Backups](operating.md#backups), [`restoring-a-dump.md`](restoring-a-dump.md),
+Why: [Backups](operating.md#backups), [`restoring-a-dump.md`](restoring-a-dump.md#after-any-restore),
 [ADR-0009](adr/0009-the-stack-takes-dumps-not-backups.md).
 
 ---
@@ -943,9 +926,9 @@ Change the image tag in `compose.yaml`, bring up `db` alone, and restore into it
 docker compose up -d db
 ```
 
-Then follow [Restoring](restoring-a-dump.md), and start the rest.
+Then follow [`restoring-a-dump.md`](restoring-a-dump.md), and start the rest.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](restoring-a-dump.md).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -980,7 +963,7 @@ ls -ld volumes/db/data
 docker compose exec db ls /var/lib/postgresql/data | head
 ```
 
-Why: [Backups](operating.md#backups), [Restoring](restoring-a-dump.md).
+Why: [Backups](operating.md#backups), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -1013,7 +996,7 @@ object, exactly as above. The repair is to make the ledger agree, or to restore 
 both together. There is no down path, no rollback command, and no checksums: editing an
 already-applied `.sql` file is a silent no-op forever.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](restoring-a-dump.md).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
