@@ -1,8 +1,8 @@
 # Restoring from a dump
 
 How to get a household's data back out of one of the archives the `dump` service leaves in
-`./volumes/dumps/`. This page is written for whoever self-hosts the instance, and it is the
-procedure — every command below was run end to end against a real stack before it was written down.
+`./volumes/dumps/`. This page is written for whoever self-hosts the instance, and it is the one
+procedure: nothing here restates it, and nothing else here is the authority for it.
 
 A **dump** is the archive on this host. A **backup** is a copy your own tool has taken off it
 ([`CONTEXT.md`](../CONTEXT.md)). This document restores from either, because they are the same file;
@@ -18,10 +18,11 @@ even if you are mid-incident. What follows those is ordered by which situation y
   outage at all. Do this one quarterly.
 
 Why the stack takes dumps but never backups is
-[ADR-0009](adr/0009-the-stack-takes-dumps-not-backups.md). What the schedule, the retention window
-and the knobs are is [`operating.md`](operating.md#backups). What is *in* a dump, table by table,
-with queries that read it, is [`data-model.md`](data-model.md). When something is broken and you
-want the symptom, that is [`runbook.md`](runbook.md).
+[ADR-0009](adr/0009-the-stack-takes-dumps-not-backups.md). Every `DUMP_*` knob, the schedule
+included, is documented beside its default in [`.env.example`](../.env.example); what a collector
+has to carry off the host is [`operating.md`](operating.md#backups). What is *in* a dump, table by
+table, with queries that read it, is [`data-model.md`](data-model.md). When something is broken and
+you want the symptom, that is [`runbook.md`](runbook.md).
 
 ## Before you start
 
@@ -35,9 +36,12 @@ want the symptom, that is [`runbook.md`](runbook.md).
 | `last-success.json` | the last verified run — and the baseline the shrink guard compares against |
 | `last-error.json` | the last failure, with the `stage` it failed at |
 
-The stamp is UTC whatever `TZ` says. Files land `0640` owned by `DUMP_UID:DUMP_GID`, in a directory
-that is yours to create — so a shell running as anyone else cannot read them, which
-[When your shell cannot read the archive](#when-your-shell-cannot-read-the-archive) works around.
+The stamp is UTC whatever `TZ` says. All of them land `0640` owned by `DUMP_UID:DUMP_GID`, in a
+`0750` directory that is yours to create — so **every command below runs as that account**, markers
+included, and as anyone else the first `cat` is a permission error rather than a missing file. When
+that account is not available to you,
+[When your shell cannot read the archive](#when-your-shell-cannot-read-the-archive) is the way
+round it.
 
 **`last-error.json` is never cleared by a later success.** Judge a run by `last-attempt.json`'s
 `outcome`, not by whether an error file exists.
@@ -46,7 +50,7 @@ that is yours to create — so a shell running as anyone else cannot read them, 
 
 - **`.env`** — gitignored and dockerignored, so a fresh clone has none. Without it `docker compose`
   refuses every command, `exec` included.
-- **`allowed-emails.txt`** — likewise, and the stack will not start without the file at all.
+- **`allowed-emails.txt`** — gitignored too, and the stack will not start without the file at all.
 - **The hostname.** The lock derives its relying-party id from `PUBLIC_ORIGIN`'s hostname
   ([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md)). Restoring this data
   behind a *different* hostname leaves every enrolled passkey orphaned and the instance locked with
@@ -70,8 +74,9 @@ cat volumes/dumps/last-success.json
 ```
 
 `last-success.json` names the newest archive a run actually verified, which is usually the one you
-want. Its `server_version` is the Postgres major that wrote it: restoring into that major or a newer
-one is supported, into an older one is not.
+want. Its `server_version` is the full version of the server that wrote it — `17.11`, not `17` —
+and the major in front is the floor: restoring into that major or a newer one is supported, into an
+older one is not.
 
 **An archive you are still deciding about can be pruned out from under you.** Retention deletes by
 the stamp in the filename, not by mtime, so copying files around does not buy time. What is safe:
@@ -81,8 +86,9 @@ the stamp in the filename, not by mtime, so copying files around does not buy ti
   `portfolio-2026-09-22.dump`, or the same file renamed `keep-…`, is invisible to it.
 
 So if the one you want is neither the newest nor within `DUMP_KEEP_DAYS`, copy it somewhere else or
-rename it before you do anything slow. Deleting an archive also deletes its `.dump.json`, and
-without that sidecar you have no recorded hash to check the file against.
+rename it before you do anything slow — and move the `.dump.json` with it under the matching name,
+because retention deletes the sidecar with the archive, and the next step reads the hash out of it.
+A sidecar left behind reads as a bad archive rather than as a missing file.
 
 ### Step 2: prove the archive before you trust it
 
@@ -130,33 +136,36 @@ docker compose start app dump
 ```
 
 **Stop `dump` as well as `app`, and start it again by name.** The dumper connects at times you do
-not choose — once on container start, once at `DUMP_AT`, and at +15, +30 and +60 minutes after any
-failure — and `pg_dump` holds a lock on every table for its whole run. A run that lands in the
-middle of this either makes your `dropdb` fail or writes an archive of a half-restored database,
-which then becomes the newest file in the directory and the one a collector takes. Because the
-last line starts services by name, leaving `dump` out of it leaves the dumper stopped
-indefinitely: `restart: on-failure` does not bring back a container you stopped on purpose.
+not choose — at `DUMP_AT`, at +15, +30 and +60 minutes after a failure that is not a space refusal,
+and on container start if no run has succeeded in the last hour — and `pg_dump` holds a lock on
+every table for its whole run. A run that lands in the middle of this either makes your `dropdb`
+fail or writes an archive of a half-restored database, which then becomes the newest file in the
+directory and the one a collector takes. Because the last line starts services by name, leaving
+`dump` out of it leaves the dumper stopped indefinitely: `restart: on-failure` does not bring back
+a container you stopped on purpose.
 
 `docker compose stop dump` takes the full stop timeout and the container exits `137`. That is its
 sleep being killed, not a fault.
 
 **Stop `app` because it writes to the database you are replacing** — on every request and on the
 price poller's own schedule, neither of which waits for you. `dropdb` refusing is not what enforces
-that. It refuses only while a connection happens to be open, and the app holds a single pooled one
-that it drops and reopens around its own healthcheck: run against a healthy `app` three times in a
-row, it refused twice and succeeded once, dropping the live database out from under a running
-application. Treat a `dropdb` that goes through as proof of nothing.
+that. It refuses only while a connection happens to be open, and the pool's idle connections time
+out on roughly the same cadence as the healthcheck that reopens them, so whether you are refused is
+a coin toss: run three times in a row against a healthy `app`, it refused, refused, then dropped the
+live database out from under a running application. Treat a `dropdb` that goes through as proof of
+nothing.
 
 **Keep `--exit-on-error --single-transaction`.** Left to itself `pg_restore` continues past
-failures and reports a count at the end, which is exactly the half-old, half-new schema this is
-avoiding. With both, the restore is one transaction that either lands whole or leaves the empty
-database alone.
+failures and reports a count at the end — `errors ignored on restore: 2` and a half-old, half-new
+schema. `--single-transaction` is the one doing the work, wrapping the restore so it either lands
+whole or leaves the empty database alone; `--exit-on-error` is belt and braces beside it.
 
 **`worker` may keep running.** It holds no database connection, is not even on the network `db` is
 on, and nothing about a restore reaches it. There is no `stop worker` line to add.
 
-**`caddy` stays up and answers `502` for the whole window.** That is the restore working, not a
-second fault.
+**`caddy` stays up, answers `502` for the whole window, and goes `unhealthy` with it.** Its own
+healthcheck proxies through to `app`, so a stopped `app` is one fault showing in two rows
+([`runbook.md`](runbook.md#the-site-does-not-answer-at-all)). Both clear when you start `app` again.
 
 **`docker compose stop` survives a reboot.** `stop` records that you wanted it stopped, and neither
 restart policy in this stack overrides that — not `app`'s `unless-stopped`, not `dump`'s
@@ -197,13 +206,10 @@ archive from an older release restores into the current one with no manual step.
 ledger travels inside the dump, so an archive that is already current applies nothing — the log says
 `skip … (already applied)` for every file, and `/healthz` reports `migrations: current`.
 
-**Check the dumper caught up.** The same check its healthcheck runs, which is the age of the newest
-archive and nothing else:
-
-```sh
-docker compose exec dump sh /usr/local/bin/dump-loop.sh healthcheck
-cat volumes/dumps/last-attempt.json
-```
+**Check the dumper caught up.** `cat volumes/dumps/last-attempt.json`; the freshness checks a
+collector runs are [`operating.md`](operating.md#what-to-point-your-collector-at)'s. A restored
+instance starts the dumper with a marker from before the restore, so the next run is the one that
+tells you anything.
 
 **If you stepped back to a much smaller database, reset the shrink baseline.** The dumper refuses
 any archive less than half the size of the last successful one at the same compression — a
@@ -216,13 +222,18 @@ signal:
 cat volumes/dumps/last-error.json
 # {"failed_at":"…","stage":"shrink","message":"refusing: 846 bytes is less than half the last dump…"}
 
-rm volumes/dumps/last-success.json      # the baseline, and nothing else, lives in this file
+rm volumes/dumps/last-success.json      # the shrink baseline is the only thing read out of it
 docker compose restart dump
 ```
 
-Changing `DUMP_COMPRESS` resets the baseline too, for the same reason: a comparison across
-compression settings is meaningless, so the guard stands down rather than refusing every run from
-then on.
+Nothing else reads that marker, and every fact in it is also in the `.dump.json` beside each
+archive, so removing it costs you no record.
+
+Changing `DUMP_COMPRESS` resets the baseline too: a comparison across compression settings is
+meaningless, so the guard stands down rather than refusing every run from then on. That one needs
+`docker compose up -d dump`, not `restart` — `restart` resumes the container it already built and
+reads none of `.env` or `compose.yaml`, which [`operating.md`](operating.md#upgrading) spells out
+where it bites hardest.
 
 ---
 
@@ -234,11 +245,16 @@ dump does not carry and make the directories Compose refuses to create for you:
 ```sh
 cp /path/to/your/kept/.env /path/to/your/kept/allowed-emails.txt .
 mkdir -p ./volumes/db/data ./volumes/dumps
-chown "$(id -u):$(id -g)" ./volumes/dumps && chmod 0750 ./volumes/dumps
+chmod 0750 ./volumes/dumps
+id -u; id -g                            # these two are DUMP_UID and DUMP_GID in .env
 ```
 
-`DUMP_UID` and `DUMP_GID` in `.env` have to be that account, or `up` refuses. Then bring up the
-database **on its own**, and restore into it:
+**`up` does not check that `DUMP_UID` is right, only that it is set.** A stale pair copied from the
+old machine starts the container and then kills it — `/dumps is not writable as 4242:4242`, or
+`refusing to run as root` for `0` — and `restart: on-failure` turns that into a crash loop whose
+`start_period` keeps `docker compose ps` looking plausible for a quarter of an hour. The directory
+is the operator's own account on *this* machine; make `.env` agree with the `id` above before you
+go on. Then bring up the database **on its own**, and restore into it:
 
 ```sh
 docker compose up -d db
@@ -254,24 +270,37 @@ On a cluster this fresh, `initdb` has already made an empty `portfolio`, so the 
 `createdb` pair is a no-op that costs nothing — running the one procedure is worth more than saving
 two lines.
 
-The closing `docker compose up -d` starts the dumper, which takes its first dump within seconds. If
-you copied the whole `volumes/dumps/` directory across rather than one archive, that includes
-`last-success.json`, and the shrink guard applies to the first run — see
-[After any restore](#after-any-restore).
+The closing `docker compose up -d` starts the dumper, which dumps at once on a directory holding no
+`last-attempt.json` — the usual case, when you carried one archive across. Carry the whole
+`volumes/dumps/` directory instead and you carry both markers: `last-attempt.json`, which holds the
+boot dump back for the rest of the hour it records, and `last-success.json`, which arms the shrink
+guard against your first run. Neither is a fault; both are worth knowing before you conclude the
+dumper is broken. See [After any restore](#after-any-restore).
 
-**Restoring into a different directory on the same machine is a different job.** The `db-store`
-volume record outlives `docker compose down` and still points at the old checkout, so `up` fails to
-mount before it starts anything. `docker compose down -v` in the old directory first, which discards
-the record and leaves the data standing, or `docker volume rm portfolio_db-store`. Moving a cluster
-rather than restoring one is
-[`operating.md`](operating.md#moving-an-instance-that-predates-the-local-path).
+**On the same machine, clear the old volume record first.** `db-store` is a named volume bound to
+an absolute path, and the record outlives `docker compose down`, so a second checkout does not get
+a cluster of its own. With the old checkout deleted, `up` fails to mount and says which path it
+wanted. **With the old checkout still there, `up` succeeds against it**: the new one comes up
+serving the old data, its own `volumes/db/data` stays empty, and the restore you are about to run
+lands in the directory you were trying to leave. Either way, before anything else:
+
+```sh
+docker compose down -v                  # in the OLD checkout: drops the record, leaves the data
+# or, if that directory is gone
+docker volume rm portfolio_db-store
+```
+
+`down -v` discarding the record rather than the directory is
+[`operating.md`](operating.md#where-the-database-lives). Moving a cluster you still have, rather
+than restoring one, is [`operating.md`](operating.md#moving-an-instance-that-predates-the-local-path).
 
 ---
 
 ## The drill: rehearse without an outage
 
-**An archive you have never restored is not a backup.** Restore into a *separate* database on the
-same server: nothing stops, nobody sees a `502`, and the live database is never dropped.
+**An archive nobody has ever restored is not yet evidence of anything.** Restore into a *separate*
+database on the same server: nothing stops, nobody sees a `502`, and the live database is never
+dropped.
 
 ```sh
 DUMP=volumes/dumps/portfolio-20260922T021850Z.dump
@@ -286,14 +315,18 @@ docker compose exec -T db psql -U portfolio -d portfolio_drill \
 docker compose exec -T db dropdb -U portfolio portfolio_drill
 ```
 
-The count is the point, and truncation is the failure it exists for: an archive that restores
-cleanly into an *empty* schema and then produces no rows will not be noticed any other way.
-Compare it against the same query on `portfolio` and be suspicious of a large gap. For a stronger
-comparison, run the same few aggregates on both — row counts per table and one money total —
-rather than a single count.
+The count is the point, and it is not the truncation check repeated: a truncated archive never gets
+this far, because `pg_restore` fails on it and `--single-transaction` lands nothing. What this
+catches is an archive that decodes perfectly and carries almost nothing — one taken of a database
+that was empty or half-restored when the dumper ran, which every check before this one passes.
+Compare the count against the same query on `portfolio` and be suspicious of a large gap. For a
+stronger comparison, run the same few aggregates on both — row counts per table and one money
+total — rather than a single count.
 
 `portfolio_drill` is never migrated and the app is never pointed at it. It exists for the length of
-the drill and is dropped at the end.
+the drill and is dropped at the end — **do not leave it up**. It doubles the cluster on the disk the
+dumper measures, and a dump that runs into the free-space floor refuses at stage `space`, which is
+the one failure the retry ladder does not cover.
 
 **Do this quarterly, and after any Postgres major upgrade.** The upgrade is the one that changes
 what `pg_restore` is being asked to do rather than merely how long it takes.

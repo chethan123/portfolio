@@ -1335,7 +1335,7 @@ costs to recover, once a command runs again:
 
 Keep them wherever you keep passwords, which is not the directory you keep the dumps in.
 
-> **An archive you have never restored is not a backup.** Rehearse it. The
+> **An archive nobody has ever restored is not yet evidence of anything.** Rehearse it. The
 > [drill](restoring-a-dump.md#the-drill-rehearse-without-an-outage) does that without taking the
 > instance down; quarterly, and after any Postgres major upgrade.
 
