@@ -4,6 +4,7 @@
 #   dump-loop.sh [loop]            the service's command
 #   dump-loop.sh verify <file>     decode an archive whole (smoke test)
 #   dump-loop.sh prune <dir>       apply retention (smoke test)
+#   dump-loop.sh catch-up          is a boot dump due? 0 yes, 1 no (smoke test)
 #   dump-loop.sh healthcheck       the container's healthcheck
 set -eu
 
@@ -277,7 +278,11 @@ needs_catch_up() {
   [ -f "$a" ] || return 0
   [ "$(marker_field "$a" outcome)" = "success" ] || return 0
   started=$(marker_field "$a" started_at)
-  epoch=$(date -u -d "$(printf '%s' "$started" | tr 'TZ' ' ')" +%s 2>/dev/null || echo 0)
+  # `sed`, not `tr 'TZ' ' '`: tr pads SET2 with its last byte, so the trailing Z became a
+  # second space, busybox `date -d` refuses one, and the fallback below then read every
+  # marker as epoch 0 — a dump on every boot, the one thing the comment above rules out.
+  epoch=$(date -u -d "$(printf '%s' "$started" | sed 's/T/ /; s/Z$//')" +%s 2>/dev/null || echo 0)
+  # An unreadable marker falls back to 0 and so dumps, which is the safe direction.
   [ "$(( $(now) - epoch ))" -gt 3600 ]
 }
 
@@ -338,6 +343,7 @@ case "${1:-loop}" in
     ;;
   verify)  [ $# -eq 2 ] || die "usage: dump-loop.sh verify <file>"; verify "$2" ;;
   prune)   [ $# -eq 2 ] || die "usage: dump-loop.sh prune <dir>"; prune "$2" ;;
+  catch-up) [ $# -eq 1 ] || die "usage: dump-loop.sh catch-up"; needs_catch_up ;;
   healthcheck) healthcheck ;;
   *) die "unknown command '$1'" ;;
 esac

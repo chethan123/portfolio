@@ -773,6 +773,19 @@ done
   fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
 
+# "Not dump on every boot" is the loop's own rule, and it rests entirely on parsing the attempt
+# marker's timestamp. Parsed wrong it reads as epoch 0, every restart dumps, and nothing else
+# notices — so both directions are asserted against the marker this run just wrote.
+if docker compose run --rm -T --no-deps dump catch-up >/dev/null 2>&1; then
+  fail "a boot dump reads as due minutes after a successful one"
+fi
+docker compose run --rm -T --no-deps -e DUMP_DIR=/tmp/catch-up --entrypoint sh dump -c \
+  'mkdir -p "$DUMP_DIR" &&
+   printf "%s\n" "{\"started_at\":\"2020-01-01T00:00:00Z\",\"outcome\":\"success\"}" > "$DUMP_DIR/last-attempt.json" &&
+   sh /usr/local/bin/dump-loop.sh catch-up' >/dev/null 2>&1 ||
+  fail "no boot dump reads as due against a success marker from 2020"
+printf 'catch-up: a fresh success holds the boot dump back, a stale one does not\n'
+
 # pg_restore --list reads only the front of the archive and would pass a file missing most of its data.
 docker compose run --rm -T dump verify "/dumps/${dump_name}" >/dev/null 2>&1 ||
   fail "the service refused an archive it had just written and verified"
