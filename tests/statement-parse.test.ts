@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { readCsv } from "~/lib/csv";
-import { parseStatement, type StatementMapping } from "~/lib/statement";
+import { parseStatement, statementMapping, type StatementMapping } from "~/lib/statement";
 
 const fixture = (name: string): Uint8Array =>
   readFileSync(fileURLToPath(new URL(`./fixtures/statements/${name}`, import.meta.url)));
@@ -1059,5 +1059,12 @@ describe("multi-account mode", () => {
       asOfMapped: true,
       problems: [],
     });
+  });
+
+  it("keeps the flag through the stored mapping's schema, which strips a key it does not name", () => {
+    // a stored multi-account mapping read back without it would parse as single-account
+    const stored = mapping({ multiAccount: true, columns });
+
+    expect(statementMapping.parse(stored).multiAccount).toBe(true);
   });
 });

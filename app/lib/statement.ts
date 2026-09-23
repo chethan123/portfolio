@@ -98,8 +98,8 @@ export type UnnumberedRow = {
   instrument: string;
 };
 
-// Multi-account mode: the as-of cell as written, unvalidated. Agreement is per account, and
-// only the router knows which numbers are one account (spec 0023 decision 8).
+// Multi-account mode: the as-of cell as written, unvalidated. Left to the router, which knows
+// which numbers are skipped and the account a disagreement names (spec 0023 decision 8).
 export type AsOfSighting = {
   row: number;
   accountNumber: string;
@@ -114,17 +114,30 @@ export type ParseProblem = {
   code?: "blank-instrument";
 };
 
-export type ParsedStatement = {
+type StatementBody = {
   positions: ParsedPosition[];
   combined: CombinedRows[];
   skipped: SkippedRow[];
-  asOfDate: string | null; // always null in multi-account mode
   asOfMapped: boolean; // false when the mapping names no as-of column
   problems: ParseProblem[]; // empty means usable; anything here refuses the commit
-  // Multi-account mode only; absent otherwise.
-  asOfSightings?: AsOfSighting[];
-  unnumbered?: UnnumberedRow[];
 };
+
+// The router's input (statement-routing.ts): sign, dates and blank numbers still unsettled.
+export type MultiAccountStatement = StatementBody & {
+  multiAccount: true;
+  asOfDate: null;
+  asOfSightings: AsOfSighting[];
+  unnumbered: UnnumberedRow[];
+};
+
+export type ParsedStatement =
+  | (StatementBody & {
+      multiAccount?: never;
+      asOfDate: string | null;
+      asOfSightings?: never;
+      unnumbered?: never;
+    })
+  | MultiAccountStatement;
 
 function isZero(value: string): boolean {
   return /^0+(\.0+)?$/.test(value);
@@ -183,12 +196,70 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   };
 }
 
+// Zero keeps no sign: "-0.00" would read as a debt of nothing written as though it were something.
+// The numerator (basis*quantity) flips with the quantity, or a later fold (uploads.server.ts)
+// would report a liability's cost basis inverted.
+export function negateOwed<Position extends Pick<FoldableLot, "quantity" | "weightedBasisUnits">>(
+  position: Position,
+): Position {
+  const { quantity, weightedBasisUnits } = position;
+  if (isZero(quantity)) return position;
+  return {
+    ...position,
+    quantity: quantity.startsWith("-") ? quantity.slice(1) : `-${quantity}`,
+    ...(weightedBasisUnits === undefined || weightedBasisUnits === null
+      ? {}
+      : { weightedBasisUnits: -weightedBasisUnits }),
+  };
+}
+
 // ISO kept as written; US shapes (MM/DD/YYYY) rewritten to it. Only the spelling moves —
 // "13/40/2026" becomes "2026-13-40" and is refused as not on the calendar downstream.
 function isoAsOf(value: string): string {
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
   if (us === null) return value;
   return `${us[3]}-${(us[1] ?? "").padStart(2, "0")}-${(us[2] ?? "").padStart(2, "0")}`;
+}
+
+// First sighting speaks; every other must agree once normalised by isoAsOf. Two disagreeing
+// dates refuse naming both — a statement is a photograph of one day. `account` names whose rows
+// these are in a multi-account file (spec 0023 decision 8).
+export function resolveAsOf(
+  sightings: ReadonlyArray<{ row: number; value: string }>,
+  column: string | null,
+  account?: string,
+): { asOfDate: string | null; problem: ParseProblem | null } {
+  const first = sightings[0];
+  if (first === undefined) return { asOfDate: null, problem: null };
+  const whose = account === undefined ? "" : ` for ${account}`;
+
+  const differing = sightings.find(
+    (sighting) => isoAsOf(sighting.value) !== isoAsOf(first.value),
+  );
+  if (differing !== undefined) {
+    return {
+      asOfDate: null,
+      problem: {
+        row: differing.row,
+        column,
+        message:
+          `The file carries two as-of dates${whose} — "${first.value}" on line ` +
+          `${first.row + 1} and "${differing.value}" on line ${differing.row + 1} — ` +
+          "and a statement is a photograph of one day.",
+      },
+    };
+  }
+
+  const parsed = recordedDate(`The as-of date${whose}`).safeParse(isoAsOf(first.value));
+  if (parsed.success) return { asOfDate: parsed.data, problem: null };
+  return {
+    asOfDate: null,
+    problem: {
+      row: first.row,
+      column,
+      message: parsed.error.issues[0]?.message ?? `The as-of date${whose} could not be read.`,
+    },
+  };
 }
 
 type RowRecord = {
@@ -215,15 +286,10 @@ export function parseStatement(
   const asOfMapped = typeof columns.asOf === "string" && columns.asOf !== "";
   const multiAccount = mapping.multiAccount === true;
 
-  const refused = (): ParsedStatement => ({
-    positions: [],
-    combined: [],
-    skipped: [],
-    asOfDate: null,
-    asOfMapped,
-    problems,
-    ...(multiAccount ? { asOfSightings: [], unnumbered: [] } : {}),
-  });
+  const refused = (): ParsedStatement => {
+    const body = { positions: [], combined: [], skipped: [], asOfDate: null, asOfMapped, problems };
+    return multiAccount ? { ...body, multiAccount, asOfSightings: [], unnumbered: [] } : body;
+  };
 
   if (!columns.instrument) {
     problems.push({
@@ -459,13 +525,9 @@ export function parseStatement(
     else group.push(record);
   }
 
-  // Zero keeps no sign: "-0.00" would read as a debt of nothing written as though it were something.
   // Multi-account: sign is the router's, by the kind of the account each row lands in (decision 6).
-  const negates = mapping.owedAsPositive && !multiAccount;
-  const signed = (quantity: string): string => {
-    if (!negates || isZero(quantity)) return quantity;
-    return quantity.startsWith("-") ? quantity.slice(1) : `-${quantity}`;
-  };
+  const signed = (position: ParsedPosition): ParsedPosition =>
+    mapping.owedAsPositive && !multiAccount ? negateOwed(position) : position;
 
   const positions: ParsedPosition[] = [];
   const combined: CombinedRows[] = [];
@@ -476,14 +538,16 @@ export function parseStatement(
     const { instrument } = first;
 
     if (group.length === 1) {
-      positions.push({
-        row: first.row,
-        instrument,
-        name: first.name,
-        accountNumber: first.accountNumber,
-        quantity: signed(first.quantity),
-        costBasisPerShare: first.costBasisPerShare,
-      });
+      positions.push(
+        signed({
+          row: first.row,
+          instrument,
+          name: first.name,
+          accountNumber: first.accountNumber,
+          quantity: first.quantity,
+          costBasisPerShare: first.costBasisPerShare,
+        }),
+      );
       continue;
     }
 
@@ -500,32 +564,22 @@ export function parseStatement(
     }
 
     const fold = foldLots(group);
-    const quantity = signed(fold.quantity);
-
-    // signed may flip the sign after weighting; the numerator (basis*quantity) must flip
-    // too, or the spelling fold would report a liability's cost basis inverted.
-    const negated = quantity !== fold.quantity;
-    const weightedBasisUnits =
-      fold.weightedBasisUnits === null
-        ? null
-        : negated
-          ? -fold.weightedBasisUnits
-          : fold.weightedBasisUnits;
-
-    positions.push({
+    const position = signed({
       row: first.row,
       instrument,
       name: first.name,
       accountNumber: first.accountNumber,
-      quantity,
+      quantity: fold.quantity,
       costBasisPerShare: fold.costBasisPerShare,
-      weightedBasisUnits,
+      weightedBasisUnits: fold.weightedBasisUnits,
     });
+
+    positions.push(position);
     combined.push({
       ...(multiAccount ? { accountNumber: first.accountNumber } : {}),
       instrument,
       rowCount: group.length,
-      quantity,
+      quantity: position.quantity,
     });
   }
 
@@ -537,41 +591,14 @@ export function parseStatement(
       asOfDate: null,
       asOfMapped,
       problems,
+      multiAccount,
       asOfSightings: accountAsOfSightings,
       unnumbered,
     };
   }
 
-  // First as-of sighting speaks for the file; every other must agree once normalised by
-  // isoAsOf. Two disagreeing dates refuse naming both — a statement is a photograph of one day.
-  let asOfDate: string | null = null;
-  const firstSighting = asOfSightings[0];
-  if (firstSighting !== undefined) {
-    const differing = asOfSightings.find(
-      (sighting) => isoAsOf(sighting.value) !== isoAsOf(firstSighting.value),
-    );
-    if (differing !== undefined) {
-      problems.push({
-        row: differing.row,
-        column: columns.asOf ?? null,
-        message:
-          `The file carries two as-of dates — "${firstSighting.value}" on line ` +
-          `${firstSighting.row + 1} and "${differing.value}" on line ${differing.row + 1} — ` +
-          "and a statement is a photograph of one day.",
-      });
-    } else {
-      const parsed = recordedDate("The as-of date").safeParse(isoAsOf(firstSighting.value));
-      if (parsed.success) {
-        asOfDate = parsed.data;
-      } else {
-        problems.push({
-          row: firstSighting.row,
-          column: columns.asOf ?? null,
-          message: parsed.error.issues[0]?.message ?? "The as-of date could not be read.",
-        });
-      }
-    }
-  }
+  const { asOfDate, problem } = resolveAsOf(asOfSightings, columns.asOf ?? null);
+  if (problem !== null) problems.push(problem);
 
   return { positions, combined, skipped, asOfDate, asOfMapped, problems };
 }
