@@ -396,7 +396,7 @@ table with a single grep. They come in three tiers.
 | Invariant | The owner | The obligation |
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller passes `process.env` in, and none of them reads a variable itself: the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, and the capture script. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:71`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:172-173`) by Node's own `fetch`/undici. Neither `server/config.ts` nor any application code reads either. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling. The route (`app/routes/upload.tsx:42`) must read the multipart body through `readUploadForm`, which counts bytes as they stream, and never through `request.formData()`, which buffers a chunked body without limit. Every other action goes through `formFields`, which drops file parts by design. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling. The route (`app/routes/upload.tsx:49`) must read the multipart body through `readUploadForm`, which counts bytes as they stream, and never through `request.formData()`, which buffers a chunked body without limit. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary: an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind, one for which kinds hold their whole position in one number and one for which run negative, are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data, because the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 | Settling the owner-filter reading: the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading`, what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it. For the chart's reads they name it to the module that makes them, which §6.3 sets out. Either way, whose money a loader reads stays visible in review rather than hidden inside this one. |
@@ -459,10 +459,12 @@ a real boundary, not a naming preference:
   asset-class options from the same list the resolver validates against.
 
 **One file breaks this today.** `app/lib/statement.ts:15` imports `recordedDate` from
-`input.server.ts` as a **value**, not a type, and uses it at `:460`. It stays out of the client bundle
+`input.server.ts` as a **value**, not a type, and uses it at `:254`. It stays out of the client bundle
 only because `parseStatement` is reachable from loaders and actions alone and is tree-shaken away;
 nothing enforces that. A component-side call to `parseStatement` would drag `input.server.ts` across
-the boundary. Worth fixing before that happens rather than after.
+the boundary. Worth fixing before that happens rather than after. `statement-routing.server.ts`
+needed the same import (`listSentence`) and was named `.server.ts` instead, so routing a multi-account
+file adds no second case of this.
 
 ### 4.4 Request lifecycle
 
@@ -560,7 +562,7 @@ rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
-| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` when still null | Yes, a new set |
+| Commit an upload | `uploads.server.ts` → `recordUpload` (`commitUpload` for an account chosen up front, `commitMultiAccountUpload` for a file of several, routed by `statement-routing.server.ts`) | `position_set` + `holding`s, one per account for several, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` for each account still recording none, from the form for one account or from an answered `upload_draft_account_answer` row for several | Yes, a new set (or one per routed account) |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes, a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
 | Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `upload_draft_answer` (the draft's own answer, never `instrument_alias`) | Yes, with one compensating delete: an instrument created for a string that vocabulary gained meanwhile, or that the same draft's earlier submit already answered, is removed rather than left as a duplicate |
@@ -571,11 +573,11 @@ The first three, the writers of history, run inside `withAccountLock` (§4.2, §
 `closeAccount` with them; the rest touch no account's history.
 
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:193` edits an account and `:272` closes one, `people.server.ts:117`
+CRUD should: `accounts.server.ts:260` edits an account and `:345` closes one, `people.server.ts:117`
 renames a person and `:138` deletes one outright when they own no accounts,
 `instrument-aliases.server.ts`'s `changeAlias` repoints an alias in place or deletes it outright
 once a preview has been confirmed, `settings.server.ts:29`
-writes the tax rate, `column-mapping.server.ts:50` upserts a saved mapping, and `uploads.server.ts`
+writes the tax rate, `column-mapping.server.ts:53` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
 every date the chart plots.
@@ -636,6 +638,8 @@ erDiagram
     ACCOUNT ||--o{ UPLOAD_DRAFT : "stages"
     UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ANSWER : "answers"
     INSTRUMENT ||--o{ UPLOAD_DRAFT_ANSWER : "answered as"
+    UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ACCOUNT_ANSWER : "answers (spec 0023)"
+    ACCOUNT ||--o{ UPLOAD_DRAFT_ACCOUNT_ANSWER : "answered as"
     POSITION_SET ||--o{ HOLDING : "photographs"
     INSTRUMENT ||--o{ HOLDING : "is held as"
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
@@ -657,7 +661,7 @@ erDiagram
         text kind "brokerage|401k|ira|bank|liability"
         bigint owner_id FK "on delete restrict"
         text tax_treatment "taxable|tax_deferred|tax_free"
-        text external_account_number "nullable — a guard, never a selector"
+        text external_account_number "nullable — guard on a single-account upload, selector on a multi-account one (ADR-0015)"
         timestamptz closed_at "nullable; closing preserves history"
     }
     CLASSIFICATION {
@@ -726,7 +730,7 @@ erDiagram
     }
     UPLOAD_DRAFT {
         bigint id PK
-        bigint account_id FK "on delete cascade"
+        bigint account_id FK "nullable — null is a multi-account draft (spec 0023); on delete cascade"
         text filename
         bytea raw_file "not null — a draft is a file"
         date as_of_date "nullable — reserved"
@@ -738,6 +742,11 @@ erDiagram
         bigint draft_id PK "composite with raw_string; on delete cascade"
         text raw_string PK "collate C — byte-exact, as instrument_alias"
         bigint instrument_id FK "on delete cascade"
+    }
+    UPLOAD_DRAFT_ACCOUNT_ANSWER {
+        bigint draft_id PK "composite with account_number; on delete cascade"
+        text account_number PK "collate C — byte-exact once trimmed"
+        bigint account_id FK "nullable — null is a skip (spec 0023 decision 2); on delete cascade"
     }
     PASSKEY {
         text credential_id PK "exactly as the library returns it, never re-encoded"
@@ -785,12 +794,14 @@ split is exact and each side is a decision:
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 | `upload_draft_answer.draft_id` → `upload_draft` | `CASCADE` | An answer is the draft's own. A draft abandoned, swept or committed takes its answers with it; the commit has promoted the ones it needed first (issue #291). |
 | `upload_draft_answer.instrument_id` → `instrument` | `CASCADE` | As `instrument_alias`: an answer naming a gone instrument says nothing. |
+| `upload_draft_account_answer.draft_id` → `upload_draft` | `CASCADE` | An account-number answer is the draft's own too (spec 0023, ADR-0015): a draft abandoned, swept or committed takes it with it, the commit having promoted the ones it needed first. |
+| `upload_draft_account_answer.account_id` → `account` | `CASCADE` | An answer naming a gone account says nothing; unlike `upload_draft.account_id` it is nullable already (a null answer is a skip), so this cascade only ever removes rows, never orphans one. |
 | `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it, which is how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, the application deletes a referenced row only where that row
 is scaffolding or was never held: an `upload_draft`, at commit and at the sweep, taking its
-`upload_draft_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
+`upload_draft_answer` and `upload_draft_account_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
 `removePerson`); a just-created, never-held instrument that lost the race for its string
 (`instrument-resolution.server.ts`'s `resolveAll`). There is no account delete and no position-set
 delete anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql`
@@ -898,7 +909,9 @@ anywhere.
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
 | `upload_draft_answer_instrument_id_idx` | `(instrument_id)` | The instrument cascade, as `instrument_alias_instrument_id_idx`; the answers themselves are reached through the primary key `(draft_id, raw_string)`. |
-| `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
+| `upload_draft_account_answer_account_id_idx` | `(account_id)` | The account cascade, as `upload_draft_answer_instrument_id_idx` is the instrument's; the answers themselves are reached through the primary key `(draft_id, account_number)`. |
+| `column_mapping_institution_fingerprint_unique` | unique `(institution, header_fingerprint) where institution is not null` | One saved mapping per exact header, per institution. |
+| `column_mapping_multi_account_fingerprint_unique` | unique `(header_fingerprint) where institution is null` | One saved mapping per exact header in the multi-account scope (null institution, ADR-0015), so it can never collide with an institution's mapping for the same header. |
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at`, an index scan stopping at the first row, executed once per holding per plotted date. |
 | `price_observation_pkey` | `(instrument_id, as_of)` | Three jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. It is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. And it is the grained reader's per-holding lookup (ADR-0014): one backward index probe per (plotted instant, holding) pair, for the last observation at or before that instant. |
 | `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. The grained reader's per-step maximum (ADR-0014) rides the same range scan, one backward index step per (day, step) pair. |
@@ -1017,6 +1030,12 @@ flowchart TD
     class D,DA,A store
 ```
 
+This pipeline is the single-account path; a multi-account draft (`account_id` null, spec 0023) adds
+an accounts step between columns and instruments, routes rows by `statement-routing.server.ts`
+instead of the account chosen up front, and R4 is `recordUpload`, which nests one
+`withAccountLock` per routed account rather than the one lock shown here, redirecting to
+`/upload/done` instead of one account's page.
+
 **Nothing passes between steps in memory.** Each screen re-reads the draft's bytes, re-parses them
 through the saved mapping, and re-resolves against vocabulary and the draft's own answers.
 `resolveAll` is not a stage that hands its output to the commit. It has one caller, the instruments
@@ -1048,7 +1067,7 @@ Two invariants everything downstream leans on:
 
 **`parseStatement` returns refusals as data, not throws.** Each problem carries the row and the column
 that caused it. The *column* is what the screen uses structurally: `problemFieldsOf`
-(`columns.tsx:179`) marks the offending `<select>` as invalid, because remapping is the fix. The row
+(`columns.tsx:193`) marks the offending `<select>` as invalid, because remapping is the fix. The row
 travels inside the message the reader sees ("on line 12"). A thrown error could name only the first
 fault, and a screen cannot point at a stack trace.
 
@@ -1089,6 +1108,11 @@ stateDiagram-v2
     Review --> Expired
     Expired --> [*]: one page, two renderings
 ```
+
+This state machine, like the pipeline above it, draws the single-account path (and a null-account
+draft adds its own accounts step between Columns and Instruments, spec 0023): several accounts
+commit through `recordUpload`, not `commitUpload()` shown at Review → Committed, and land on
+`/upload/done` rather than the redirect shown at Committed → `[*]`.
 
 **Where the draft got to is a property of the row, not a status column.** `mapping` is null until the
 columns step passes; with one, the file's own strings decide between instruments and review.
@@ -1270,13 +1294,22 @@ These deserve emphasis:
   difference rolls promotion and deletion back. The promotion stays before deletion because the
   latter cascades the answers away; zero deleted rows still aborts the transaction.
 
-**The account number is a guard, never a selector.** A file naming an account different from the one
-the draft targets is refused; it is never silently rerouted to the account it names. It is also
-*captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, `commitUploadUnderLock` writes it onto the account, guarded by
-`where external_account_number is null`; the account lock makes a concurrent upload impossible, and the
-predicate stays as the write's own statement of the rule. The guard arms itself on the first upload,
-and every later statement is checked against it.
+**On this path — an account chosen up front — the account number is only a guard.** A file naming an
+account different from the one the draft targets is refused; it is never silently rerouted to the
+account it names. It is also *captured*, inside the same transaction: when
+the account has no number recorded and the committed file carries one, `commitUploadUnderLock` writes
+it onto the account, guarded by `where external_account_number is null`; the account lock makes a
+concurrent upload impossible, and the predicate stays as the write's own statement of the rule. The
+guard arms itself on the first upload, and every later statement is checked against it. Zero rows
+written refuses (a stored blank): a blank is not none to the guard's `is null` predicate, so
+`recordAccountNumber` (`uploads.server.ts:2096`) treats it as a case Settings must clear first
+rather than write over silently.
+
+On the other path — no account chosen, "Several accounts" — the same column is the selector instead
+(ADR-0015, spec 0023): `routeStatement` (`statement-routing.server.ts`) sends each row to the open
+account whose recorded number matches it, exactly once, because `account_open_number_unique` (a
+partial unique index over open accounts with a non-null number) holds at most one open account per
+number.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
@@ -1657,7 +1690,7 @@ data-modifying CTE, so the set and its rows exist together or not at all.
 write so the form can refuse politely and name what is in the way, and until #283 those reads
 raced: two corrections to different rows each copied the same latest set forward, and whichever
 landed last restated the account without the other's edit. Every writer that appends a position
-set, and `closeAccount`, now runs inside `withAccountLock` (`accounts.server.ts:143-163`): `select
+set, and `closeAccount`, now runs inside `withAccountLock` (`accounts.server.ts:151-171`): `select
 … for no key update` on the account row, one transaction from the read the writer decides on to its
 insert, so the later writer's read is the earlier writer's commit. The in-write checks stay, because
 the data-modifying CTE is what makes the set and its rows one statement: `revisePosition`'s `source`
@@ -1667,8 +1700,8 @@ CTE still requires the instrument be in the latest set (`positions.server.ts:234
 half-landed set.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
-`account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
-change behind it, because `createDraft` (`uploads.server.ts:139`) reads only whether the account is
+`account.kind` alone (`account.tsx:147`), and a `bank` account can be holding securities with no kind
+change behind it, because `createDraft` (`uploads.server.ts:198`) reads only whether the account is
 closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1732,13 +1765,17 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | A string recorded, repointed or forgotten after the commit's revision comparison | Promotion uses `on conflict do nothing`, then the commit re-reads vocabulary for the file's strings inside its transaction `for share` and refuses on any difference or absence; the throw takes promotion and draft deletion with it. Promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` (`commitUploadUnderLock`) |
 | A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
-| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the **bare** account row, then the account read joined to its owner in a second statement, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). Two statements, because a lock taken through the join re-checks that join on being granted against the person tuple the first scan pinned, so an owner change during the wait dropped the row and 404'd a live account (#332); after the lock, the read is a fresh statement and sees the committed owner. `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the **bare** account row, then the account read joined to its owner in a second statement, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). Two statements, because a lock taken through the join re-checks that join on being granted against the person tuple the first scan pinned, so an owner change during the wait dropped the row and 404'd a live account (#332); after the lock, the read is a fresh statement and sees the committed owner. `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `closeAccount` and `recordUpload` — directly for one account (`commitUpload`), or nested per routed account, ascending `compareIds` order, through `withAccountLocks` for several |
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
 | A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
-| A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:193`; [#311](https://github.com/chethan123/portfolio/issues/311) |
-| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:193`; [#312](https://github.com/chethan123/portfolio/issues/312) |
-| An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | all three writers, `accounts.server.ts:272` |
+| A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:260`; [#311](https://github.com/chethan123/portfolio/issues/311) |
+| An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:260`; [#312](https://github.com/chethan123/portfolio/issues/312) |
+| Two writers recording one account number on two open accounts, a Settings save or an upload's capture, in any pair | The partial unique index `account_open_number_unique`, not a read first: Settings takes no lock and a commit locks only its own account, so both could pass a read. The later writer's `23505` is caught — under a savepoint when the write runs inside a transaction, as a commit's does; Settings runs outside one in production, so there the error simply propagates — the holder re-read to name it, and the write refused, as a field message from Settings and a `RefusedUpload` from a commit | `accounts.server.ts` (`refusingDuplicateNumber`), `migrations/0015_account_open_number_unique.sql` |
+| Two upload commits over the same account(s), at least one of them several accounts | Both lock every account they touch through `withAccountLock`/`withAccountLocks`, ascending `compareIds` order, so the second queues on whichever shared account the first reached first rather than deadlocking. Once the first commits, the second's own re-read under its locks — the re-parsed draft, the re-routed groups, the re-resolved diff — no longer matches what it posted: a changed review revision refuses it outright, and history the first wrote that leaves the diff's own shape unchanged still moves the affected account's append watermark, which the second's per-account check (decision 9) refuses, naming that account | `accounts.server.ts` (`withAccountLock`, `withAccountLocks`), `uploads.server.ts` (`commitUploadUnderLock`, `commitMultiAccountUnderLocks`) |
+| A multi-account draft's answer naming an account that Settings then records a number on | `updateAccount` takes no lock the draft holds. The router re-reads `account.external_account_number` on every subsequent read of the draft — including the unlocked read `commitMultiAccountUpload` takes only to learn which accounts to lock — so the now-recorded number outranks the stale answer and sends the reader back to the accounts step (`DraftNotReadyError`) rather than routing rows there | `statement-routing.server.ts` (`routeStatement`, the `stale-answer` problem), `uploads.server.ts` (`readyParse`) |
+| A number recorded, cleared or moved to a different open account while a multi-account commit waited on its locks | `commitMultiAccountUpload`'s unlocked read picks which accounts to lock; `commitMultiAccountUnderLocks` re-routes under those locks and refuses when the re-routed rows now name an account `withAccountLocks` did not lock, rather than routing there unlocked — `StaleReviewError` (`"rerouted"`), naming where the rows now go | `uploads.server.ts:1878-1885` (`commitMultiAccountUnderLocks`) |
+| An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | every writer, `accounts.server.ts:345` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
 `7295380114023641` (migrations) and `…42` (poller). With a shared key the collision would be
@@ -2326,7 +2363,7 @@ still live in the current code:
 | `validate-config.ts` | The startup gate. It fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:257`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:265`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
 | `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host. The `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/`: domain (`.server`) and pure
@@ -2335,10 +2372,11 @@ still live in the current code:
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and `inTransaction`, the transaction-or-reuse branch every writer needs because the test seam is a transaction (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `commitUpload`, the ingest flow's one write. Its transaction enters through `withAccountLock`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2) |
+| `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `recordUpload`, the ingest flow's one write: `commitUpload` for an account chosen up front, `commitMultiAccountUpload` for a file of several, routed by `statement-routing.server.ts`. Each transaction enters through `withAccountLock`, or nested per routed account through `withAccountLocks`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2). Also `recordedStatements`, the done page's own reader, off `position_set` ids rather than the commit |
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
-| `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
+| `column-mapping.server.ts` | Header fingerprinting and the saved mapping, scoped by institution or, null, by the multi-account draft alone (ADR-0015) |
+| `statement-routing.server.ts` | The multi-account upload's one matcher (spec 0023, ADR-0015): `routeStatement`, pure, takes a clean multi-account parse, the open and closed accounts, and the draft's answers, and groups rows by the open account whose recorded number matches, a recorded number always outranking an answer. Groups come out in ascending account id, the commit's lock order. Every step after columns reads its groups; nothing downstream re-matches |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill: its candidate query, its batch, its ledger, and the composition every refresh runs |
 | `price-provider.server.ts` | The provider interface, both methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
 | `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above, never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below. This module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
@@ -2410,9 +2448,11 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards, the size cap read twice, the empty file and the not-text file, live in `uploads.server.ts` so the action stays a thin translation |
 | `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader, because the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
 | `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
-| `upload/columns.tsx` | Step two: map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
-| `upload/instruments.tsx` | Step three: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
-| `upload/review.tsx` | Step four: the dated diff, then the commit, the flow's only history write. An undated file starts with today authorized; **Review this date** authorizes an edited date and redraws its baseline and confirmations without recording. Every removal is listed in full, and a majority removal demands a tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping or upload a corrected file against the same account. A wrong figure is fixed back on Columns |
+| `upload/columns.tsx` | Step two: map the file's columns, once per institution and header, or per header alone for a file of several accounts, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
+| `upload/accounts.tsx` | Step three of a file of several accounts (spec 0023 decision 2, ADR-0015): each account number no open account records is given to one recording none, or skipped. Reached only when the router found such a number; a single-account draft, or a file whose every number matched, is redirected past it |
+| `upload/instruments.tsx` | Step three, or four for several accounts: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |
+| `upload/review.tsx` | The last step: the dated diff, then the commit, the flow's only history write — one section per account for several, each with its own diff, baseline and confirmations. An undated file starts with today authorized; **Review this date** authorizes an edited date and redraws its baseline and confirmations without recording. Every removal is listed in full, and a majority removal demands a tick. A legacy draft whose saved mapping now exposes a blank-instrument parser problem gets a source-specific blocking page instead of a removal diff, with paths to correct the mapping or upload a corrected file against the same account. A wrong figure is fixed back on Columns |
+| `upload/done.tsx` | Where a multi-account commit lands (spec 0023 decision 16): one line per account the file recorded, read back from `?sets=` through `uploadReceipt` rather than the commit, so a reload shows the same page; an id naming no upload set is left out, never a 404 |
 | `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
 | `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed, because a tab rendering an apology is worse than one that is not there yet |
 | `settings/index.tsx` | What Settings holds and what it will hold, since naming the unbuilt tabs is the honest version of a fresh install |
@@ -2455,7 +2495,8 @@ also export pure helpers for testing.
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
 | `price-freshness.tsx` | How old this page's figures are, and the control that changes it, one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
 | `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
-| `upload-steps.tsx` | The upload flow's step strip. Four entries always, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
+| `upload-steps.tsx` | The upload flow's step strip. Four entries, five for a file of several accounts, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
+| `upload-receipt.tsx` | The account page's `?uploaded=` receipt and each line of `/upload/done`, told one way: added/updated/removed counts and the as-of date on a current statement, or the filed-behind sentence (spec 0005 §5) on one a later statement has superseded |
 
 ### `migrations/`
 
@@ -2475,6 +2516,9 @@ also export pure helpers for testing.
 | `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
 | `0013_upload_draft_answer.sql` | `upload_draft_answer`, a draft's own answers to its first sightings, keyed like `instrument_alias` and scoped by draft. `commitUpload` promotes the rows the recorded file names into vocabulary, and the draft's delete cascades the rest away (ADR-0013) |
 | `0014_position_set_created_at.sql` | `position_set.created_at` defaults to `statement_timestamp()`, the insert, not `now()`, the `BEGIN`, so a writer that waited for the account lock still sorts after the set it copied (§7.2) |
+| `0015_account_open_number_unique.sql` | `account_open_number_unique`, a partial unique index over open accounts naming an account number: at most one may record any given one (ADR-0015). Trims stored numbers first, a blank to null. Fails naming any duplicates already recorded, rather than choosing between them; its comment supersedes `0001`'s original comment on the column, which called it a guard only |
+| `0016_multi_account_draft_and_mapping.sql` | Drops `not null` from `upload_draft.account_id` (a null row is the multi-account draft) and `column_mapping.institution` (null is the multi-account scope), replacing `column_mapping_one_per_fingerprint` with the two partial indexes above so the two scopes can never find or overwrite each other's mapping for one header |
+| `0017_upload_draft_account_answer.sql` | `upload_draft_account_answer`, a multi-account draft's own answers to account numbers no open account records, keyed by draft and number (`collate "C"`, byte-exact), a null `account_id` a skip. `upload_draft_account_answer_account_unique` holds one number per account per draft, and `upload_draft_account_answer_account_id_idx` (`account_id`) serves the account cascade. `recordUpload`'s multi-account path writes an answered number onto its account before the draft's delete cascades the rest away (ADR-0015) |
 
 ### `public/`
 

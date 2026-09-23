@@ -70,3 +70,12 @@ trustworthy, and the reversal depends on all three:
   all say "never a selector". The first two are amended when [spec 0023](../specs/0023-multi-account-upload.md)
   lands. The migration comment stays as the history it is, and the new migration's comment
   supersedes it.
+- **A plan whose Traditional and Roth accounts share one institution number can now record it on
+  only one of them.** `account_open_number_unique` is scoped to open accounts, so the second account
+  of the pair stays numbered `null`, deliberately. A single-account upload into that second account
+  with the account-number column mapped is refused, naming the account that already holds the
+  number; the remedy is to map **Account number** as *Not in this file* for that upload. A
+  multi-account export listing both under the shared number routes every one of its rows to the
+  account that recorded it — the other is untouched, per decision 7 above. The DESIGN.md §4.2
+  fixture no longer models this: `tests/accounts.test.ts:85-104` now gives the two accounts distinct
+  numbers.

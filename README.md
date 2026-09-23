@@ -130,9 +130,12 @@ supersedes the earlier one in valuations. [Balance guide](docs/guide/account-det
   <img alt="The review screen: what the statement changes, grouped into added, updated and removed, with a removed position listed in full with its quantity and last known value" src="docs/screenshots/upload-review-light.png">
 </picture>
 
-Choose an account and CSV, map columns, resolve new instruments, then review the changes.
-A statement replaces the account's complete set of holdings for its date. Missing positions
-are treated as sold. Every removal is listed before commit.
+Choose an account and CSV — or **Several accounts (the file has an account-number column)**, which
+routes every row by its own number, asks about any number nothing records on a step of its own, and
+lands on a page listing every account it recorded — then map columns, resolve new instruments, and
+review the changes. A statement replaces its account's complete set of holdings for its date; a
+several-accounts file leaves any account it does not name untouched. Missing positions are treated
+as sold. Every removal is listed before commit.
 
 Positions and the name-to-instrument aliases are written only at commit. Drafts, column mappings,
 instruments and classifications may be saved earlier. An upload abandoned before the last step

@@ -4,7 +4,12 @@ import { UploadSteps } from "~/components/upload-steps";
 import { accountPickerGroups } from "~/lib/account-label";
 import { listAccounts } from "~/lib/accounts.server";
 import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { createDraft, parseUploadForm, readUploadForm } from "~/lib/uploads.server";
+import {
+  SEVERAL_ACCOUNTS,
+  createDraft,
+  parseUploadForm,
+  readUploadForm,
+} from "~/lib/uploads.server";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/upload";
@@ -31,6 +36,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     hasAccounts: accounts.length > 0,
     maxUploadMb: getConfig().MAX_UPLOAD_MB,
     prefillAccountId,
+    // Component can't import a `.server` module — the choice's value rides down with the data.
+    severalAccounts: SEVERAL_ACCOUNTS,
   };
 }
 
@@ -59,7 +66,8 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Upload({ loaderData, actionData }: Route.ComponentProps) {
-  const { accountGroups, hasAccounts, maxUploadMb, prefillAccountId } = loaderData;
+  const { accountGroups, hasAccounts, maxUploadMb, prefillAccountId, severalAccounts } =
+    loaderData;
   const errors = actionData?.errors;
 
   return (
@@ -74,7 +82,9 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
         </div>
       </header>
 
-      <UploadSteps steps={{ current: 1, draftId: null, instrumentsSkipped: false }} />
+      <UploadSteps
+        steps={{ current: 1, draftId: null, instrumentsSkipped: false, accountsSkipped: null }}
+      />
 
       {!hasAccounts ? (
         // Shell already renders the first-run prompt here — a second voice would double it.
@@ -84,7 +94,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
           <p className="empty-state-headline">Every account is closed.</p>
           <p className="empty-state-detail">
             A statement lands in an open account, and a closed account's history does not
-            change. Reopen or add one under{" "}
+            change. Add one under{" "}
             <Link to="/settings/accounts">Settings → Accounts</Link>.
           </p>
         </div>
@@ -133,6 +143,9 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                       ))}
                     </optgroup>
                   ))}
+                  <option value={severalAccounts}>
+                    Several accounts (the file has an account-number column)
+                  </option>
                 </select>
               </label>
               {errors?.accountId ? (

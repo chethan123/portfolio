@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { readCsv } from "~/lib/csv";
-import { parseStatement, type StatementMapping } from "~/lib/statement";
+import { parseStatement, statementMapping, type StatementMapping } from "~/lib/statement";
 
 const fixture = (name: string): Uint8Array =>
   readFileSync(fileURLToPath(new URL(`./fixtures/statements/${name}`, import.meta.url)));
@@ -812,5 +812,278 @@ describe("the as-of date", () => {
     expect(parsed.asOfMapped).toBe(false);
     expect(parsed.asOfDate).toBeNull();
     expect(parsed.problems).toEqual([]);
+  });
+});
+
+// spec 0023: grouped per account number; sign, as-of agreement and blank numbers are the router's
+describe("multi-account mode", () => {
+  const spreadsheet = {
+    instrument: "Holding",
+    name: "Description",
+    quantity: "Quantity",
+    costBasis: "Cost Basis",
+    asOf: "As Of",
+    accountNumber: "Account Number",
+  };
+  const columns = { instrument: "Symbol", quantity: "Qty", accountNumber: "Account" };
+
+  it("keeps one instrument held in two accounts as two positions, each with its own number", () => {
+    const { rows } = readCsv(fixture("multi-account.csv"));
+    const parsed = parseStatement(rows, mapping({ multiAccount: true, columns: spreadsheet }));
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.combined).toEqual([]);
+    expect(parsed.unnumbered).toEqual([]);
+    expect(
+      parsed.positions.map((position) => [
+        position.row,
+        position.accountNumber,
+        position.instrument,
+        position.quantity,
+        position.costBasisPerShare,
+      ]),
+    ).toEqual([
+      [1, "Z12-345678", "VTI", "120.000", "205.12"],
+      [2, "Z12-345678", "AAPL", "50.000", "170.66"],
+      [3, "Z98-765432", "VTI", "40.500", "231.40"],
+      [4, "Z98-765432", "FXAIX", "84.512", "151.33"],
+      [5, "0045501234", "Home mortgage", "312450.00", null],
+    ]);
+  });
+
+  it("applies no sign even with owedAsPositive set, since the router knows which account is owed", () => {
+    const { rows } = readCsv(fixture("multi-account.csv"));
+    const parsed = parseStatement(
+      rows,
+      mapping({ multiAccount: true, owedAsPositive: true, columns: spreadsheet }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.positions.map((position) => position.quantity)).toEqual([
+      "120.000",
+      "50.000",
+      "40.500",
+      "84.512",
+      // negated by the router, and only because this row lands in a liability (decision 6)
+      "312450.00",
+    ]);
+  });
+
+  it("returns as-of sightings per account unresolved, where differing dates refuse nothing", () => {
+    const { rows } = readCsv(fixture("multi-account.csv"));
+    const parsed = parseStatement(rows, mapping({ multiAccount: true, columns: spreadsheet }));
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.asOfMapped).toBe(true);
+    expect(parsed.asOfDate).toBeNull();
+    expect(parsed.asOfSightings).toEqual([
+      { row: 1, accountNumber: "Z12-345678", value: "2026-07-31" },
+      { row: 2, accountNumber: "Z12-345678", value: "2026-07-31" },
+      { row: 3, accountNumber: "Z98-765432", value: "2026-06-30" },
+      { row: 4, accountNumber: "Z98-765432", value: "2026-06-30" },
+      { row: 5, accountNumber: "0045501234", value: "2026-07-15" },
+    ]);
+  });
+
+  it("leaves an as-of cell's spelling, validity and agreement within one account to the router", () => {
+    // single-account mode refuses this file; which numbers are one account is not known here
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty", "As Of"],
+        ["A1", "AAPL", "50", "06/30/2026"],
+        ["A1", "MSFT", "25", "July 31, 2026"],
+      ],
+      mapping({ multiAccount: true, columns: { ...columns, asOf: "As Of" } }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.asOfDate).toBeNull();
+    expect(parsed.asOfSightings).toEqual([
+      { row: 1, accountNumber: "A1", value: "06/30/2026" },
+      { row: 2, accountNumber: "A1", value: "July 31, 2026" },
+    ]);
+  });
+
+  it("lists a blank-numbered row by row and instrument, and keeps it out of the positions", () => {
+    const { rows } = readCsv(fixture("multi-account-blank-number.csv"));
+    const parsed = parseStatement(rows, mapping({ multiAccount: true, columns: spreadsheet }));
+
+    // the router refuses the file on these (decision 13): a dropped row would record a sale
+    expect(parsed.unnumbered).toEqual([{ row: 3, instrument: "FXAIX" }]);
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.positions.map((position) => position.instrument)).toEqual([
+      "VTI",
+      "AAPL",
+      "Home mortgage",
+    ]);
+    expect(parsed.asOfSightings?.map((sighting) => sighting.row)).toEqual([1, 2, 4]);
+  });
+
+  it("keeps a skipped row's account number, when it states one, for that account's own review", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["A1", "VTI", "10"],
+        [" A1 ", "CASH", "--"],
+        ["", "Total", "--"],
+      ],
+      mapping({ multiAccount: true, columns }),
+    );
+
+    expect(parsed.skipped).toEqual([
+      { row: 2, instrument: "CASH", accountNumber: "A1" },
+      { row: 3, instrument: "Total" },
+    ]);
+  });
+
+  it("counts a whitespace-only number as blank, but not on a row skipped for stating no quantity", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["A1", "VTI", "10"],
+        ["  ", "BND", "5"],
+        ["", "Total", "--"],
+      ],
+      mapping({ multiAccount: true, columns }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.unnumbered).toEqual([{ row: 2, instrument: "BND" }]);
+    expect(parsed.skipped).toEqual([{ row: 3, instrument: "Total" }]);
+    expect(parsed.positions).toHaveLength(1);
+  });
+
+  it("groups account numbers exactly as written once trimmed, never folding case or leading zeros", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        [" 00123456 ", "VTI", "1"],
+        ["00123456", "VTI", "2"],
+        ["123456", "VTI", "4"],
+        ["z12-345678", "BND", "1"],
+        ["Z12-345678", "BND", "1"],
+      ],
+      mapping({ multiAccount: true, columns }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(
+      parsed.positions.map((position) => [
+        position.accountNumber,
+        position.instrument,
+        position.quantity,
+      ]),
+    ).toEqual([
+      ["00123456", "VTI", "3.00000000"],
+      ["123456", "VTI", "4"],
+      ["z12-345678", "BND", "1"],
+      ["Z12-345678", "BND", "1"],
+    ]);
+  });
+
+  it("combines duplicate rows within one account, never across accounts, naming the account", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty", "Basis"],
+        ["A1", "VTI", "10", "100.00"],
+        ["B2", "VTI", "5", "150.00"],
+        ["A1", "VTI", "30", "200.00"],
+      ],
+      mapping({ multiAccount: true, columns: { ...columns, costBasis: "Basis" } }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    // (10×100 + 30×200)/40 = 175
+    expect(parsed.positions).toEqual([
+      expect.objectContaining({
+        row: 1,
+        accountNumber: "A1",
+        instrument: "VTI",
+        quantity: "40.00000000",
+        costBasisPerShare: "175.0000",
+      }),
+      expect.objectContaining({
+        row: 2,
+        accountNumber: "B2",
+        instrument: "VTI",
+        quantity: "5",
+        costBasisPerShare: "150.00",
+      }),
+    ]);
+    expect(parsed.combined).toEqual([
+      { accountNumber: "A1", instrument: "VTI", rowCount: 2, quantity: "40.00000000" },
+    ]);
+  });
+
+  it("refuses one instrument twice in one account when combining is off, naming its number", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["A1", "VTI", "10"],
+        ["B2", "VTI", "5"],
+        ["A1", "VTI", "30"],
+      ],
+      mapping({ multiAccount: true, combineDuplicateRows: false, columns }),
+    );
+
+    // "2 lines", not 3: B2's VTI is its own position, not a duplicate
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ row: 3, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(
+      /"VTI" appears on 2 lines for account number "A1"/,
+    );
+    expect(parsed.positions).toEqual([
+      expect.objectContaining({ accountNumber: "B2", instrument: "VTI", quantity: "5" }),
+    ]);
+  });
+
+  it("refuses a multi-account mapping that names no account number column", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty"],
+        ["VTI", "1"],
+      ],
+      mapping({ multiAccount: true, columns: { instrument: "Symbol", quantity: "Qty" } }),
+    );
+
+    expect(parsed.positions).toEqual([]);
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ row: null, column: null });
+    expect(parsed.problems[0]?.message).toMatch(/names no account number column/);
+  });
+
+  it("adds nothing to the parse of a mapping without the flag, as every mapping saved before it", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty", "As Of"],
+        ["A1", "VTI", "1", "2026-07-31"],
+      ],
+      mapping({ columns: { ...columns, asOf: "As Of" } }),
+    );
+
+    expect(parsed).toStrictEqual({
+      positions: [
+        {
+          row: 1,
+          instrument: "VTI",
+          name: null,
+          quantity: "1",
+          costBasisPerShare: null,
+          accountNumber: "A1",
+        },
+      ],
+      combined: [],
+      skipped: [],
+      asOfDate: "2026-07-31",
+      asOfMapped: true,
+      problems: [],
+    });
+  });
+
+  it("keeps the flag through the stored mapping's schema, which strips a key it does not name", () => {
+    // a stored multi-account mapping read back without it would parse as single-account
+    const stored = mapping({ multiAccount: true, columns });
+
+    expect(statementMapping.parse(stored).multiAccount).toBe(true);
   });
 });
