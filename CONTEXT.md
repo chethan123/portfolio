@@ -252,9 +252,13 @@ affected), stale (that is the confirmation going out of date, a different fact).
 
 **Account number**:
 The optional free-form identifier recorded on an account as its institution states it, captured from
-a statement's own column or typed in Settings. The number is a guard and a label, never a selector.
-Nothing auto-picks an account from it, and an upload naming a different number than the recorded one
-is refused rather than landed in the wrong place.
+a statement's own column or typed in Settings. On an upload made into one chosen account, the number
+is a guard: a file naming a different number than the recorded one is refused rather than landed in
+the wrong place. On a multi-account upload, it is the selector: each row goes to the open account whose
+recorded number matches it exactly, surrounding whitespace aside. A number no account records is
+asked about once in that upload, never guessed, and can only be given to an account that has none
+yet; the account keeps it once the upload is recorded. At most one open account records a given
+number.
 _Avoid_: account ID, external ID, mask (for the stored value).
 
 **Number tail**:
