@@ -23,8 +23,9 @@ import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
 
 /**
- * Step three — resolve the file's first sightings (ingest brief §5): misses
- * against the alias table, pointed at an existing instrument or created.
+ * Step three, four for a file of several accounts — resolve the file's first
+ * sightings (ingest brief §5): misses against the alias table, pointed at an
+ * existing instrument or created.
  * Both paths write the draft's answer; the commit promotes it to vocabulary,
  * so the next export passes silently only once this one is recorded.
  * Reached only with at least one miss.
@@ -41,7 +42,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
+    if (result.step === "columns" || result.step === "accounts") {
+      return redirect(`/upload/${draft.id}/${result.step}${stale}`);
+    }
     if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
 
     const screen = await resolutionScreen(result.parsed.positions, draft.id);
@@ -51,9 +54,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     return {
       steps: {
-        current: 3,
+        current: result.accountsSkipped === null ? 3 : 4,
         draftId: draft.id,
         instrumentsSkipped: draft.hadFirstSightings === false,
+        accountsSkipped: result.accountsSkipped,
       } satisfies UploadStepsData,
       screen,
       nameColumn: result.mapping.columns.name ?? null,
@@ -73,7 +77,9 @@ export async function action({ params, request }: Route.ActionArgs) {
   try {
     const draft = await requireDraft(params.draftId);
     const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
+    if (result.step === "columns" || result.step === "accounts") {
+      return redirect(`/upload/${draft.id}/${result.step}${stale}`);
+    }
 
     // A double submit finds everything already resolved and moves on, as the loader would.
     if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);

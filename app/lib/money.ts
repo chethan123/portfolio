@@ -38,15 +38,15 @@ export function render(units: bigint, scale: number): string {
 export type DeltaDirection = "gain" | "loss" | "flat";
 
 // Sign follows the rounded figure actually printed. A stored -0.0040 must not label $0.00 a loss.
-export function printedSign(amount: string): string {
-  const shown = toUnits(amount, 2);
+export function printedSign(amount: string, places = 2): string {
+  const shown = toUnits(amount, places);
 
   if (shown === 0n) return "";
   return shown < 0n ? "−" : "+";
 }
 
-export function deltaDirection(amount: string): DeltaDirection {
-  const sign = printedSign(amount);
+export function deltaDirection(amount: string, places = 2): DeltaDirection {
+  const sign = printedSign(amount, places);
   return sign === "" ? "flat" : sign === "−" ? "loss" : "gain";
 }
 

@@ -5,11 +5,12 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import Upload, { action, loader } from "../../app/routes/upload.tsx";
+import { requireDraft } from "~/lib/uploads.server";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { getConfig } from "../../server/config.ts";
-import { args, chunked, get, postFile } from "../support/routes.ts";
+import { args, chunked, get, postFile, redirectTo } from "../support/routes.ts";
 
 // getConfig() memoises its first read, so set before any loader runs (as masked-screens.test.tsx does).
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -113,6 +114,44 @@ describe("the drop screen's ?account= prefill", () => {
       });
       expect(markup).toContain('<option value="" selected="">Choose…</option>');
       expect(markup).not.toContain(`<option value="${linked.id}" selected=""`);
+    }),
+  );
+});
+
+describe("the drop screen's several-accounts choice", () => {
+  it(
+    "is offered alongside the open accounts",
+    withDatabase(async ({ seedAccount }) => {
+      await seedAccount({ name: "Fidelity Taxable" });
+
+      expect(await screenAt("/upload")).toContain(
+        '<option value="several">Several accounts (the file has an account-number column)</option>',
+      );
+    }),
+  );
+
+  it(
+    "starts a draft with no account and sends it to columns",
+    withDatabase(async ({ db, seedAccount }) => {
+      await seedAccount({ name: "Fidelity Taxable" });
+
+      const location = await redirectTo(() =>
+        action(
+          args(
+            postFile(
+              "/upload",
+              { name: "all-accounts.csv", content: "Account,Symbol,Qty\nA-1,VTI,1\n" },
+              { accountId: "several" },
+            ),
+          ),
+        ),
+      );
+
+      const draftId = /^\/upload\/(\d+)\/columns$/.exec(location)?.[1] ?? "";
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({
+        accountId: null,
+        filename: "all-accounts.csv",
+      });
     }),
   );
 });

@@ -16,6 +16,7 @@ import {
   UploadIcon,
 } from "~/components/icons";
 import { ChartEmptyNote, NetWorthChart } from "~/components/net-worth-chart";
+import { UploadReceiptSentence } from "~/components/upload-receipt";
 import {
   ACCOUNT_KINDS,
   TAX_TREATMENTS,
@@ -241,33 +242,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
       {receipt !== null ? (
         <p role="status">
           Recorded <b>{receipt.filename ?? "the statement"}</b>:{" "}
-          {receipt.firstStatement ? (
-            <>
-              <span className="u-data">{receipt.counts.added}</span> added
-            </>
-          ) : (
-            <>
-              <span className="u-data">{receipt.counts.added}</span> added ·{" "}
-              <span className="u-data">{receipt.counts.updated}</span> updated ·{" "}
-              <span className="u-data">{receipt.counts.removed}</span> removed
-            </>
-          )}
-          , as of <b className="u-data">{receipt.asOf}</b>.{" "}
-          {receipt.isCurrent ? (
-            <>
-              {total.accountName} now holds{" "}
-              <b className="u-data">{receipt.holdingCount}</b>{" "}
-              {receipt.holdingCount === 1 ? "position" : "positions"}.
-            </>
-          ) : (
-            // holdingCount describes this set, not the account
-            // (docs/specs/0005-report-remediation.md §5) — a later statement is the one it
-            // actually reports, so that is the figure named here instead.
-            <>
-              Filed behind what {total.accountName} already reports — it still shows its{" "}
-              <b className="u-data">{receipt.currentAsOf}</b> figures.
-            </>
-          )}
+          <UploadReceiptSentence receipt={receipt} accountName={total.accountName} />
         </p>
       ) : null}
 

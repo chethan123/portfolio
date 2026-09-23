@@ -99,6 +99,7 @@ describe("recording accounts", () => {
           institution: "Acme Retirement",
           kind: "401k",
           taxTreatment: "tax_free",
+          externalAccountNumber: "Z12-345679",
         },
         db,
       );
@@ -256,6 +257,94 @@ describe("editing an account", () => {
       await updateAccount(account.id, { ...validInput(alice.id), name: "Renamed" }, db);
 
       expect((await getAccount(account.id, db)).isClosed).toBe(false);
+    }),
+  );
+});
+
+describe("one open account per account number", () => {
+  it(
+    "refuses a new account the number an open account already records, naming that account",
+    withDatabase(async ({ db }) => {
+      const alice = await createPerson({ name: "Alice" }, db);
+      await createAccount(validInput(alice.id), db);
+
+      const errors = await refusalOf(
+        createAccount(
+          { ...validInput(alice.id), name: "Fidelity Roth", externalAccountNumber: " Z12-345678 " },
+          db,
+        ),
+      );
+
+      expect(errors.externalAccountNumber).toMatch(
+        /already recorded on Fidelity Taxable, owned by Alice\./,
+      );
+      expect((await listAccounts(db)).map((account) => account.name)).toEqual([
+        "Fidelity Taxable",
+      ]);
+    }),
+  );
+
+  it(
+    "refuses an edit giving an account the number another open account records, and leaves it as it was",
+    withDatabase(async ({ db }) => {
+      const alice = await createPerson({ name: "Alice" }, db);
+      await createAccount(validInput(alice.id), db);
+      const roth = await createAccount(
+        { ...validInput(alice.id), name: "Fidelity Roth", externalAccountNumber: "Z12-999999" },
+        db,
+      );
+
+      const errors = await refusalOf(
+        updateAccount(roth.id, { ...validInput(alice.id), name: "Fidelity Roth" }, db),
+      );
+
+      expect(errors.externalAccountNumber).toMatch(
+        /already recorded on Fidelity Taxable, owned by Alice\./,
+      );
+      expect((await getAccount(roth.id, db)).externalAccountNumber).toBe("Z12-999999");
+    }),
+  );
+
+  it(
+    "lets closed accounts keep a number, beside each other and beside the open account recording it",
+    withDatabase(async ({ db }) => {
+      const alice = await createPerson({ name: "Alice" }, db);
+      for (const name of ["First Brokerage", "Second Brokerage"]) {
+        const retired = await createAccount({ ...validInput(alice.id), name }, db);
+        await closeAccount(retired.id, { confirmClose: "true" }, db);
+      }
+
+      await createAccount(validInput(alice.id), db);
+
+      expect(
+        (await listAccounts(db)).map((account) => [account.name, account.externalAccountNumber]),
+      ).toEqual([
+        ["Fidelity Taxable", "Z12-345678"],
+        ["First Brokerage", "Z12-345678"],
+        ["Second Brokerage", "Z12-345678"],
+      ]);
+    }),
+  );
+
+  it(
+    "still edits a closed account whose number an open account now records",
+    withDatabase(async ({ db }) => {
+      // ADR-0015: where a closed account's number is cleared.
+      const alice = await createPerson({ name: "Alice" }, db);
+      const retired = await createAccount({ ...validInput(alice.id), name: "Old Brokerage" }, db);
+      await closeAccount(retired.id, { confirmClose: "true" }, db);
+      await createAccount(validInput(alice.id), db);
+
+      const renamed = await updateAccount(
+        retired.id,
+        { ...validInput(alice.id), name: "Old Brokerage (2019)" },
+        db,
+      );
+
+      expect(renamed).toMatchObject({
+        name: "Old Brokerage (2019)",
+        externalAccountNumber: "Z12-345678",
+      });
     }),
   );
 });

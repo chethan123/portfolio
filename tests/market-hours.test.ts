@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isMarketOpen, isScheduledQuoteWindow, marketDateOf } from "~/lib/market-hours";
+import {
+  isMarketOpen,
+  isScheduledQuoteWindow,
+  marketDateOf,
+  marketTimeOf,
+} from "~/lib/market-hours";
 
 const NEW_YORK = "America/New_York";
 
@@ -88,5 +93,69 @@ describe("the scheduled quote window", () => {
   it("still excludes weekends and holidays", () => {
     expect(isScheduledQuoteWindow(at("2026-06-06T14:30:00Z"), NEW_YORK)).toBe(false);
     expect(isScheduledQuoteWindow(at("2026-11-26T15:00:00Z"), NEW_YORK)).toBe(false);
+  });
+});
+
+describe("the time of day on the market clock", () => {
+  it("reads the market's wall clock, not UTC's", () => {
+    // 21:30 UTC = 17:30 EDT
+    expect(marketTimeOf(at("2026-06-05T21:30:00Z"), NEW_YORK)).toBe("17:30");
+  });
+
+  it("prints midnight as 00, not 24", () => {
+    // 04:00 UTC = midnight EDT — the h23 pin; `hour12: false` prints "24:00" on some engines
+    expect(marketTimeOf(at("2026-06-05T04:00:00Z"), NEW_YORK)).toBe("00:00");
+  });
+
+  it("follows the offset across a daylight-saving boundary through one reused formatter", () => {
+    // An earlier conversion so every one below goes through the zone's already-built formatter
+    marketTimeOf(at("2026-06-05T14:30:00Z"), NEW_YORK);
+    // 2026-03-08 spring-forward: the wall clock skips from 01:59 to 03:00
+    expect(marketTimeOf(at("2026-03-08T06:59:00Z"), NEW_YORK)).toBe("01:59");
+    expect(marketTimeOf(at("2026-03-08T07:00:00Z"), NEW_YORK)).toBe("03:00");
+    // 2026-11-01 fall-back: 01:30 happens twice — a fixed -4 fails the second, a fixed -5 the
+    // first
+    expect(marketTimeOf(at("2026-11-01T05:30:00Z"), NEW_YORK)).toBe("01:30");
+    expect(marketTimeOf(at("2026-11-01T06:30:00Z"), NEW_YORK)).toBe("01:30");
+  });
+
+  it("answers in whichever zone it is given, however the zones alternate", () => {
+    const instant = at("2026-06-05T14:30:00Z");
+    expect(marketTimeOf(instant, NEW_YORK)).toBe("10:30");
+    expect(marketTimeOf(instant, "Europe/London")).toBe("15:30");
+    expect(marketTimeOf(instant, NEW_YORK)).toBe("10:30");
+  });
+});
+
+describe("the formatter behind a conversion", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("is built once per zone and reused by every conversion after", () => {
+    // Through the original, and as a `function`: a bare spy builds instances against its own
+    // prototype, with no formatToParts, and the cache would keep one; an arrow typechecks here
+    // but is not a constructor at runtime.
+    const Original = Intl.DateTimeFormat;
+    const constructed = vi
+      .spyOn(Intl, "DateTimeFormat")
+      .mockImplementation(function (...args) {
+        return new Original(...args);
+      });
+
+    // Zones no other test uses: the cache outlives a test, so a zone touched earlier in this
+    // file would already have its formatter.
+    marketTimeOf(at("2026-06-05T14:30:00Z"), "Asia/Tokyo");
+    marketDateOf(at("2026-06-05T14:30:00Z"), "Asia/Tokyo");
+    marketTimeOf(at("2026-06-05T14:30:00Z"), "Australia/Sydney");
+    marketTimeOf(at("2026-06-06T14:30:00Z"), "Australia/Sydney");
+    marketTimeOf(at("2026-06-06T14:30:00Z"), "Asia/Tokyo");
+
+    expect(constructed.mock.calls.map(([, options]) => options?.timeZone)).toEqual([
+      "Asia/Tokyo",
+      "Australia/Sydney",
+    ]);
+    expect(constructed.mock.calls[0]).toEqual([
+      "en-CA",
+      expect.objectContaining({ timeZone: "Asia/Tokyo", hourCycle: "h23" }),
+    ]);
   });
 });

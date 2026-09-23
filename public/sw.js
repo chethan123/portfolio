@@ -48,7 +48,11 @@ self.addEventListener("install", () => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  const activation = [self.clients.claim()];
+  if (self.registration.navigationPreload) {
+    activation.push(self.registration.navigationPreload.enable());
+  }
+  event.waitUntil(Promise.all(activation));
 });
 
 self.addEventListener("fetch", (event) => {
@@ -60,12 +64,14 @@ self.addEventListener("fetch", (event) => {
   // followed by the browser itself — branching on `response.ok` would swallow
   // sign-in. Never add it.
   event.respondWith(
-    fetch(request).catch(
-      () =>
-        new Response(OFFLINE_PAGE, {
-          status: 503,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        }),
-    ),
+    Promise.resolve(event.preloadResponse)
+      .then((response) => response || fetch(request))
+      .catch(
+        () =>
+          new Response(OFFLINE_PAGE, {
+            status: 503,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          }),
+      ),
   );
 });

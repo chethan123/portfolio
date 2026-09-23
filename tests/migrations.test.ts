@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -11,12 +11,13 @@ import {
   MIGRATIONS_TABLE,
   appliedMigrations,
   applyPendingMigrations,
+  migrationsDirectory,
   migrationsOnDisk,
   pendingMigrations,
 } from "../server/migrations.ts";
 
 import type { Kysely } from "kysely";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 // Real Postgres required: docker compose -f compose.test.yaml up -d --wait
 // Every writing test rolls back its own transaction.
@@ -424,6 +425,139 @@ describe("the schema's planner costs", () => {
 
     // whole array deliberately — a later overload fails here instead of picking an arbitrary row
     expect(result.rows).toEqual([{ procost: 1000 }]);
+  });
+});
+
+describe("the open-account number index", () => {
+  /** Accounts as `values` rows of (name, number, closed_at) state them, for one owner. */
+  const numbered = (values: string) => `
+    with owner as (insert into person (name) values ('Alex Rivera') returning id)
+    insert into account
+      (name, institution, kind, owner_id, tax_treatment, external_account_number, closed_at)
+    select seeded.name, 'Schwab', 'brokerage', owner.id, 'taxable', seeded.number, seeded.closed_at
+    from owner, (values ${values}) as seeded (name, number, closed_at)
+    returning id
+  `;
+
+  /** 0015 over the accounts `seed` inserts, as an upgrade meets them: its index not yet built. */
+  async function upgradingOver(
+    seed: string,
+    check: (
+      seeded: Array<{ id: string }>,
+      migrate: () => Promise<unknown>,
+      client: PoolClient,
+    ) => Promise<void>,
+  ): Promise<void> {
+    const migration = await readFile(
+      path.join(migrationsDirectory(), "0015_account_open_number_unique.sql"),
+      "utf8",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // DDL is transactional: the rollback below puts the index back.
+      await client.query("drop index account_open_number_unique");
+      const { rows } = await client.query<{ id: string }>(seed);
+      await check(rows, () => client.query(migration), client);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
+  }
+
+  it("refuses to build over open accounts already sharing a number, naming the number and those accounts", async () => {
+    await upgradingOver(
+      numbered(`
+        ('Schwab One', '8391-2245', null::timestamptz),
+        ('Schwab Two', '8391-2245', null),
+        ('Schwab Old', '8391-2245', now())
+      `),
+      async ([one, two], migrate) => {
+        // Ends at the period: the closed account shares the number and is no duplicate.
+        await expect(migrate()).rejects.toThrow(
+          `: "8391-2245" on Schwab One (id ${one?.id}), Schwab Two (id ${two?.id}). `,
+        );
+      },
+    );
+  });
+
+  it("names open accounts whose numbers differ only by surrounding spaces, as the router folds them", async () => {
+    await upgradingOver(
+      numbered(`('Padded', ' A-1', null::timestamptz), ('Plain', 'A-1', null)`),
+      async ([padded, plain], migrate) => {
+        await expect(migrate()).rejects.toThrow(
+          `: "A-1" on Padded (id ${padded?.id}), Plain (id ${plain?.id}). `,
+        );
+      },
+    );
+  });
+
+  it("stores a padded number trimmed of ASCII whitespace, and a blank one as none", async () => {
+    await upgradingOver(
+      numbered(`('Padded', ' A-1 ', null::timestamptz), ('Tabbed', '\tT-9', null), ('Blank', '', null)`),
+      async (seeded, migrate, client) => {
+        await migrate();
+        const { rows } = await client.query(
+          "select name, external_account_number from account where id = any($1) order by id",
+          [seeded.map(({ id }) => id)],
+        );
+        expect(rows).toEqual([
+          { name: "Padded", external_account_number: "A-1" },
+          { name: "Tabbed", external_account_number: "T-9" },
+          { name: "Blank", external_account_number: null },
+        ]);
+      },
+    );
+  });
+});
+
+describe("a draft's answers to account numbers", () => {
+  /** The constraint a statement violated, or null when it ran clean. */
+  async function violatedBy(statements: string): Promise<string | null> {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(`
+        insert into person (name) values ('Answer Owner');
+        insert into account (name, institution, kind, owner_id, tax_treatment)
+          select 'Answer ' || n, '', 'brokerage', id, 'taxable'
+          from person, (values (1), (2)) as numbered (n) where name = 'Answer Owner';
+        insert into upload_draft (account_id, filename, raw_file)
+          values (null, 'answers-one.csv', ''), (null, 'answers-two.csv', '');
+      `);
+      await client.query(statements);
+      return null;
+    } catch (error) {
+      return (error as { constraint?: string }).constraint ?? "unknown";
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
+  }
+
+  const draft = (file: string) => `(select id from upload_draft where filename = '${file}')`;
+  const account = (n: number) => `(select id from account where name = 'Answer ${n}')`;
+
+  it("refuses one account given two numbers in one draft", async () => {
+    expect(
+      await violatedBy(`
+        insert into upload_draft_account_answer (draft_id, account_number, account_id) values
+          (${draft("answers-one.csv")}, 'A-1', ${account(1)}),
+          (${draft("answers-one.csv")}, 'B-2', ${account(1)});
+      `),
+    ).toBe("upload_draft_account_answer_account_unique");
+  });
+
+  it("allows any number of skips in one draft, and one account answered in two drafts", async () => {
+    expect(
+      await violatedBy(`
+        insert into upload_draft_account_answer (draft_id, account_number, account_id) values
+          (${draft("answers-one.csv")}, 'A-1', null),
+          (${draft("answers-one.csv")}, 'B-2', null),
+          (${draft("answers-one.csv")}, 'C-3', ${account(1)}),
+          (${draft("answers-two.csv")}, 'C-3', ${account(1)});
+      `),
+    ).toBeNull();
   });
 });
 

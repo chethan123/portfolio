@@ -257,3 +257,30 @@ describe("the hidden header row", () => {
     },
   );
 });
+
+// Spec 0023 decision 4: a multi-account draft routes every row by its account number, and its
+// mapping must say so, or parseStatement reads the file as one account's.
+describe("a multi-account draft's mapping", () => {
+  const multi = { multiAccount: true };
+
+  it.each([undefined, "", NOT_IN_FILE])(
+    "refuses under the account number select when it is %j, naming the column the file routes by",
+    (posted) => {
+      const refusal = refusalOf(() =>
+        parseMappingForm(submission({ accountNumber: posted }), ROWS, ",", multi),
+      );
+
+      expect(refusal.accountNumber).toBe(
+        "Choose the column that holds the account number — a file of several accounts routes " +
+          "every row by one.",
+      );
+    },
+  );
+
+  it("is flagged multi-account, a flag a single-account mapping never carries, not even as false", () => {
+    expect(parseMappingForm(submission(), ROWS, ",", multi).multiAccount).toBe(true);
+
+    const single = parseMappingForm(submission({ accountNumber: NOT_IN_FILE }), ROWS, ",");
+    expect(single).not.toHaveProperty("multiAccount");
+  });
+});

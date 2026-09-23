@@ -17,6 +17,32 @@ type Manifest = {
   icons: { src: string; sizes: string; purpose: string }[];
 };
 
+const manifestSource = readFileSync(new URL("manifest.webmanifest", PUBLIC), "utf8");
+const manifest = JSON.parse(manifestSource) as Manifest;
+
+const committedIcons = {
+  "192x192:any": { file: "icon-192.png", edge: 192, transparent: true },
+  "512x512:any": { file: "icon-512.png", edge: 512, transparent: true },
+  "512x512:maskable": { file: "icon-maskable-512.png", edge: 512, transparent: false },
+} as const;
+
+function pngChunkTypes(bytes: Buffer): string[] {
+  const chunks: string[] = [];
+  let offset = 8;
+
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const end = offset + 12 + length;
+    if (end > bytes.length) throw new Error("Invalid PNG chunk length");
+    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    chunks.push(type);
+    offset = end;
+    if (type === "IEND") break;
+  }
+
+  return chunks;
+}
+
 describe("the document shell", () => {
   it("links the manifest with credentials so the gate's cookie travels with Chrome's fetch", () => {
     const html = renderThroughLayout("/", { gated: true, firstRun: null });
@@ -74,10 +100,6 @@ describe("the type stack", () => {
 });
 
 describe("the manifest", () => {
-  const manifest = JSON.parse(
-    readFileSync(new URL("manifest.webmanifest", PUBLIC), "utf8"),
-  ) as Manifest;
-
   it("carries the members installation depends on", () => {
     expect(manifest.name).toBeTruthy();
     // Lighthouse's home-screen label budget
@@ -100,18 +122,31 @@ describe("the manifest", () => {
   it("inlines each icon as a data: URI matching its committed PNG, so no icon fetch can hit the gate", () => {
     // Android's WebAPK icon hasher fetches icon URLs without cookies — an icon URL behind the
     // gate greys out install. A data: URI leaves nothing to fetch.
-    const committed: Record<string, string> = {
-      "192x192:any": "icon-192.png",
-      "512x512:any": "icon-512.png",
-      "512x512:maskable": "icon-maskable-512.png",
-    };
-
-    expect(manifest.icons).toHaveLength(Object.keys(committed).length);
+    expect(manifest.icons).toHaveLength(Object.keys(committedIcons).length);
     for (const icon of manifest.icons) {
-      const file = committed[`${icon.sizes}:${icon.purpose}`];
-      expect(file).toBeDefined();
-      const bytes = readFileSync(new URL(`icons/${file}`, PUBLIC));
+      const committed = committedIcons[`${icon.sizes}:${icon.purpose}` as keyof typeof committedIcons];
+      expect(committed).toBeDefined();
+      const bytes = readFileSync(new URL(`icons/${committed.file}`, PUBLIC));
       expect(icon.src).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
+    }
+  });
+
+  it("keeps its inline icons as compact palette PNGs", () => {
+    expect(Buffer.byteLength(manifestSource, "utf8")).toBeLessThan(9_000);
+
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    for (const icon of Object.values(committedIcons)) {
+      const bytes = readFileSync(new URL(`icons/${icon.file}`, PUBLIC));
+      expect(bytes.subarray(0, signature.length)).toEqual(signature);
+      expect(bytes.toString("ascii", 12, 16)).toBe("IHDR");
+      expect(bytes.readUInt32BE(16)).toBe(icon.edge);
+      expect(bytes.readUInt32BE(20)).toBe(icon.edge);
+      expect(bytes[25]).toBe(3);
+
+      const chunks = pngChunkTypes(bytes);
+      expect(chunks).toContain("PLTE");
+      if (icon.transparent) expect(chunks).toContain("tRNS");
+      else expect(chunks).not.toContain("tRNS");
     }
   });
 });

@@ -1,0 +1,257 @@
+{
+  "method": "Same production build and isolated seeded database, second process reuses only identical en-CA/h23/weekday-short Intl formatters. Two warmups then seven alternating pairs per range. Loopback HTTP, identity encoding, no network or CPU throttle. No source modifications.",
+  "results": [
+    {
+      "range": "1w",
+      "sameHtml": true,
+      "baselineMedianTtfbMs": 141.5036459999999,
+      "reusedMedianTtfbMs": 101.48374100000001,
+      "baselineMedianTotalMs": 142.3919249999999,
+      "reusedMedianTotalMs": 102.19825999999989,
+      "measurements": [
+        [
+          {
+            "ttfbMs": 163.78721499999995,
+            "totalMs": 164.749054,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 141.5036459999999,
+            "totalMs": 142.3919249999999,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 144.34912099999997,
+            "totalMs": 145.12480000000005,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 145.2058410000002,
+            "totalMs": 145.95488,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 139.66988800000013,
+            "totalMs": 140.32128699999998,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 140.81796699999995,
+            "totalMs": 141.72320599999966,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 136.7027720000001,
+            "totalMs": 140.3544469999997,
+            "bytes": 104215
+          }
+        ],
+        [
+          {
+            "ttfbMs": 101.62546100000009,
+            "totalMs": 102.34922000000006,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 102.7068589999999,
+            "totalMs": 103.5295779999999,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 104.29389600000013,
+            "totalMs": 105.29569500000002,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 101.48374100000001,
+            "totalMs": 102.19825999999989,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 99.78982399999973,
+            "totalMs": 100.40862300000003,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 93.78735099999994,
+            "totalMs": 94.44291000000021,
+            "bytes": 104215
+          },
+          {
+            "ttfbMs": 95.78218799999968,
+            "totalMs": 96.5343069999999,
+            "bytes": 104215
+          }
+        ]
+      ]
+    },
+    {
+      "range": "3m",
+      "sameHtml": true,
+      "baselineMedianTtfbMs": 180.5530319999998,
+      "reusedMedianTtfbMs": 128.4179439999998,
+      "baselineMedianTotalMs": 181.28567099999964,
+      "reusedMedianTotalMs": 129.32746299999963,
+      "measurements": [
+        [
+          {
+            "ttfbMs": 177.970636,
+            "totalMs": 178.89375500000006,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 187.33910300000025,
+            "totalMs": 188.23950100000002,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 175.55287899999985,
+            "totalMs": 176.31235800000013,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 177.8991959999994,
+            "totalMs": 180.51835200000005,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 187.6774230000001,
+            "totalMs": 188.6638210000001,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 180.5530319999998,
+            "totalMs": 181.28567099999964,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 180.76635199999964,
+            "totalMs": 181.5172309999998,
+            "bytes": 140629
+          }
+        ],
+        [
+          {
+            "ttfbMs": 116.60183999999981,
+            "totalMs": 117.71195799999987,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 133.04313700000012,
+            "totalMs": 137.179212,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 146.78779900000018,
+            "totalMs": 148.85759600000029,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 128.4179439999998,
+            "totalMs": 129.32746299999963,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 126.85730599999988,
+            "totalMs": 127.89682499999981,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 140.83736599999975,
+            "totalMs": 141.6989249999997,
+            "bytes": 140629
+          },
+          {
+            "ttfbMs": 120.01483500000086,
+            "totalMs": 120.77343400000063,
+            "bytes": 140629
+          }
+        ]
+      ]
+    },
+    {
+      "range": "1d",
+      "sameHtml": true,
+      "baselineMedianTtfbMs": 370.6353710000003,
+      "reusedMedianTtfbMs": 102.64829999999984,
+      "baselineMedianTotalMs": 373.5863270000009,
+      "reusedMedianTotalMs": 106.48421400000007,
+      "measurements": [
+        [
+          {
+            "ttfbMs": 411.63099500000044,
+            "totalMs": 415.73735000000033,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 359.24946699999964,
+            "totalMs": 362.8447019999994,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 364.51510000000053,
+            "totalMs": 368.12753500000053,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 370.6353710000003,
+            "totalMs": 373.51568699999916,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 402.5334469999998,
+            "totalMs": 407.6810000000005,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 370.46925100000044,
+            "totalMs": 373.5863270000009,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 398.4560929999989,
+            "totalMs": 401.45008899999993,
+            "bytes": 778088
+          }
+        ],
+        [
+          {
+            "ttfbMs": 121.63931299999967,
+            "totalMs": 128.70846299999994,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 107.3447729999998,
+            "totalMs": 111.44488699999965,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 102.64829999999984,
+            "totalMs": 105.54801599999973,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 101.00754099999995,
+            "totalMs": 105.22141499999998,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 103.56397800000013,
+            "totalMs": 106.87617399999908,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 97.54110600000058,
+            "totalMs": 100.517022,
+            "bytes": 778088
+          },
+          {
+            "ttfbMs": 102.04473999999936,
+            "totalMs": 106.48421400000007,
+            "bytes": 778088
+          }
+        ]
+      ]
+    }
+  ]
+}

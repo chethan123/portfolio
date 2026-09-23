@@ -10,8 +10,11 @@ import {
   formatDateLocal,
   formatMoney,
   formatPercent,
+  formatQuantity,
+  formatRate,
   formatSignedMoney,
   isNegative,
+  rateDigits,
   toPlotValue,
 } from "~/lib/format";
 
@@ -66,6 +69,23 @@ describe("formatSignedMoney", () => {
   });
 });
 
+describe("formatQuantity", () => {
+  it("trims the zeros scale-8 storage pads a share count with", () => {
+    expect(formatQuantity("145.23400000")).toBe("145.234");
+    expect(formatQuantity("1.00000000")).toBe("1");
+  });
+
+  it("groups thousands and uses the U+2212 minus, like every figure beside it", () => {
+    expect(formatQuantity("-14500.00000000")).toBe("−14,500");
+    expect(formatQuantity("1234567.00000000")).toBe("1,234,567");
+  });
+
+  it("preserves requested places without rendering negative zero", () => {
+    expect(formatQuantity("31.4000", true)).toBe("31.4000");
+    expect(formatQuantity("-0.0000", true)).toBe("0.0000");
+  });
+});
+
 describe("formatPercent", () => {
   it("always carries an explicit sign, which is half of the colour-blind guarantee", () => {
     expect(formatPercent("1.2043")).toBe("+1.2%");
@@ -74,6 +94,27 @@ describe("formatPercent", () => {
 
   it("reports no movement without a sign", () => {
     expect(formatPercent("0")).toBe("0.0%");
+  });
+});
+
+describe("formatRate", () => {
+  it("prints a stored rate the way the panel heading says it", () => {
+    expect(formatRate("23.800000")).toBe("23.8%");
+    expect(formatRate("0.000000")).toBe("0%");
+    expect(formatRate("100.000000")).toBe("100%");
+  });
+
+  it("rounds nothing, so the heading and the settings box cannot disagree", () => {
+    expect(formatRate("3.750000")).toBe("3.75%");
+    expect(formatRate("23.812345")).toBe("23.812345%");
+    expect(formatRate("15.250000")).toBe("15.25%");
+  });
+
+  it("takes off the column's padding and nothing else", () => {
+    expect(rateDigits("23.800000")).toBe("23.8");
+    expect(rateDigits("15.000000")).toBe("15");
+    expect(rateDigits("0.000000")).toBe("0");
+    expect(rateDigits("0.000100")).toBe("0.0001");
   });
 });
 

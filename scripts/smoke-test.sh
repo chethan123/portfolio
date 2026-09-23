@@ -222,7 +222,8 @@ migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' |
 [[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
 printf 'migration .sql files in the image: %s\n' "$migration_count"
 
-for path in /app/server/migrate.ts /app/server/yahoo-client.ts \
+for path in /app/server/server-build.ts /app/server/action-origins.ts \
+  /app/server/migrate.ts /app/server/yahoo-client.ts \
   /app/server/symbol-pattern.ts /app/server/price-worker.ts; do
   run_in_image "test -f $path" || fail "missing from the runtime image: $path"
 done
@@ -771,6 +772,28 @@ done
 [[ "$dump_health" == "healthy" ]] ||
   fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
+
+# "Not dump on every boot" is the loop's own rule, and it rests entirely on parsing the attempt
+# marker's timestamp. Parsed wrong it reads as epoch 0, every restart dumps, and nothing else
+# notices — so both directions are asserted against the marker this run just wrote.
+# Waited for, not assumed: run_once writes last-success.json *before* the attempt marker, and
+# everything above gates on the former, so the outcome can still read `started` by now.
+deadline=$((SECONDS + 30))
+while ((SECONDS < deadline)); do
+  grep -q '"outcome":"success"' "${DUMPS_DIR}/last-attempt.json" 2>/dev/null && break
+  sleep 1
+done
+grep -q '"outcome":"success"' "${DUMPS_DIR}/last-attempt.json" 2>/dev/null ||
+  fail "the attempt marker never recorded the dump that is on disk"
+if docker compose run --rm -T --no-deps dump catch-up >/dev/null 2>&1; then
+  fail "a boot dump reads as due minutes after a successful one"
+fi
+docker compose run --rm -T --no-deps -e DUMP_DIR=/tmp/catch-up --entrypoint sh dump -c \
+  'mkdir -p "$DUMP_DIR" &&
+   printf "%s\n" "{\"started_at\":\"2020-01-01T00:00:00Z\",\"outcome\":\"success\"}" > "$DUMP_DIR/last-attempt.json" &&
+   sh /usr/local/bin/dump-loop.sh catch-up' >/dev/null 2>&1 ||
+  fail "no boot dump reads as due against a success marker from 2020"
+printf 'catch-up: a fresh success holds the boot dump back, a stale one does not\n'
 
 # pg_restore --list reads only the front of the archive and would pass a file missing most of its data.
 docker compose run --rm -T dump verify "/dumps/${dump_name}" >/dev/null 2>&1 ||

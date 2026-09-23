@@ -1,7 +1,6 @@
 // The one component that renders an amount (spec 0007, ADR-0002); `format.ts` never learns about masking (`masking-boundary.test.ts` enforces the boundary).
 import { ArrowDownIcon, ArrowUpIcon, TrendingFlatIcon } from "~/components/icons";
-import { formatMoney, formatSignedMoney } from "~/lib/format";
-import { formatQuantity } from "~/lib/holdings-view";
+import { formatMoney, formatQuantity, formatSignedMoney } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import { deltaDirection, type DeltaDirection } from "~/lib/money";
 
@@ -65,7 +64,10 @@ export function Amount({
   }
 
   return (
-    <MaskedAmount shape={shape} direction={shape === "signed" ? deltaDirection(value) : undefined} />
+    <MaskedAmount
+      shape={shape}
+      direction={shape === "signed" ? deltaDirection(value, places) : undefined}
+    />
   );
 }
 

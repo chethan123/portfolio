@@ -24,7 +24,7 @@ import {
   perShareAmountRule,
   signedQuantityRule,
 } from "~/lib/decimal-input";
-import { joinWords } from "~/lib/format";
+import { formatQuantity, joinWords } from "~/lib/format";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -36,7 +36,6 @@ import {
   type SortKey,
   applyFilters,
   availableFilters,
-  formatQuantity,
   groupHoldings,
   holdingNote,
   parseQuery,

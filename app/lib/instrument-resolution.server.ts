@@ -6,6 +6,7 @@
 import { isAssetClass } from "./account-options.ts";
 import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError } from "./input.server.ts";
+import { foldLots } from "./statement.ts";
 
 import type { ProbeSymbols } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
@@ -98,7 +99,8 @@ export type ResolutionScreen = {
   classifications: Array<{ id: string; name: string; assetClass: string }>;
 };
 
-// positions come from parseStatement, already grouped by raw instrument cell — one position per distinct string.
+// positions come from parseStatement, already grouped by raw instrument cell — one position per
+// distinct string, or per (account number, string) in a multi-account file (spec 0023).
 export async function resolutionScreen(
   positions: ReadonlyArray<ParsedPosition>,
   draftId: string,
@@ -110,13 +112,19 @@ export async function resolutionScreen(
     db,
   );
 
-  const byRaw = new Map(positions.map((position) => [position.instrument, position]));
+  const byRaw = new Map<string, ParsedPosition[]>();
+  for (const position of positions) {
+    const held = byRaw.get(position.instrument);
+    if (held === undefined) byRaw.set(position.instrument, [position]);
+    else held.push(position);
+  }
   const unresolved = misses.map((raw) => {
-    const position = byRaw.get(raw);
+    const held = byRaw.get(raw) ?? [];
     return {
       raw,
-      name: position?.name ?? null,
-      quantity: position?.quantity ?? "0",
+      name: held[0]?.name ?? null,
+      // One question per string; held in several accounts, their units summed.
+      quantity: held.length > 1 ? foldLots(held).quantity : (held[0]?.quantity ?? "0"),
     };
   });
 

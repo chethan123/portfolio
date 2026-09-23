@@ -1,0 +1,1353 @@
+{
+  "generated": "2026-09-20T21:03:32.608Z",
+  "origin": "http://127.0.0.1:3417",
+  "conditions": {
+    "downloadMbps": 1.5,
+    "latencyMs": 150,
+    "cpuSlowdown": 4,
+    "viewport": "390×844",
+    "serviceWorker": "blocked for HTTP cache isolation",
+    "transport": "loopback HTTP; gate, TLS and VPN excluded",
+    "sampling": "one cold and one repeat visit per route; illustrative, not a production percentile"
+  },
+  "dataset": {
+    "accounts": 21,
+    "holdings": 97,
+    "feedInstruments": 98,
+    "observationRows": 174636,
+    "sessions": 66,
+    "latestSessionInstants": 1620
+  },
+  "documents": [
+    {
+      "route": "/?range=1w",
+      "decodedBytes": 104215,
+      "timings": [
+        {
+          "ttfbMs": 227.496888,
+          "endMs": 231.05976299999998
+        },
+        {
+          "ttfbMs": 164.09725500000002,
+          "endMs": 165.25613299999998
+        },
+        {
+          "ttfbMs": 158.2974630000001,
+          "endMs": 159.47310100000004
+        }
+      ],
+      "cacheControl": "no-store"
+    },
+    {
+      "route": "/?range=1d",
+      "decodedBytes": 778088,
+      "timings": [
+        {
+          "ttfbMs": 456.48773400000005,
+          "endMs": 461.032248
+        },
+        {
+          "ttfbMs": 472.31319099999996,
+          "endMs": 478.3218630000001
+        },
+        {
+          "ttfbMs": 453.94813699999986,
+          "endMs": 458.2393710000001
+        }
+      ],
+      "cacheControl": "no-store"
+    },
+    {
+      "route": "/holdings",
+      "decodedBytes": 300771,
+      "timings": [
+        {
+          "ttfbMs": 97.97482600000012,
+          "endMs": 99.59634300000016
+        },
+        {
+          "ttfbMs": 48.22017400000004,
+          "endMs": 49.952012000000195
+        },
+        {
+          "ttfbMs": 38.55666700000029,
+          "endMs": 40.33062400000017
+        }
+      ],
+      "cacheControl": "no-store"
+    },
+    {
+      "route": "/?range=1y",
+      "decodedBytes": 120096,
+      "timings": [
+        {
+          "ttfbMs": 144.11864200000036,
+          "endMs": 145.23220100000026
+        },
+        {
+          "ttfbMs": 132.39361800000006,
+          "endMs": 133.33405700000003
+        },
+        {
+          "ttfbMs": 139.415888,
+          "endMs": 140.17716699999983
+        }
+      ],
+      "cacheControl": "no-store"
+    }
+  ],
+  "results": [
+    {
+      "route": "/?range=1w",
+      "visit": "cold",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 160.29999995231628,
+      "responseEndMs": 219.29999995231628,
+      "loadMs": 1490.2999999523163,
+      "fcpMs": 1052,
+      "lcpMs": 1052,
+      "documentEncodedBytes": 11317,
+      "documentDecodedBytes": 104215,
+      "documentTransferBytes": 11617,
+      "totalTransferBytes": 210050,
+      "elements": 1324,
+      "longTasks": [
+        {
+          "start": 823.5,
+          "duration": 179
+        },
+        {
+          "start": 1529,
+          "duration": 90
+        },
+        {
+          "start": 1795,
+          "duration": 228
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 48556,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 1125.7000000476837,
+          "startMs": 222.29999995231628
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 1769,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 224.10000002384186,
+          "startMs": 227.79999995231628
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 69205,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 1285.3999999761581,
+          "startMs": 230.29999995231628
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 3215,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 260.89999997615814,
+          "startMs": 230.5
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 45350,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 1133.3999999761581,
+          "startMs": 230.5
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 1290,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 207.79999995231628,
+          "startMs": 230.60000002384186
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 1617,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 445.39999997615814,
+          "startMs": 231
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 394,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 458.89999997615814,
+          "startMs": 231.10000002384186
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 947,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 645.8000000715256,
+          "startMs": 231.29999995231628
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 1746,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 660.2000000476837,
+          "startMs": 231.29999995231628
+        },
+        {
+          "path": "/assets/overview-jesVs4er.js",
+          "initiator": "other",
+          "transferBytes": 2605,
+          "encodedBytes": 2305,
+          "decodedBytes": 6240,
+          "durationMs": 780,
+          "startMs": 231.39999997615814
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 592,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 821.1999999284744,
+          "startMs": 231.5
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 2257,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 876.3999999761581,
+          "startMs": 231.5
+        },
+        {
+          "path": "/assets/breakdown-BhbHNNeb.js",
+          "initiator": "other",
+          "transferBytes": 1789,
+          "encodedBytes": 1489,
+          "decodedBytes": 3728,
+          "durationMs": 987.9000000953674,
+          "startMs": 231.69999992847443
+        },
+        {
+          "path": "/assets/net-worth-chart-Bq2AErVP.js",
+          "initiator": "other",
+          "transferBytes": 3545,
+          "encodedBytes": 3245,
+          "decodedBytes": 7599,
+          "durationMs": 1076.4000000953674,
+          "startMs": 231.69999992847443
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 1135,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 1061.5,
+          "startMs": 231.79999995231628
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 1335,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 1148.2999999523163,
+          "startMs": 232
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 983,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 1223.6999999284744,
+          "startMs": 232
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 8804,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 571.1000000238419,
+          "startMs": 232.39999997615814
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 1299,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 1237.5,
+          "startMs": 232.39999997615814
+        }
+      ]
+    },
+    {
+      "route": "/?range=1w",
+      "visit": "repeat",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 179.09999990463257,
+      "responseEndMs": 242.09999990463257,
+      "loadMs": 444.59999990463257,
+      "fcpMs": 292,
+      "lcpMs": 324,
+      "documentEncodedBytes": 11317,
+      "documentDecodedBytes": 104215,
+      "documentTransferBytes": 11617,
+      "totalTransferBytes": 11617,
+      "elements": 1324,
+      "longTasks": [
+        {
+          "start": 328.5,
+          "duration": 51
+        },
+        {
+          "start": 525.3999999761581,
+          "duration": 158
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 0,
+          "startMs": 206.59999990463257
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 0,
+          "startMs": 207.29999995231628
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 0,
+          "startMs": 207.5
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 0,
+          "startMs": 208.39999997615814
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 0,
+          "startMs": 208.5
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 0,
+          "startMs": 209.59999990463257
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 0,
+          "startMs": 209.69999992847443
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 0,
+          "startMs": 209.89999997615814
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 0,
+          "startMs": 210.69999992847443
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 0,
+          "startMs": 210.89999997615814
+        },
+        {
+          "path": "/assets/overview-jesVs4er.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2305,
+          "decodedBytes": 6240,
+          "durationMs": 0,
+          "startMs": 211.79999995231628
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 0,
+          "startMs": 212.69999992847443
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 0,
+          "startMs": 213
+        },
+        {
+          "path": "/assets/breakdown-BhbHNNeb.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1489,
+          "decodedBytes": 3728,
+          "durationMs": 0,
+          "startMs": 213.69999992847443
+        },
+        {
+          "path": "/assets/net-worth-chart-Bq2AErVP.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 3245,
+          "decodedBytes": 7599,
+          "durationMs": 0,
+          "startMs": 213.79999995231628
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 0,
+          "startMs": 214.69999992847443
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 0,
+          "startMs": 214.89999997615814
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 0,
+          "startMs": 215.59999990463257
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 0,
+          "startMs": 216.19999992847443
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 0,
+          "startMs": 216.29999995231628
+        }
+      ]
+    },
+    {
+      "route": "/?range=1d",
+      "visit": "cold",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 434.6999999284744,
+      "responseEndMs": 1301.3999999761581,
+      "loadMs": 1918,
+      "fcpMs": 1584,
+      "lcpMs": 1584,
+      "documentEncodedBytes": 62149,
+      "documentDecodedBytes": 778088,
+      "documentTransferBytes": 62449,
+      "totalTransferBytes": 260882,
+      "elements": 8734,
+      "longTasks": [
+        {
+          "start": 1201.2999999523163,
+          "duration": 358
+        },
+        {
+          "start": 1932.2999999523163,
+          "duration": 91
+        },
+        {
+          "start": 2037.7999999523163,
+          "duration": 50
+        },
+        {
+          "start": 2221.2999999523163,
+          "duration": 115
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 48556,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 1250.6000000238419,
+          "startMs": 468
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 1769,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 227.20000004768372,
+          "startMs": 473.7999999523163
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 69205,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 1436,
+          "startMs": 473.89999997615814
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 45350,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 1229,
+          "startMs": 474
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 3215,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 273.8000000715256,
+          "startMs": 475.1999999284744
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 1290,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 467.5,
+          "startMs": 475.2999999523163
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 1617,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 697.8999999761581,
+          "startMs": 475.39999997615814
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 394,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 802.6000000238419,
+          "startMs": 475.39999997615814
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 1746,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 906.1999999284744,
+          "startMs": 475.60000002384186
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 947,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 979.0999999046326,
+          "startMs": 475.60000002384186
+        },
+        {
+          "path": "/assets/overview-jesVs4er.js",
+          "initiator": "other",
+          "transferBytes": 2605,
+          "encodedBytes": 2305,
+          "decodedBytes": 6240,
+          "durationMs": 1042.1000000238419,
+          "startMs": 475.7999999523163
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 592,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 1082.8000000715256,
+          "startMs": 475.7999999523163
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 2257,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 1183.3999999761581,
+          "startMs": 478.39999997615814
+        },
+        {
+          "path": "/assets/breakdown-BhbHNNeb.js",
+          "initiator": "other",
+          "transferBytes": 1789,
+          "encodedBytes": 1489,
+          "decodedBytes": 3728,
+          "durationMs": 1246.8999999761581,
+          "startMs": 479
+        },
+        {
+          "path": "/assets/net-worth-chart-Bq2AErVP.js",
+          "initiator": "other",
+          "transferBytes": 3545,
+          "encodedBytes": 3245,
+          "decodedBytes": 7599,
+          "durationMs": 1285.8000000715256,
+          "startMs": 479.1999999284744
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 1135,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 1343.5999999046326,
+          "startMs": 480.10000002384186
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 1335,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 1382.3999999761581,
+          "startMs": 480.2999999523163
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 983,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 1397.5,
+          "startMs": 481
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 1299,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 1413.6000000238419,
+          "startMs": 481
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 8804,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 611.5,
+          "startMs": 481.89999997615814
+        }
+      ]
+    },
+    {
+      "route": "/?range=1d",
+      "visit": "repeat",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 441.2999999523163,
+      "responseEndMs": 778.1999999284744,
+      "loadMs": 1155.3999999761581,
+      "fcpMs": 676,
+      "lcpMs": 676,
+      "documentEncodedBytes": 62149,
+      "documentDecodedBytes": 778088,
+      "documentTransferBytes": 62449,
+      "totalTransferBytes": 62449,
+      "elements": 8734,
+      "longTasks": [
+        {
+          "start": 607.3999999761581,
+          "duration": 50
+        },
+        {
+          "start": 922.1999999284744,
+          "duration": 175
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 0,
+          "startMs": 505.1999999284744
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 0,
+          "startMs": 506.60000002384186
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 0,
+          "startMs": 506.6999999284744
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 0,
+          "startMs": 507.7999999523163
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 0,
+          "startMs": 507.89999997615814
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 0,
+          "startMs": 509.6999999284744
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 0,
+          "startMs": 511.1999999284744
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 0,
+          "startMs": 512.2999999523163
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 0,
+          "startMs": 513
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 0,
+          "startMs": 513.1000000238419
+        },
+        {
+          "path": "/assets/overview-jesVs4er.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2305,
+          "decodedBytes": 6240,
+          "durationMs": 0,
+          "startMs": 514.1999999284744
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 0,
+          "startMs": 515.6999999284744
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 0,
+          "startMs": 516.5
+        },
+        {
+          "path": "/assets/breakdown-BhbHNNeb.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1489,
+          "decodedBytes": 3728,
+          "durationMs": 0,
+          "startMs": 517.1999999284744
+        },
+        {
+          "path": "/assets/net-worth-chart-Bq2AErVP.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 3245,
+          "decodedBytes": 7599,
+          "durationMs": 0,
+          "startMs": 518
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 0,
+          "startMs": 518.6000000238419
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 0,
+          "startMs": 519.1999999284744
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 0,
+          "startMs": 519.3999999761581
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 0,
+          "startMs": 520.3999999761581
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 0,
+          "startMs": 522.3999999761581
+        }
+      ]
+    },
+    {
+      "route": "/holdings",
+      "visit": "cold",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 40.700000047683716,
+      "responseEndMs": 228.30000007152557,
+      "loadMs": 1996.1000000238419,
+      "fcpMs": 1988,
+      "lcpMs": 1988,
+      "documentEncodedBytes": 13851,
+      "documentDecodedBytes": 300771,
+      "documentTransferBytes": 14151,
+      "totalTransferBytes": 212405,
+      "elements": 4123,
+      "longTasks": [
+        {
+          "start": 624.3000000715256,
+          "duration": 704
+        },
+        {
+          "start": 1364.8999999761581,
+          "duration": 606
+        },
+        {
+          "start": 1998.1000000238419,
+          "duration": 88
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 48556,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 1160.3999999761581,
+          "startMs": 179.10000002384186
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 1769,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 216.80000007152557,
+          "startMs": 179.5
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 69205,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 1295.5999999046326,
+          "startMs": 181.30000007152557
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 45350,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 1125.6000000238419,
+          "startMs": 181.89999997615814
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 3215,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 286,
+          "startMs": 182
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 1290,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 397.59999990463257,
+          "startMs": 183.30000007152557
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 1617,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 492.60000002384186,
+          "startMs": 183.39999997615814
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 394,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 572.6999999284744,
+          "startMs": 184.30000007152557
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 1746,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 634.8999999761581,
+          "startMs": 184.5
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 947,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 667.3000000715256,
+          "startMs": 185.39999997615814
+        },
+        {
+          "path": "/assets/holdings-BpJ8chB0.js",
+          "initiator": "other",
+          "transferBytes": 5246,
+          "encodedBytes": 4946,
+          "decodedBytes": 15582,
+          "durationMs": 850.1000000238419,
+          "startMs": 185.5
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 592,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 819.6000000238419,
+          "startMs": 185.60000002384186
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 2257,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 890.3999999761581,
+          "startMs": 185.70000004768372
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 1135,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 993.6000000238419,
+          "startMs": 187.89999997615814
+        },
+        {
+          "path": "/assets/interpreted-number-input-KmJY23SY.js",
+          "initiator": "other",
+          "transferBytes": 2514,
+          "encodedBytes": 2214,
+          "decodedBytes": 5482,
+          "durationMs": 1054.7000000476837,
+          "startMs": 188.89999997615814
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 1335,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 1079.3999999761581,
+          "startMs": 189.5
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 1299,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 1158.7000000476837,
+          "startMs": 190.5
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 983,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 1215.5999999046326,
+          "startMs": 190.80000007152557
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 8804,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 412.7000000476837,
+          "startMs": 190.89999997615814
+        }
+      ]
+    },
+    {
+      "route": "/holdings",
+      "visit": "repeat",
+      "status": 200,
+      "encoding": "br",
+      "failures": [],
+      "ttfbMs": 40.300000071525574,
+      "responseEndMs": 231.20000004768372,
+      "loadMs": 0,
+      "fcpMs": 408,
+      "lcpMs": 408,
+      "documentEncodedBytes": 13851,
+      "documentDecodedBytes": 300771,
+      "documentTransferBytes": 14151,
+      "totalTransferBytes": 14151,
+      "elements": 4123,
+      "longTasks": [
+        {
+          "start": 240.5,
+          "duration": 149
+        },
+        {
+          "start": 549.2000000476837,
+          "duration": 57
+        }
+      ],
+      "resources": [
+        {
+          "path": "/assets/inter-latin-var-Dx4kXJAl.woff2",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 48256,
+          "decodedBytes": 48256,
+          "durationMs": 0,
+          "startMs": 181.60000002384186
+        },
+        {
+          "path": "/assets/manifest-9bf96d91.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1469,
+          "decodedBytes": 12486,
+          "durationMs": 0,
+          "startMs": 182.70000004768372
+        },
+        {
+          "path": "/assets/entry.client-DeCl1oLB.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 68905,
+          "decodedBytes": 218972,
+          "durationMs": 0,
+          "startMs": 183.5
+        },
+        {
+          "path": "/assets/jsx-runtime-BEyV-Hi8.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 45050,
+          "decodedBytes": 132081,
+          "durationMs": 0,
+          "startMs": 184.10000002384186
+        },
+        {
+          "path": "/assets/root-Df_aNSj-.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2915,
+          "decodedBytes": 7247,
+          "durationMs": 0,
+          "startMs": 184.10000002384186
+        },
+        {
+          "path": "/assets/error-page-B8s4viXd.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 990,
+          "decodedBytes": 990,
+          "durationMs": 0,
+          "startMs": 185.20000004768372
+        },
+        {
+          "path": "/assets/icons-CZtKy2WR.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1317,
+          "decodedBytes": 4695,
+          "durationMs": 0,
+          "startMs": 185.40000009536743
+        },
+        {
+          "path": "/assets/lock-M0fCm_1K.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 94,
+          "decodedBytes": 94,
+          "durationMs": 0,
+          "startMs": 186.20000004768372
+        },
+        {
+          "path": "/assets/masking-D-WSZHsu.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1446,
+          "decodedBytes": 3191,
+          "durationMs": 0,
+          "startMs": 186.60000002384186
+        },
+        {
+          "path": "/assets/owner-filter-DRQD7fjx.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 647,
+          "decodedBytes": 647,
+          "durationMs": 0,
+          "startMs": 187.30000007152557
+        },
+        {
+          "path": "/assets/holdings-BpJ8chB0.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 4946,
+          "decodedBytes": 15582,
+          "durationMs": 0,
+          "startMs": 187.90000009536743
+        },
+        {
+          "path": "/assets/account-number-tail-lHyq4zdh.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 292,
+          "decodedBytes": 292,
+          "durationMs": 0,
+          "startMs": 188.30000007152557
+        },
+        {
+          "path": "/assets/amount-Cw59Xk_0.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1957,
+          "decodedBytes": 4619,
+          "durationMs": 0,
+          "startMs": 189
+        },
+        {
+          "path": "/assets/price-freshness-B88f53_x.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 835,
+          "decodedBytes": 1886,
+          "durationMs": 0,
+          "startMs": 189.5
+        },
+        {
+          "path": "/assets/interpreted-number-input-KmJY23SY.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 2214,
+          "decodedBytes": 5482,
+          "durationMs": 0,
+          "startMs": 190
+        },
+        {
+          "path": "/assets/owner-filter-control-Cz3JmF2F.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 1035,
+          "decodedBytes": 2275,
+          "durationMs": 0,
+          "startMs": 190.10000002384186
+        },
+        {
+          "path": "/assets/format-Cy2QsX7i.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 999,
+          "decodedBytes": 2412,
+          "durationMs": 0,
+          "startMs": 190.80000007152557
+        },
+        {
+          "path": "/assets/account-options-CQcBYdHH.js",
+          "initiator": "other",
+          "transferBytes": 0,
+          "encodedBytes": 683,
+          "decodedBytes": 683,
+          "durationMs": 0,
+          "startMs": 191
+        },
+        {
+          "path": "/assets/root-BV_Q-ubK.css",
+          "initiator": "link",
+          "transferBytes": 0,
+          "encodedBytes": 8504,
+          "decodedBytes": 43182,
+          "durationMs": 0,
+          "startMs": 191.60000002384186
+        }
+      ]
+    }
+  ]
+}

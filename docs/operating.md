@@ -2,10 +2,12 @@
 
 Everything a self-hoster needs that is not in the [README](../README.md): what the containers are,
 what to put in `.env`, how it sits behind your own proxy, the security decisions that are yours
-rather than the code's, what to watch, backing the data up, restoring it, and upgrading.
+rather than the code's, what to watch, backing the data up, and upgrading. Restoring what was
+backed up is one procedure long enough to own a document, and hands over to it here.
 
-When something is already broken and you want a procedure, that is [`runbook.md`](runbook.md). This
-file is how the instance is meant to be run.
+When something is already broken and you want a procedure, that is [`runbook.md`](runbook.md). When
+the procedure is a restore, it is [`restoring-a-dump.md`](restoring-a-dump.md). This file is how the
+instance is meant to be run.
 
 - [What runs here](#what-runs-here)
 - [Installing](#installing)
@@ -1213,15 +1215,19 @@ What to do about any of this is [`runbook.md`](runbook.md).
 
 ## Backups
 
-**Backups are not a built-in feature and will not become one.** Self-hosters have their own, and a
-half-built backup feature is worse than none, because it is the one that looks like it is working.
+**The stack takes dumps. It does not take backups, and will not.** A **dump** is a verified
+`pg_dump` archive the `dump` service leaves in `./volumes/dumps/` on this machine. A **backup** is a
+copy your own tool has taken off it, and it owns the encryption, the history and the destination.
+Nothing in this deployment reaches the place backups are kept
+([ADR-0009](adr/0009-the-stack-takes-dumps-not-backups.md)). Copying dumps off the host is the half
+you still have to do, and the half nothing here will tell you is undone.
 
-There is exactly one thing to back up for **data**: the cluster at `./volumes/db/data`, through
-`pg_dump`.
-The application container is stateless. It writes nothing to its own filesystem, and `compose.yaml`
-mounts it `read_only: true` so that stays true. Uploaded CSVs are kept in Postgres rather than on
-disk (DESIGN.md §5.2) so that this stays a single target. The image is rebuildable and
-needs no backup.
+There is exactly one source of **data** to back up, the cluster at `./volumes/db/data`, and exactly
+one supported way to read it, `pg_dump` — which is why the dumps the service leaves beside it are
+the only thing your collector has to carry. The application container is stateless. It writes
+nothing to its own filesystem, and `compose.yaml` mounts it `read_only: true` so that stays true.
+Uploaded CSVs are kept in Postgres rather than on disk (DESIGN.md §5.2) so that this stays a single
+target. The image is rebuildable and needs no backup.
 
 **Being able to see the directory does not make copying it a backup.** A file-level copy of a
 *running* cluster is a torn one, whatever the tool. Once it is stopped, with `docker compose down`
@@ -1232,13 +1238,46 @@ it is the one that also survives a Postgres major upgrade.
 
 **Budget for the dump growing faster than it used to.** The price observation log is the largest
 table on an instance that has been running a while ([Growth and limits](#growth-and-limits)), and it
-is mostly archived JSON, which compresses well, so a custom-format dump is far smaller than the
-table, and still on a path to gigabytes rather than megabytes. Nothing about the commands below
-changes; what changes is how long they take and where you can afford to keep the output. If you keep
-a dump per day for a year, size the destination against the table, not against the 11 MB the demo
-household weighs.
+is mostly archived JSON. A nightly archive is uncompressed by default, so it tracks that table
+rather than undercutting it, and is on a path to gigabytes rather than megabytes; `DUMP_COMPRESS`
+buys most of it back at the price of the deduplication a collector would otherwise get. Nothing
+about the commands below changes; what changes is how long they take and where you can afford to
+keep the output. If you keep a dump per day for a year, size the destination against the table, not
+against the 11 MB the demo household weighs.
 
-Dump the database without stopping the instance:
+### What to point your collector at
+
+`./volumes/dumps/` and nothing else, for data. One nightly run leaves
+`portfolio-<YYYYMMDDTHHMMSSZ>.dump` and a `portfolio-<stamp>.dump.json` beside it holding that
+archive's sha256, byte count, compression and server version, plus three marker files naming the
+last attempt, the last success and the last failure. `restoring-a-dump.md` has
+[the whole list and what each file is for](restoring-a-dump.md#before-you-start).
+
+Two things to get right:
+
+- **Do not collect `./volumes/db/data`.** A file-level copy of a running cluster is torn whatever
+  the tool, and a torn cluster looks exactly like a good one until you need it.
+- **`DUMP_KEEP_DAYS` is a hand-off window, not your history.** It is how long your collector can be
+  broken before a dump ages out, and it defaults to seven days. Keeping history is the collector's
+  job; the local directory is only where the hand-off happens.
+
+**Check the hand-off is still happening.** The dumper's own freshness check is the age of the newest
+archive, and the attempt marker is the outcome of the last run:
+
+```sh
+docker compose ps -a                                              # a disabled dumper reads Exited (0)
+docker compose exec dump sh /usr/local/bin/dump-loop.sh healthcheck
+cat volumes/dumps/last-attempt.json
+```
+
+`ps -a`, not `ps`: `DUMP_ENABLED=false` exits cleanly and a plain `ps` then makes a disabled dumper
+indistinguishable from one that was never configured. When the answer is bad,
+[`runbook.md`](runbook.md#my-dumps-have-stopped) has what each failure stage means.
+
+### Taking one by hand
+
+The bundled dump service already schedules daily dumps. Use the command below for an extra copy on
+demand — before an upgrade, or before anything you might want to undo:
 
 ```sh
 docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
@@ -1246,8 +1285,14 @@ docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
 ```
 
 `pg_dump` runs inside the `db` container, so no Postgres client is needed on the host and the tool
-always matches the server version. The custom format is compressed and is what `pg_restore` reads;
-for a plain-SQL dump you can read yourself, use `--format=plain` and restore it with `psql`.
+always matches the server version. The custom format is what `pg_restore` reads; for a plain-SQL
+dump you can read yourself, use `--format=plain` and restore it with `psql`.
+
+**A hand-taken archive differs from the service's in one way: compression.** This one is compressed,
+because that is `pg_dump`'s own default for the custom format; the service's are not, because
+`DUMP_COMPRESS` defaults to `0` so a deduplicating collector sees a stable byte stream. Both are
+custom-format archives and `pg_restore` reads either with the same command — there is nothing to
+decompress first.
 
 **The `>` creates the file whether or not the dump worked.** The shell opens the redirect before
 `pg_dump` runs, so a dump that dies halfway leaves a plausible-looking file of plausible size behind,
@@ -1262,11 +1307,10 @@ docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom > "$
 docker compose exec -T db pg_restore -f /dev/null < "$DUMP"
 ```
 
-This decodes the full archive without restoring it to a database. Listing the table of contents
-alone can pass for a truncated archive. A restore test is still needed to check recovery end to end.
-
-The bundled dump service already schedules daily dumps. Use this manual command before an upgrade
-or when you need an extra copy.
+This decodes the full archive without restoring it to a database. Listing the table of contents alone
+passes for an archive truncated anywhere after that table, which is most of the ways one gets
+truncated. A restore test is still needed to check recovery end to end, and that is
+[the drill](restoring-a-dump.md#the-drill-rehearse-without-an-outage).
 
 ### The second thing to keep is `.env`, and the third is the allowlist
 
@@ -1291,90 +1335,34 @@ costs to recover, once a command runs again:
 
 Keep them wherever you keep passwords, which is not the directory you keep the dumps in.
 
-> **A backup you have never restored is not a backup.** Rehearse it. The
-> [drill below](#rehearse-it-without-an-outage) does that without taking the instance down.
+> **An archive nobody has ever restored is not yet evidence of anything.** Rehearse it. The
+> [drill](restoring-a-dump.md#the-drill-rehearse-without-an-outage) does that without taking the
+> instance down; quarterly, and after any Postgres major upgrade.
 
 ---
 
 ## Restoring
 
-Restore into an empty database rather than over a live one, so a partial restore cannot leave a
-half-old, half-new schema behind:
+The whole procedure — choosing an archive, proving it before you trust it, restoring in place,
+rebuilding a machine from nothing, and the drill that rehearses all of it without an outage — is
+[`restoring-a-dump.md`](restoring-a-dump.md). It is one document because a restore is one procedure,
+and splitting it is how half of it goes stale.
 
-```sh
-DUMP=portfolio-2026-08-17.dump      # the file you are restoring
+Two things it rests on are facts about how this instance is built rather than steps, so they are
+here rather than there:
 
-docker compose stop app
+- **`app` and `dump` are stopped for the length of it because they write to the database being
+  replaced** — `app` on every request and on its price-poller's own schedule, `dump` whenever a run
+  starts. Neither is stopped by anything but you: a `dropdb` that refuses is timing, not a guard.
+  `worker` holds no database connection at all, and `caddy` answering `502` throughout is the
+  restore working.
+- **The migration ledger travels inside the archive**, so `app` applies on start exactly the
+  migrations the archive predates and nothing else. Restoring schema and data separately is the one
+  way to desynchronise that ledger from the schema
+  ([`runbook.md`](runbook.md#a-migration-failed)).
 
-docker compose exec -T db dropdb   -U portfolio portfolio
-docker compose exec -T db createdb -U portfolio -O portfolio portfolio
-docker compose exec -T db pg_restore --exit-on-error --single-transaction \
-  -U portfolio -d portfolio < "$DUMP"
-
-docker compose start app
-```
-
-**`--exit-on-error --single-transaction` is what makes the sentence above true.** Left to itself
-`pg_restore` continues past failures and reports a count at the end, which is precisely the
-half-old, half-new schema this is trying to avoid. With both flags the restore is one transaction
-that either lands whole or leaves the empty database alone.
-
-Stopping `app` first is what keeps it from writing to a database that is being replaced underneath
-it, and the price refresh loop inside it is the connection holder that would otherwise make
-`dropdb` fail. `caddy` stays up throughout and answers `502` until `app` is back; that is the
-restore working, not a second fault.
-
-**The worker may keep running.** It holds no database connection and nothing about a restore
-reaches it, so `stop app` alone is what to type above. There is no `stop worker` line to add.
-
-**`docker compose stop app` survives a reboot.** `stop` records that you wanted it stopped, and
-`restart: unless-stopped` honours that across a daemon restart and across a host reboot. A restore
-you walked away from half-finished stays half-finished. The site keeps answering 502 and nothing
-brings the app back on its own. `docker compose start app` is the only thing that does.
-
-On start `app` applies any migrations the dump predates, so a backup taken from an older version
-restores into the current one without a manual step.
-
-### Rehearse it without an outage
-
-Restore into a *separate* database on the same server. Nothing stops, nobody sees a 502, and the
-live database is never dropped:
-
-```sh
-DUMP=portfolio-2026-08-17.dump
-
-docker compose exec -T db createdb -U portfolio -O portfolio portfolio_drill
-docker compose exec -T db pg_restore --exit-on-error --single-transaction \
-  -U portfolio -d portfolio_drill < "$DUMP"
-
-docker compose exec -T db psql -U portfolio -d portfolio_drill \
-  -c "select count(*) from holding"
-
-docker compose exec -T db dropdb -U portfolio portfolio_drill
-```
-
-The count is the point. A truncated archive that still restores cleanly into an *empty* schema is the
-failure this catches, and a restore that reports success while producing no rows will not be noticed
-any other way. Compare it against the same query on `portfolio` and be suspicious of a large gap.
-
-`portfolio_drill` is never migrated and the app is never pointed at it; it exists for the length of
-the drill and is dropped at the end.
-
-### Rebuilding a machine from nothing
-
-Install Docker, clone this repository, and restore your `.env` **and your `allowed-emails.txt`**,
-since with either one missing nothing starts at all. Then bring up the database **on its own** before
-anything else:
-
-```sh
-docker compose up -d db
-# then the restore above, minus the `docker compose stop app` line
-docker compose up -d
-```
-
-A plain `docker compose up -d` here would start `app`, which would create and migrate an empty schema
-that you are about to drop, and would hold a connection to the database while you try to drop it.
-Bringing up `db` alone avoids both.
+What is *in* an archive, and how to read one without the application in front of it, is
+[`data-model.md`](data-model.md).
 
 ---
 
@@ -1693,8 +1681,8 @@ sure, `docker volume rm portfolio_db-data`. That volume is the last copy of anyt
 also dump.
 
 If you would rather not copy files at all, the dump-and-restore in
-[Restoring](#restoring) does the same job: dump on the old file, `up` on the new one against an
-empty directory, restore into it.
+[`restoring-a-dump.md`](restoring-a-dump.md) does the same job: dump on the old file, `up` on the
+new one against an empty directory, restore into it.
 
 ### Upgrading Postgres across a major version
 

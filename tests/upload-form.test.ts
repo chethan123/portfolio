@@ -48,6 +48,21 @@ describe("parseUploadForm", () => {
     expect(Buffer.from(input.bytes).equals(Buffer.from(csv))).toBe(true);
   });
 
+  it("reads the several-accounts choice as a draft with no account", async () => {
+    const form = submission(new File(["Account,Symbol,Qty\nA-1,VTI,1\n"], "all.csv"));
+    form.set("accountId", "several");
+
+    expect((await parseUploadForm(form)).accountId).toBeNull();
+  });
+
+  it("refuses an account choice that is neither an id nor several accounts", async () => {
+    const form = submission(new File(["Symbol,Qty\nVTI,1\n"], "one.csv"));
+    form.set("accountId", "everything");
+
+    const refusal = await refusalOf(() => parseUploadForm(form));
+    expect(refusal.fieldErrors.accountId).toBe("Choose the account this statement describes.");
+  });
+
   it("refuses a missing file at field level, like every other form's field", async () => {
     const refusal = await refusalOf(() => parseUploadForm(submission()));
 

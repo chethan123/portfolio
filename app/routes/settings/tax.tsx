@@ -3,8 +3,8 @@ import { Form } from "react-router";
 
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import { percentRateRule } from "~/lib/decimal-input";
+import { rateDigits } from "~/lib/format";
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
-import { rateDigits } from "~/lib/allocation";
 import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
 
 import type { Route } from "./+types/tax";

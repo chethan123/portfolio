@@ -54,7 +54,7 @@ export interface Classification {
 export interface ColumnMapping {
   header_fingerprint: string;
   id: Generated<Int8>;
-  institution: string;
+  institution: string | null;
   mapping: Json;
 }
 
@@ -194,7 +194,7 @@ export interface UnlockGrant {
 }
 
 export interface UploadDraft {
-  account_id: Int8;
+  account_id: Int8 | null;
   as_of_date: string | null;
   created_at: Generated<Timestamp>;
   filename: string;
@@ -202,6 +202,12 @@ export interface UploadDraft {
   id: Generated<Int8>;
   mapping: Json | null;
   raw_file: Buffer;
+}
+
+export interface UploadDraftAccountAnswer {
+  account_id: Int8 | null;
+  account_number: string;
+  draft_id: Int8;
 }
 
 export interface UploadDraftAnswer {
@@ -231,5 +237,6 @@ export interface DB {
   schema_migrations: SchemaMigrations;
   unlock_grant: UnlockGrant;
   upload_draft: UploadDraft;
+  upload_draft_account_answer: UploadDraftAccountAnswer;
   upload_draft_answer: UploadDraftAnswer;
 }

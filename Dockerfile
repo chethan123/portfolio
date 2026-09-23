@@ -66,6 +66,8 @@ COPY --from=build --chown=node:node /app/package.json ./package.json
 
 # Run under Node's type stripping, no build step (DESIGN.md §9). No `app/` here.
 COPY --chown=node:node \
+  server/action-origins.ts \
+  server/server-build.ts \
   server/config.ts \
   server/validate-config.ts \
   server/db.ts \
@@ -93,4 +95,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["node_modules/.bin/react-router-serve", "./build/server/index.js"]
+CMD ["node_modules/.bin/react-router-serve", "./server/server-build.ts"]

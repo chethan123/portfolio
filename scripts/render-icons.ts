@@ -10,6 +10,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { chromium } from "playwright";
+import sharp from "sharp";
 
 /** Same escape hatch as `capture-screenshots.ts`, for images with a browser. */
 const EXECUTABLE = process.env.CHROMIUM_EXECUTABLE;
@@ -37,7 +38,17 @@ async function main(): Promise<void> {
     for (const icon of ICONS) {
       const sized = icon.markup.replace("<svg ", `<svg width="${icon.edge}" height="${icon.edge}" `);
       await page.setContent(`<body style="margin:0">${sized}</body>`);
-      const png = await page.locator("svg").screenshot({ omitBackground: true });
+      const raster = await page.locator("svg").screenshot({ omitBackground: true });
+      const png = await sharp(raster)
+        .png({
+          palette: true,
+          colours: 16,
+          quality: 100,
+          compressionLevel: 9,
+          effort: 10,
+          dither: 0,
+        })
+        .toBuffer();
       writeFileSync(new URL(icon.file, outDir), png);
       console.log(`wrote public/icons/${icon.file} (${png.length} bytes)`);
       rendered.push({ icon, png });

@@ -1,5 +1,6 @@
 // Saved column mappings — a brokerage's export format remembered once, applied to later files
-// (DESIGN.md §5.3, spec 0004 step 03). Keyed by (institution, header fingerprint): order-sensitive
+// (DESIGN.md §5.3, spec 0004 step 03). Keyed by (institution, header fingerprint), or fingerprint
+// alone in the multi-account scope (spec 0023): order-sensitive
 // (reordered export = re-map) but case/padding-insensitive. Also owns the columns form contract
 // (parseMappingForm) so the route stays a thin translator.
 import { createHash } from "node:crypto";
@@ -28,15 +29,16 @@ export function headerFingerprint(cells: readonly string[]): string {
 }
 
 // Null for a malformed stored row too (via statementMapping) — reads as "map it again", never a 500.
+// institution null: the multi-account scope (spec 0023 decision 4); "is", since "= null" never matches.
 export async function findMapping(
-  institution: string,
+  institution: string | null,
   fingerprint: string,
   db: Kysely<Database> = getDb(),
 ): Promise<StatementMapping | null> {
   const row = await db
     .selectFrom("column_mapping")
     .select("mapping")
-    .where("institution", "=", institution)
+    .where("institution", institution === null ? "is" : "=", institution)
     .where("header_fingerprint", "=", fingerprint)
     .executeTakeFirst();
 
@@ -46,9 +48,10 @@ export async function findMapping(
   return parsed.success ? parsed.data : null;
 }
 
-// Upsert on column_mapping_one_per_fingerprint: a corrected mapping replaces the wrong one.
+// Infers whichever of 0016's partial indexes the scope conflicts on, predicate included: "on
+// conflict on constraint" can't name a partial index.
 export async function upsertMapping(
-  institution: string,
+  institution: string | null,
   fingerprint: string,
   mapping: StatementMapping,
   db: Kysely<Database> = getDb(),
@@ -59,7 +62,12 @@ export async function upsertMapping(
     .insertInto("column_mapping")
     .values({ institution, header_fingerprint: fingerprint, mapping: value })
     .onConflict((conflict) =>
-      conflict.constraint("column_mapping_one_per_fingerprint").doUpdateSet({ mapping: value }),
+      (institution === null
+        ? conflict.columns(["header_fingerprint"]).where("institution", "is", null)
+        : conflict
+            .columns(["institution", "header_fingerprint"])
+            .where("institution", "is not", null)
+      ).doUpdateSet({ mapping: value }),
     )
     .execute();
 }
@@ -74,14 +82,23 @@ const COLUMN_FIELDS = [
   { field: "accountNumber", label: "Account number", required: false },
 ] as const;
 
+export type MappingFormScope = { multiAccount: boolean };
+
 type ColumnField = (typeof COLUMN_FIELDS)[number]["field"];
+
+// Spec 0023 decision 4: a multi-account mapping routes every row by its account number.
+export function requiredColumns({ multiAccount }: MappingFormScope): ColumnField[] {
+  return COLUMN_FIELDS.flatMap(({ field, required }) =>
+    required || (multiAccount && field === "accountNumber") ? [field] : [],
+  );
+}
 
 // Absent field, placeholder and deliberate absence all read as "no column chosen".
 const chosenColumn = (value: string | undefined): string | null =>
   value === undefined || value === "" || value === NOT_IN_FILE ? null : value;
 
 // One superRefine so a submission with three faults reports three messages, not one per round trip.
-const mappingForm = (header: ReadonlyArray<string>) =>
+const mappingForm = (header: ReadonlyArray<string>, scope: MappingFormScope) =>
   z
     .object({
       instrument: z.string().optional(),
@@ -98,18 +115,21 @@ const mappingForm = (header: ReadonlyArray<string>) =>
         ctx.addIssue({ code: "custom", path: [field], message });
 
       const chosen: Array<{ label: string; column: string }> = [];
+      const required = requiredColumns(scope);
 
-      for (const { field, label, required } of COLUMN_FIELDS) {
+      for (const { field, label } of COLUMN_FIELDS) {
         const value = chosenColumn(form[field]);
 
         if (value === null) {
-          if (required) {
-            refuse(
-              field,
-              `Choose the column that holds the ${label.toLowerCase()} — ` +
-                "a statement is nothing without one.",
-            );
-          }
+          if (!required.includes(field)) continue;
+          refuse(
+            field,
+            field === "accountNumber"
+              ? "Choose the column that holds the account number — a file of several accounts " +
+                  "routes every row by one."
+              : `Choose the column that holds the ${label.toLowerCase()} — ` +
+                  "a statement is nothing without one.",
+          );
           continue;
         }
 
@@ -146,6 +166,7 @@ export function parseMappingForm(
   fields: Record<string, string>,
   rows: ReadonlyArray<ReadonlyArray<string>>,
   delimiter: Delimiter,
+  scope: MappingFormScope = { multiAccount: false },
 ): StatementMapping {
   // Hidden field: a bad header row is a forged/stale post, not a control to hang a message under.
   const headerRow = /^\d+$/.test(fields.headerRow ?? "") ? Number(fields.headerRow) : null;
@@ -157,7 +178,7 @@ export function parseMappingForm(
     );
   }
 
-  const input = parseInput(mappingForm(header), fields);
+  const input = parseInput(mappingForm(header, scope), fields);
 
   const column = (field: ColumnField): string | null => chosenColumn(input[field]);
 
@@ -179,5 +200,7 @@ export function parseMappingForm(
     // No screen control — only a hand-authored mapping disables this, and parseStatement
     // still refuses duplicates for that mapping.
     combineDuplicateRows: true,
+    // Absent, never false, when single: as every mapping stored before the flag.
+    ...(scope.multiAccount ? { multiAccount: true } : {}),
   };
 }
