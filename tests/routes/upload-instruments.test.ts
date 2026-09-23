@@ -4,11 +4,12 @@
 // Domain rules are instrument-resolution.test.ts's; the audit's abandoned-draft case (QA-04) is here, at route level.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { action, loader } from "../../app/routes/upload/instruments.tsx";
+import Instruments, { action, loader } from "../../app/routes/upload/instruments.tsx";
 import { rememberMapping } from "~/lib/uploads.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { renderRoute } from "../support/render.tsx";
 import { args, get, outcomeOf, post, redirectTo } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
@@ -48,6 +49,23 @@ async function stageDraft(
   }
 
   return draft.id;
+}
+
+/** One input tag, so a value repeated in the raw heading or Name field cannot satisfy the assertion. */
+function inputTag(markup: string, id: string): string {
+  const tag = markup.match(new RegExp(`<input id="${id}"[^>]*>`))?.[0];
+  if (tag === undefined) throw new Error(`The rendered page has no input called ${id}.`);
+  return tag;
+}
+
+/** Render one unresolved raw string through the real loader and route component. */
+async function unresolvedScreen(ctx: TestContext, raw: string) {
+  const csv = ["Symbol,Quantity", `"${raw.replaceAll('"', '""')}",1`].join("\n");
+  const draftId = await stageDraft(ctx, csv);
+  const path = `/upload/${draftId}/instruments`;
+  const data = await loader(args(get(path), { draftId }));
+  if (data instanceof Response) throw new Error("The unresolved fixture skipped its screen.");
+  return { data, draftId, path, markup: renderRoute(Instruments, path, data) };
 }
 
 /** The answers that create a new instrument for the string at `index`. */
@@ -167,6 +185,58 @@ describe("a step with nothing left to ask", () => {
 
       expect(response).toBeInstanceOf(Response);
       expect((response as Response).status).toBe(404);
+    }),
+  );
+});
+
+describe("new-instrument defaults", () => {
+  it(
+    "prefills an exact ticker-like raw value while keeping Symbol editable and the Name fallback",
+    withDatabase(async (ctx) => {
+      const { markup } = await unresolvedScreen(ctx, "FXAIX");
+
+      const symbol = inputTag(markup, "symbol-0");
+      expect(symbol).toContain('value="FXAIX"');
+      expect(symbol).not.toContain("readOnly");
+      expect(symbol).not.toContain("disabled");
+      expect(inputTag(markup, "name-0")).toContain('value="FXAIX"');
+    }),
+  );
+
+  it(
+    "leaves Symbol blank for descriptive and whitespace-padded raw values",
+    withDatabase(async (ctx) => {
+      for (const raw of ["Fidelity 500 Index Fund", " FXAIX "]) {
+        const { markup } = await unresolvedScreen(ctx, raw);
+
+        expect(inputTag(markup, "symbol-0")).toContain('value=""');
+        expect(inputTag(markup, "name-0")).toContain(`value="${raw}"`);
+      }
+    }),
+  );
+
+  it(
+    "keeps a rejected submission's edited and cleared Symbol values",
+    withDatabase(async (ctx) => {
+      for (const postedSymbol of ["EDITED", ""]) {
+        const { data, draftId, path } = await unresolvedScreen(ctx, "FXAIX");
+        const result = await action(
+          args(
+            post(path, {
+              "raw-0": "FXAIX",
+              "kind-0": "create",
+              "symbol-0": postedSymbol,
+              "name-0": "",
+              "priceSource-0": "manual",
+            }),
+            { draftId },
+          ),
+        );
+        if (result instanceof Response) throw new Error("The invalid answer left the screen.");
+
+        const markup = renderRoute(Instruments, path, data, { actionData: result });
+        expect(inputTag(markup, "symbol-0")).toContain(`value="${postedSymbol}"`);
+      }
     }),
   );
 });
