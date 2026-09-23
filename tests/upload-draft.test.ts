@@ -239,7 +239,7 @@ describe("a draft with no account", () => {
       const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
       await rememberMapping(draft.id, SEVERAL, db);
 
-      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(/recordUpload/);
+      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
       await expect(commitUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
       await expect(recordUpload("999999", {}, db)).rejects.toThrow(NotFoundError);

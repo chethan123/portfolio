@@ -80,12 +80,20 @@ async function resolveEveryString(
   }
 }
 
-/** multi-account.csv past its columns step. */
-async function stage(ctx: Pick<TestContext, "db" | "seedUploadDraft">): Promise<string> {
+/** multi-account.csv, or `csv` under its header, past its columns step. */
+async function stage(
+  ctx: Pick<TestContext, "db" | "seedUploadDraft">,
+  csv?: string,
+): Promise<string> {
   const draft = await ctx.seedUploadDraft({
     account: null,
     filename: "all-accounts.csv",
-    bytes: spreadsheet(),
+    bytes:
+      csv === undefined
+        ? spreadsheet()
+        : new TextEncoder().encode(
+            `Holding,Description,Quantity,Cost Basis,As Of,Account Number\n${csv}`,
+          ),
   });
   const outcome = await rememberMapping(draft.id, MULTI, ctx.db);
   if ("problems" in outcome) throw new Error(outcome.problems[0]?.message);
@@ -279,6 +287,66 @@ describe("answering the accounts step", () => {
 
       expect(refused.formError).toMatch(/changed while this page was open/);
       expect(await answersOf(ctx.db, draftId)).toEqual([]);
+
+      // The Roth's posted skip sat at index 0, where the mortgage's number is drawn now.
+      const markup = renderRoute(Accounts, `/upload/${draftId}/accounts`, await screen(draftId), {
+        actionData: refused,
+      });
+      expect(chosen(markup, "accountId-0")).toBe("");
+    }),
+  );
+
+  it(
+    "refuses giving an account a number whose rows carry two as-of dates, on its field, and takes skipping it",
+    withDatabase(async (ctx) => {
+      const { roth } = await seedHousehold(ctx);
+      const draftId = await stage(
+        ctx,
+        "VTI,,1,,2026-07-31,Z12-345678\n" +
+          `VTI,,2,,2026-06-30,${ROTH}\n` +
+          `FXAIX,,3,,2026-06-29,${ROTH}\n`,
+      );
+
+      const refused = await refusalOf(
+        answer(draftId, { "number-0": ROTH, "accountId-0": roth.id }),
+      );
+
+      expect(refused.errors).toEqual({
+        "accountId-0":
+          'The file carries two as-of dates for Roth IRA — "2026-06-30" on line 3 and ' +
+          '"2026-06-29" on line 4 — and a statement is a photograph of one day. Skip its rows ' +
+          "instead.",
+      });
+      expect(await answersOf(ctx.db, draftId)).toEqual([]);
+      expect(
+        await redirectTo(() => answer(draftId, { "number-0": ROTH, "accountId-0": "skip" })),
+      ).toBe(`/upload/${draftId}/instruments`);
+    }),
+  );
+
+  it(
+    "refuses giving an account a number longer than Settings records, on its field, and takes skipping it",
+    withDatabase(async (ctx) => {
+      const { roth } = await seedHousehold(ctx);
+      const long = "9".repeat(65);
+      const draftId = await stage(
+        ctx,
+        `VTI,,1,,2026-07-31,Z12-345678\nVTI,,2,,2026-07-31,${long}\n`,
+      );
+
+      const refused = await refusalOf(
+        answer(draftId, { "number-0": long, "accountId-0": roth.id }),
+      );
+
+      expect(refused.errors).toEqual({
+        "accountId-0":
+          "An account number must be 64 characters or fewer. This one is longer, so its rows " +
+          "can only be skipped — or check which column is mapped as the account number.",
+      });
+      expect(await answersOf(ctx.db, draftId)).toEqual([]);
+      expect(
+        await redirectTo(() => answer(draftId, { "number-0": long, "accountId-0": "skip" })),
+      ).toBe(`/upload/${draftId}/instruments`);
     }),
   );
 

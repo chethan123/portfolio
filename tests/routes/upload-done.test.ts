@@ -76,6 +76,23 @@ describe("the done page", () => {
   );
 
   it(
+    "reads only the first 50 ids an address names, leaving out any past them",
+    withDatabase(async ({ seedAccount, seedPositionSet }) => {
+      const account = await seedAccount({ name: "Brokerage" });
+      const uploaded = await seedPositionSet({ account, asOf: "2026-06-30" });
+      const unknown = (count: number) =>
+        Array.from({ length: count }, (_, index) => String(900_000_000 + index));
+      const at = async (ids: string[]) =>
+        (await loader(args(get(`/upload/done?sets=${ids.join(",")}`)))).statements.map(
+          (statement) => statement.receipt.setId,
+        );
+
+      expect(await at([...unknown(49), uploaded.id])).toEqual([uploaded.id]);
+      expect(await at([...unknown(50), uploaded.id])).toEqual([]);
+    }),
+  );
+
+  it(
     "renders an address naming nothing recorded as a page saying so, never a 404",
     withDatabase(async () => {
       for (const path of ["/upload/done", "/upload/done?sets=", "/upload/done?sets=%2C%2Cx"]) {

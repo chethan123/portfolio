@@ -556,7 +556,7 @@ export function parseStatement(
     }
 
     if (!mapping.combineDuplicateRows) {
-      const where = multiAccount ? ` for account "${first.accountNumber}"` : "";
+      const where = multiAccount ? ` for account number "${first.accountNumber}"` : "";
       problems.push({
         row: group[1]?.row ?? first.row,
         column: columns.instrument,

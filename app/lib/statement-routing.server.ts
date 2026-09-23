@@ -63,10 +63,10 @@ export type RoutedStatement = {
   unknownNumbers: string[];
 };
 
-// Decision 15: exact once trimmed. Settings trims on write; not relied on.
+// Decision 15: exact once trimmed. Settings trims on write; not relied on. Null alone records none,
+// as the commit's number write reads it; every writer stores a blank as null.
 export function recordedNumber(account: RoutableAccount): string | null {
-  const number = account.externalAccountNumber?.trim() ?? "";
-  return number === "" ? null : number;
+  return account.externalAccountNumber?.trim() ?? null;
 }
 
 export function routeStatement(

@@ -18,6 +18,7 @@ import {
   accountInput,
   getAccount,
   listAccounts,
+  numberHolder,
   refusingDuplicateNumber,
   withAccountLock,
   withAccountLocks,
@@ -563,14 +564,9 @@ function instrumentsStepSkipped(draft: UploadDraft): boolean {
 }
 
 // A blank instrument or a routing refusal: remapping may not fix either, so review explains it.
-// An unanswered or stale number is the accounts step's to ask, never a block.
 function blockedDraftFor(draft: UploadDraft, problems: DraftProblem[]): BlockedDraft | null {
   const blocking = problems.filter(
-    (problem) =>
-      problem.code === "blank-instrument" ||
-      (problem.kind !== undefined &&
-        problem.kind !== "unanswered" &&
-        problem.kind !== "stale-answer"),
+    (problem) => problem.code === "blank-instrument" || problem.kind !== undefined,
   );
   if (blocking.length === 0) return null;
 
@@ -718,13 +714,22 @@ export async function answerAccountNumbers(
       const choice = posted[`accountId-${index}`] ?? "";
       if (choice === SKIP_NUMBER) {
         answers.set(number, null);
-      } else if (offered.has(choice)) {
-        answers.set(number, choice);
-      } else {
+      } else if (!offered.has(choice)) {
         errors[`accountId-${index}`] =
           choice === ""
             ? `Choose the account "${number}" belongs to, or skip its rows.`
             : `Only an open account recording no number yet can take "${number}". Choose again.`;
+      } else {
+        // Settings' bound, which the commit applies too: a longer number can only be skipped.
+        const bounded = accountInput.shape.externalAccountNumber.safeParse(number);
+        if (bounded.success) {
+          answers.set(number, choice);
+        } else {
+          errors[`accountId-${index}`] =
+            `${bounded.error.issues.map((issue) => issue.message).join(" ")} This one is ` +
+            "longer, so its rows can only be skipped — or check which column is mapped as the " +
+            "account number.";
+        }
       }
     }
 
@@ -740,13 +745,20 @@ export async function answerAccountNumbers(
           "Choose one account for each.";
       }
     }
+
+    // Decision 8 on an answered number, refused on its field: at columns, where the router's
+    // other date refusals go, it would leave no step to skip it from.
+    const routed = routeStatement(asked.parsed, asked.mapping, { ...asked.inputs, answers });
+    for (const problem of routed.problems) {
+      const index = numbers.indexOf(problem.accountNumber ?? "");
+      if (problem.kind === "as-of" && index >= 0) {
+        errors[`accountId-${index}`] ??= `${problem.message} Skip its rows instead.`;
+      }
+    }
     if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
     // Decision 2: refused here, where the answers are, rather than at review.
-    const nothing = routeStatement(asked.parsed, asked.mapping, {
-      ...asked.inputs,
-      answers,
-    }).problems.find((problem) => problem.kind === "nothing-to-record");
+    const nothing = routed.problems.find((problem) => problem.kind === "nothing-to-record");
     if (nothing !== undefined) throw ValidationError.form(nothing.message);
 
     await inTransaction(db, async (trx) => {
@@ -1595,8 +1607,11 @@ export async function commitUpload(
 ): Promise<CommittedUpload> {
   const accountId = await draftAccountId(draftId, db);
   if (accountId === undefined) throw new NotFoundError(EXPIRED);
+  // A set per account goes through recordUpload; no route brings one here.
   if (accountId === null) {
-    throw new Error("A multi-account draft records a set per account, through recordUpload.");
+    throw new NotFoundError(
+      "This upload holds several accounts, each recorded as its own statement.",
+    );
   }
 
   return withAccountLock(accountId, db, (account, trx) =>
@@ -1728,6 +1743,19 @@ async function commitUploadUnderLock(
     );
   }
 
+  const capturedNumber = captured.data;
+  const recordedElsewhere = (who: string) =>
+    new RefusedUpload(
+      `This file says it describes account "${capturedNumber}", which is already recorded ` +
+        `on ${who}. A statement lands in the account it describes — check which account ` +
+        "this export belongs to.",
+      diff,
+    );
+  // Read ahead of the confirmations, so none is asked for a file that cannot land here. Settings
+  // takes no lock, so the index still decides at the write below.
+  const holder = capturedNumber === null ? null : await numberHolder(capturedNumber, db);
+  if (holder !== null) throw recordedElsewhere(holder);
+
   const reasons = reasonsToRefuse({ section: diff, rows, accountName: account.name }, raw, diff);
   if (reasons.length > 0) throw new RefusedUpload(reasons.join(" "), diff);
 
@@ -1737,20 +1765,8 @@ async function commitUploadUnderLock(
 
   const setId = await insertStatement(account.id, asOf, draft, rows, db);
 
-  const capturedNumber = captured.data;
   if (capturedNumber !== null) {
-    await recordAccountNumber(
-      account.id,
-      capturedNumber,
-      db,
-      (who) =>
-        new RefusedUpload(
-          `This file says it describes account "${capturedNumber}", which is already recorded ` +
-            `on ${who}. A statement lands in the account it describes — check which account ` +
-            "this export belongs to.",
-          diff,
-        ),
-    );
+    await recordAccountNumber(account.id, capturedNumber, db, recordedElsewhere);
   }
 
   return {
@@ -2020,8 +2036,9 @@ async function insertStatement(
   return set.id;
 }
 
-// Only where the column is still empty: never overwrite a hand-recorded number. The lock makes
-// a concurrent one impossible; the predicate stays as the write's own statement of the rule.
+// Only where the column is still null, recordedNumber's none: never overwrite a hand-recorded
+// number. The lock makes a concurrent one impossible; the predicate stays as the write's own
+// statement of the rule.
 async function recordAccountNumber(
   accountId: string,
   number: string,
@@ -2290,14 +2307,19 @@ export type RecordedStatement = {
   receipt: UploadReceipt;
 };
 
+// Several reads per id, over a list anyone can type; one upload names far fewer accounts.
+const MAX_RECORDED_SETS = 50;
+
 // /upload/done?sets= (spec 0023 decision 16), each set read as its own account's receipt reads it,
-// in the order named. The address is only claims: an id naming no upload set is left out, never
-// a 404.
+// in the order named. The address is only claims: an id naming no upload set, or past the first
+// MAX_RECORDED_SETS, is left out, never a 404.
 export async function recordedStatements(
   sets: string | null,
   db: Kysely<Database> = getDb(),
 ): Promise<RecordedStatement[]> {
-  const ids = [...new Set((sets ?? "").split(",").map((id) => id.trim()))].filter(couldBeId);
+  const ids = [...new Set((sets ?? "").split(",").map((id) => id.trim()))]
+    .filter(couldBeId)
+    .slice(0, MAX_RECORDED_SETS);
   if (ids.length === 0) return [];
 
   const rows = await db

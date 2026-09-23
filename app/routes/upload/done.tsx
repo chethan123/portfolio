@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
+import { UploadReceiptSentence } from "~/components/upload-receipt";
 import { recordedStatements } from "~/lib/uploads.server";
 
 import type { Route } from "./+types/done";
@@ -60,31 +61,8 @@ export default function UploadDone({ loaderData }: Route.ComponentProps) {
                       {accountName}
                       <AccountNumberTail tail={accountNumberTail} />
                     </Link>{" "}
-                    — owned by {ownerName}, as of <b className="u-data">{receipt.asOf}</b>:{" "}
-                    {receipt.firstStatement ? (
-                      <>
-                        <span className="u-data">{receipt.counts.added}</span> added
-                      </>
-                    ) : (
-                      <>
-                        <span className="u-data">{receipt.counts.added}</span> added ·{" "}
-                        <span className="u-data">{receipt.counts.updated}</span> updated ·{" "}
-                        <span className="u-data">{receipt.counts.removed}</span> removed
-                      </>
-                    )}
-                    .{" "}
-                    {receipt.isCurrent ? (
-                      <>
-                        It now holds <b className="u-data">{receipt.holdingCount}</b>{" "}
-                        {receipt.holdingCount === 1 ? "position" : "positions"}.
-                      </>
-                    ) : (
-                      // Its own holdingCount describes this set, not the account (account.tsx's receipt).
-                      <>
-                        Filed behind what it already reports — it still shows its{" "}
-                        <b className="u-data">{receipt.currentAsOf}</b> figures.
-                      </>
-                    )}
+                    — owned by {ownerName}:{" "}
+                    <UploadReceiptSentence receipt={receipt} accountName={accountName} />
                   </span>
                 </p>
               </li>

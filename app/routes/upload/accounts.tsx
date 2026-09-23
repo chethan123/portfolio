@@ -81,8 +81,11 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
   const { questions, choices } = screen;
 
   const errors = actionData?.errors;
-  // Posted wins over the draft's answers on a refusal.
+  // Posted wins over the draft's answers on a refusal, for the number it was posted with: a stale
+  // form holds another number's choice at this index.
   const values = actionData?.values;
+  const posted = (index: number, number: string) =>
+    values?.[`number-${index}`] === number ? values[`accountId-${index}`] : undefined;
 
   return (
     <section className="panel">
@@ -150,7 +153,7 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
                     <select
                       id={field}
                       name={field}
-                      defaultValue={values?.[field] ?? question.answer}
+                      defaultValue={posted(index, question.number) ?? question.answer}
                       aria-invalid={errors?.[field] !== undefined ? true : undefined}
                     >
                       <option value="">Choose…</option>

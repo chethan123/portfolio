@@ -202,16 +202,17 @@ export async function refusingDuplicateNumber<T>(
     if (number === null || uniqueViolationConstraint(cause) !== "account_open_number_unique") {
       throw cause;
     }
-    const holder = await selectAccounts(db)
-      .where("account.external_account_number", "=", number)
-      .where("account.closed_at", "is", null)
-      .executeTakeFirst();
-    throw refuse(
-      holder === undefined
-        ? "another open account"
-        : `${holder.name}, owned by ${holder.owner_name}`,
-    );
+    throw refuse((await numberHolder(number, db)) ?? "another open account");
   }
+}
+
+// The open account recording `number`, as a refusal names it.
+export async function numberHolder(number: string, db: Kysely<Database>): Promise<string | null> {
+  const holder = await selectAccounts(db)
+    .where("account.external_account_number", "=", number)
+    .where("account.closed_at", "is", null)
+    .executeTakeFirst();
+  return holder === undefined ? null : `${holder.name}, owned by ${holder.owner_name}`;
 }
 
 const duplicateNumber = (who: string) =>

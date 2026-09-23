@@ -779,7 +779,8 @@ describe("recording a file with answered account numbers", () => {
         new TextEncoder().encode(`Account,Symbol,Qty,Basis\n${long},VTI,1,\n`),
         INLINE,
       );
-      await answerAccountNumbers(draftId, { "number-0": long, "accountId-0": account.id }, ctx.db);
+      // Planted: the accounts step refuses it first.
+      await ctx.seedDraftAccountAnswer({ draftId, accountNumber: long, account });
 
       const refusal = await refusalOf(() =>
         reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" }),

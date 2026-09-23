@@ -1015,7 +1015,7 @@ describe("multi-account mode", () => {
     ]);
   });
 
-  it("refuses one instrument twice in one account when combining is off, naming the account", () => {
+  it("refuses one instrument twice in one account when combining is off, naming its number", () => {
     const parsed = parseStatement(
       [
         ["Account", "Symbol", "Qty"],
@@ -1029,7 +1029,9 @@ describe("multi-account mode", () => {
     // "2 lines", not 3: B2's VTI is its own position, not a duplicate
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.problems[0]).toMatchObject({ row: 3, column: "Symbol" });
-    expect(parsed.problems[0]?.message).toMatch(/"VTI" appears on 2 lines for account "A1"/);
+    expect(parsed.problems[0]?.message).toMatch(
+      /"VTI" appears on 2 lines for account number "A1"/,
+    );
     expect(parsed.positions).toEqual([
       expect.objectContaining({ accountNumber: "B2", instrument: "VTI", quantity: "5" }),
     ]);

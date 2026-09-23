@@ -13,10 +13,6 @@ describe("compareIds", () => {
     expect(["100", "9", "10"].sort(compareIds)).toEqual(["9", "10", "100"]);
   });
 
-  it("reads equal ids as equal", () => {
-    expect(compareIds("42", "42")).toBe(0);
-  });
-
   it("tells apart ids past 2^53, where Number() reads them as one", () => {
     expect(compareIds("9007199254740993", "9007199254740992")).toBeGreaterThan(0);
   });

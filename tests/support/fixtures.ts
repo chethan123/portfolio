@@ -88,6 +88,13 @@ export type Fixtures = {
     createdAt?: Date | string;
   }): Promise<SeededUploadDraft>;
 
+  /** Bypasses answerAccountNumbers, for an answer it refuses — what the commit still guards. */
+  seedDraftAccountAnswer(options: {
+    draftId: string;
+    accountNumber: string;
+    account: SeededAccount;
+  }): Promise<void>;
+
   seedQuote(options: {
     instrument: SeededInstrument;
     price: string;
@@ -357,6 +364,17 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     return { id: row.id, accountId: account === null ? null : account.id };
   };
 
+  const seedDraftAccountAnswer: Fixtures["seedDraftAccountAnswer"] = async ({
+    draftId,
+    accountNumber,
+    account,
+  }) => {
+    await db
+      .insertInto("upload_draft_account_answer")
+      .values({ draft_id: draftId, account_number: accountNumber, account_id: account.id })
+      .execute();
+  };
+
   const seedQuote: Fixtures["seedQuote"] = async ({
     instrument,
     price,
@@ -531,6 +549,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedInstrumentAlias,
     seedPositionSet,
     seedUploadDraft,
+    seedDraftAccountAnswer,
     seedQuote,
     seedDailyClose,
     seedObservation,

@@ -1459,6 +1459,33 @@ describe("commitUpload", () => {
   );
 
   it(
+    "points a one-account upload whose rows name two numbers at Several accounts",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      for (const symbol of ["ONE", "TWO"]) {
+        const fund = await seedInstrument({ symbol, name: `Fund ${symbol}` });
+        await seedInstrumentAlias({ instrument: fund, rawString: symbol });
+      }
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nONE,10,,A-111\nTWO,5,,B-222\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const refusal = await refusalOf(() =>
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors.form).toContain(
+        'A file holding several accounts uploads as "Several accounts", which routes each row ' +
+          "by its number.",
+      );
+    }),
+  );
+
+  it(
     "stores a captured account number without its surrounding whitespace",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
@@ -1485,14 +1512,22 @@ describe("commitUpload", () => {
   );
 
   it(
-    "refuses to capture a number another open account records, naming that account",
+    "refuses to capture a number another open account records, naming that account ahead of any confirmation",
     withDatabase(async (ctx) => {
-      const { db, seedPerson, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const { db, seedPerson, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } =
+        ctx;
       const owner = await seedPerson({ name: "Alex Rivera" });
       await seedAccount({ name: "Schwab", owner, externalAccountNumber: "8391-2245" });
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "DUP", name: "Duplicate Fund" });
       await seedInstrumentAlias({ instrument: fund, rawString: "DUP" });
+      // Dropped by the file, so the removals are owed a tick the number makes pointless.
+      const held = await seedInstrument({ symbol: "OLD", name: "Old Fund" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-05-31",
+        holdings: [{ instrument: held, quantity: "1" }],
+      });
 
       const draftId = await stage(
         ctx,
@@ -1508,9 +1543,8 @@ describe("commitUpload", () => {
       expect(refusal.fieldErrors.form).toMatch(
         /"8391-2245", which is already recorded on Schwab, owned by Alex Rivera\./,
       );
+      expect(refusal.fieldErrors.form).not.toMatch(/confirm the removals/);
 
-      // Refused at the number's write, after the set's insert: taking that back is the commit
-      // transaction's rollback, and here that transaction is the test's.
       const stored = await db
         .selectFrom("account")
         .select("external_account_number")

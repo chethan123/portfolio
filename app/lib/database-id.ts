@@ -1,11 +1,11 @@
 // Magnitude, not digit count: leading zeroes are valid, values past bigint are not.
 const MAX_BIGINT = 9223372036854775807n;
 
-export function couldBeId(id: string): boolean {
-  return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
-}
-
 const DIGITS = /^\d+$/;
+
+export function couldBeId(id: string): boolean {
+  return DIGITS.test(id) && BigInt(id) <= MAX_BIGINT;
+}
 
 // Never Number() (NaN breaks sort's total order; past 2^53 it rounds). Digit ids first, by length
 // then code-unit compare — not localeCompare, whose ICU collation varies by deployment. Numeric
