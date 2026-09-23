@@ -78,7 +78,7 @@ export type ParsedPosition = {
 };
 
 export type CombinedRows = {
-  accountNumber?: string | null; // multi-account mode only
+  accountNumber?: string; // multi-account mode only
   instrument: string;
   rowCount: number;
   quantity: string;
@@ -580,7 +580,10 @@ export function parseStatement(
 
     positions.push(position);
     combined.push({
-      ...(multiAccount ? { accountNumber: first.accountNumber } : {}),
+      // Single mode reads the number too (the one-account guard), and leaves it off.
+      ...(multiAccount && first.accountNumber !== null
+        ? { accountNumber: first.accountNumber }
+        : {}),
       instrument,
       rowCount: group.length,
       quantity: position.quantity,

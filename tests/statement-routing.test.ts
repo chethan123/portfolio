@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { readCsv } from "~/lib/csv";
 import { foldLots, parseStatement, type StatementMapping } from "~/lib/statement";
 import {
+  recordedNumber,
   routeStatement,
   type OpenAccount,
   type RoutableAccount,
@@ -472,6 +473,42 @@ describe("matching (decision 15)", () => {
     expect(routed.problems.map((problem) => [problem.kind, problem.accountNumber])).toEqual([
       ["unanswered", "z98-765432"],
       ["unanswered", "123456"],
+    ]);
+  });
+
+  it("reads a blank or whitespace number as none recorded", () => {
+    for (const externalAccountNumber of [null, "", "   ", "\t"]) {
+      expect(recordedNumber({ ...roth, externalAccountNumber })).toBeNull();
+    }
+    expect(recordedNumber({ ...roth, externalAccountNumber: " A-1 " })).toBe("A-1");
+  });
+
+  it("refuses a number two open accounts record once trimmed, naming both and routing its rows to neither", () => {
+    const routed = route(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["A-1", "VTI", "1"],
+      ],
+      inline,
+      {
+        open: [
+          { ...roth, externalAccountNumber: " A-1" },
+          { ...mortgage, externalAccountNumber: "A-1" },
+        ],
+      },
+    );
+
+    expect(routed.accounts).toEqual([]);
+    expect(routed.problems).toEqual([
+      {
+        kind: "shared-number",
+        accountNumber: "A-1",
+        row: 1,
+        column: "Account",
+        message:
+          'Account number "A-1" is recorded on Roth IRA and Home mortgage, and a file\'s rows ' +
+          "go to one account per number. Clear it from all but one of them in Settings.",
+      },
     ]);
   });
 });

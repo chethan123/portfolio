@@ -12,10 +12,10 @@ import {
   action as reviewAction,
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
-import { getAccount, updateAccount } from "~/lib/accounts.server";
 import { STALE_REVIEW_MESSAGE, rememberMapping } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { renumber } from "../support/fixtures.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, post, redirectTo } from "../support/routes.ts";
 
@@ -59,16 +59,6 @@ async function seedHousehold(ctx: Pick<TestContext, "seedAccount">) {
     mortgage: await ctx.seedAccount({ name: "Home mortgage", kind: "liability" }),
     old: await ctx.seedAccount({ name: "Old brokerage", closedAt: "2026-01-01" }),
   };
-}
-
-/** Settings recording `number` on an account (null clears it), every other field as it was. */
-async function renumber(db: TestContext["db"], account: SeededAccount, number: string | null) {
-  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
-  await updateAccount(
-    account.id,
-    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
-    db,
-  );
 }
 
 async function resolveEveryString(
@@ -340,8 +330,9 @@ describe("answering the accounts step", () => {
 
       expect(refused.errors).toEqual({
         "accountId-0":
-          "An account number must be 64 characters or fewer. This one is longer, so its rows " +
-          "can only be skipped — or check which column is mapped as the account number.",
+          `An account number must be 64 characters or fewer. Account number "${long}" is ` +
+          "longer — check which column is mapped as the account number. Otherwise its rows can " +
+          "only be skipped.",
       });
       expect(await answersOf(ctx.db, draftId)).toEqual([]);
       expect(

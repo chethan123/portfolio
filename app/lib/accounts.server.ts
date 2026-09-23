@@ -42,7 +42,8 @@ export type Account = {
   ownerId: string;
   ownerName: string;
   taxTreatment: TaxTreatment;
-  // Recorded from a statement; used by commit as a check against the wrong account, never a selector.
+  // A guard on a single-account upload, the selector on a multi-account one (ADR-0015); at most one
+  // open account records each (account_open_number_unique), trimmed on every write.
   externalAccountNumber: string | null;
   // timestamptz, not a calendar date — left as the driver returns it, not the date-as-string rule.
   closedAt: Date | null;

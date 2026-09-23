@@ -76,19 +76,47 @@ describe("the done page", () => {
   );
 
   it(
-    "reads only the first 50 ids an address names, leaving out any past them",
+    "reads a bounded number of the ids an address names, so one anyone can type does not fan out",
     withDatabase(async ({ seedAccount, seedPositionSet }) => {
       const account = await seedAccount({ name: "Brokerage" });
       const uploaded = await seedPositionSet({ account, asOf: "2026-06-30" });
-      const unknown = (count: number) =>
-        Array.from({ length: count }, (_, index) => String(900_000_000 + index));
+      const unknown = Array.from({ length: 1000 }, (_, index) => String(900_000_000 + index));
       const at = async (ids: string[]) =>
         (await loader(args(get(`/upload/done?sets=${ids.join(",")}`)))).statements.map(
           (statement) => statement.receipt.setId,
         );
 
-      expect(await at([...unknown(49), uploaded.id])).toEqual([uploaded.id]);
-      expect(await at([...unknown(50), uploaded.id])).toEqual([]);
+      expect(await at([uploaded.id, ...unknown])).toEqual([uploaded.id]);
+      expect(await at([...unknown, uploaded.id])).toEqual([]);
+    }),
+  );
+
+  it(
+    "still lists an upload set once a later set lands on its account, saying it is filed behind",
+    withDatabase(async ({ seedAccount, seedInstrument, seedPositionSet }) => {
+      const vti = await seedInstrument({ symbol: "VTI" });
+      const account = await seedAccount({ name: "Brokerage" });
+      const uploaded = await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        sourceFilename: "all-accounts.csv",
+        holdings: [{ instrument: vti, quantity: "10" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2026-07-31",
+        source: "manual",
+        holdings: [{ instrument: vti, quantity: "11" }],
+      });
+      const path = `/upload/done?sets=${uploaded.id}`;
+
+      const { statements } = await loader(args(get(path)));
+
+      expect(statements.map((statement) => statement.receipt.setId)).toEqual([uploaded.id]);
+      expect(renderRoute(Done, path, { statements })).toContain(
+        "Filed behind what Brokerage already reports — it still shows its " +
+          '<b class="u-data">2026-07-31</b> figures.',
+      );
     }),
   );
 

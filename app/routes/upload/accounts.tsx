@@ -6,7 +6,6 @@ import {
   STALE_REVIEW_MESSAGE,
   accountsScreen,
   answerAccountNumbers,
-  parseDraft,
   requireDraft,
 } from "~/lib/uploads.server";
 
@@ -30,13 +29,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const staleReview = new URL(request.url).searchParams.get("stale") === "true";
     const stale = staleReview ? "?stale=true" : "";
 
-    const result = await parseDraft(draft);
-    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns${stale}`);
-
-    // One account, or every number matched: nothing to ask, never an empty screen.
+    // Columns owed, one account, or every number matched: nothing to ask, never an empty screen.
     const screen = await accountsScreen(draft);
     if (screen.questions.length === 0) {
-      return redirect(`/upload/${draft.id}/${result.step ?? "review"}${stale}`);
+      return redirect(`/upload/${draft.id}/${screen.step ?? "review"}${stale}`);
     }
 
     return {

@@ -1543,6 +1543,10 @@ describe("commitUpload", () => {
       expect(refusal.fieldErrors.form).toMatch(
         /"8391-2245", which is already recorded on Schwab, owned by Alex Rivera\./,
       );
+      expect(refusal.fieldErrors.form).toContain(
+        'If both accounts genuinely share this number, choose "Not in this file" for the ' +
+          "account-number column and upload again.",
+      );
       expect(refusal.fieldErrors.form).not.toMatch(/confirm the removals/);
 
       const stored = await db

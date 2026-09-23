@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Pool, PoolClient } from "pg";
 
+import { getAccount, updateAccount } from "~/lib/accounts.server";
 import type { Database } from "~/lib/db.server";
 import { joinTransports } from "~/lib/lock";
 import type { BackfillOutcome } from "~/lib/prices.server";
@@ -218,6 +219,20 @@ export async function clearRaces(db: Kysely<Database>): Promise<void> {
   await db.deleteFrom("instrument").where("name", "like", pattern).execute();
   await db.deleteFrom("classification").where("name", "like", pattern).execute();
   await db.deleteFrom("person").where("name", "like", pattern).execute();
+}
+
+/** Settings' write of an account number (null clears it), every other field as it was: through updateAccount, so its trim and account_open_number_unique apply. */
+export async function renumber(
+  db: Kysely<Database>,
+  account: Pick<SeededAccount, "id">,
+  number: string | null,
+): Promise<void> {
+  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
+  await updateAccount(
+    account.id,
+    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
+    db,
+  );
 }
 
 export function makeFixtures(db: Kysely<Database>): Fixtures {

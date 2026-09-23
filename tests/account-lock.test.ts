@@ -5,7 +5,7 @@
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { closeAccount, getAccount, updateAccount, withAccountLock } from "~/lib/accounts.server";
+import { closeAccount, getAccount, withAccountLock } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
@@ -25,7 +25,7 @@ import {
   testDatabase,
   waitUntilBlocked,
 } from "./support/database.ts";
-import { RACE_PREFIX, clearRaces, makeFixtures } from "./support/fixtures.ts";
+import { RACE_PREFIX, clearRaces, makeFixtures, renumber } from "./support/fixtures.ts";
 
 import type { Database } from "~/lib/db.server";
 import type { StatementMapping } from "~/lib/statement";
@@ -545,6 +545,7 @@ type PlantedSeveral = {
   lower: SeededAccount;
   higher: SeededAccount;
   x: SeededInstrument;
+  name: (part: string) => string;
   draftId: string;
   fields: CommitInput;
 };
@@ -587,10 +588,11 @@ async function plantSeveral(database: Kysely<Database>, tag: string): Promise<Pl
     hadFirstSightings: false,
   });
 
-  return { lower, higher, x, draftId: draft.id, fields: await reviewedFields(database, draft.id) };
+  const fields = await reviewedFields(database, draft.id);
+  return { lower, higher, x, name, draftId: draft.id, fields };
 }
 
-/** The review form's fields for a multi-account draft over accounts with nothing recorded yet. */
+/** A multi-account draft's review form, as the page posts it. */
 async function reviewedFields(database: Kysely<Database>, draftId: string): Promise<CommitInput> {
   const review = await reviewForDraft(draftId, today(), database);
   const fields: CommitInput = {
@@ -598,7 +600,10 @@ async function reviewedFields(database: Kysely<Database>, draftId: string): Prom
     reviewedAsOf: review.asOfInput,
     reviewRevision: review.reviewRevision ?? "",
   };
-  for (const section of review.accounts ?? []) fields[`baselineSetId-${section.accountId}`] = "";
+  for (const section of review.accounts ?? []) {
+    fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
+    fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
+  }
   return fields;
 }
 
@@ -631,16 +636,6 @@ async function plantNumber(database: Kysely<Database>, tag: string): Promise<Pla
   };
 
   return { owner, number, name, draftNaming };
-}
-
-/** Settings' write of an account number, every other field as it was. */
-async function renumber(trx: Kysely<Database>, accountId: string, number: string | null) {
-  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(accountId, trx);
-  await updateAccount(
-    accountId,
-    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
-    trx,
-  );
 }
 
 describe("a multi-account commit's locks", () => {
@@ -703,6 +698,40 @@ describe("a multi-account commit's locks", () => {
   );
 
   it(
+    "refuses a commit that waited on another over the same account, naming that account and recording nothing",
+    async () => {
+      const database = await testDatabase();
+      const { lower, higher, x, name, draftId, fields } = await plantSeveral(
+        database,
+        "several-then-several",
+      );
+      const loser = await makeFixtures(database).seedUploadDraft({
+        account: null,
+        filename: name("higher.csv"),
+        bytes: new TextEncoder().encode(`Account,Symbol,Qty\n${name("H")},${x.name},3\n`),
+        mapping: SEVERAL,
+        hadFirstSightings: false,
+      });
+      const loserFields = await reviewedFields(database, loser.id);
+
+      const refusal = await refusalOf(() =>
+        behindTheLock(
+          database,
+          (trx) => recordUpload(draftId, fields, trx),
+          (trx) => recordUpload(loser.id, loserFields, trx),
+        ),
+      );
+
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      expect(refusal.fieldErrors.form).toContain(`Figures were recorded on ${higher.name} after`);
+      expect(await positionSetCount(database, lower.id)).toBe(1);
+      expect(await positionSetCount(database, higher.id)).toBe(1);
+      expect(await latestQuantities(database, higher.id)).toEqual({ [x.id]: "2.00000000" });
+    },
+    20_000,
+  );
+
+  it(
     "refuses rows the locked re-read routes to an account it holds no lock on, recording nothing",
     async () => {
       const database = await testDatabase();
@@ -717,22 +746,26 @@ describe("a multi-account commit's locks", () => {
       const fields = await reviewedFields(database, draftId);
 
       // After review the number moves, so the commit's unlocked read locks the other account...
-      await renumber(database, home.id, null);
-      await renumber(database, moved.id, number);
+      await renumber(database, home, null);
+      await renumber(database, moved, number);
 
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
           // ...and moves home while the commit waits, reproducing the reviewed revision exactly.
           async (trx) => {
-            await renumber(trx, moved.id, null);
-            await renumber(trx, home.id, number);
+            await renumber(trx, moved, null);
+            await renumber(trx, home, number);
           },
           (trx) => recordUpload(draftId, fields, trx),
         ),
       );
 
       expect(refusal).toBeInstanceOf(StaleReviewError);
+      expect(refusal.fieldErrors.form).toBe(
+        "An account number changed while this file was being recorded, and its rows now go to " +
+          `${home.name}. Nothing was recorded — check it and record again.`,
+      );
       expect(await positionSetCount(database, home.id)).toBe(0);
       expect(await positionSetCount(database, moved.id)).toBe(0);
     },
@@ -759,7 +792,7 @@ describe("an answered account number at commit", () => {
       const refusal = await refusalOf(() =>
         behindTheLock(
           database,
-          (trx) => renumber(trx, other.id, number),
+          (trx) => renumber(trx, other, number),
           (trx) => recordUpload(draftId, fields, trx),
         ),
       );

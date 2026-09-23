@@ -45,6 +45,7 @@ export type RoutedAccount = {
 export type RoutingProblem = {
   kind:
     | "blank-number"
+    | "shared-number"
     | "closed-number"
     | "unanswered"
     | "stale-answer"
@@ -65,10 +66,10 @@ export type RoutedStatement = {
   skippedNumbers: string[];
 };
 
-// Decision 15: exact once trimmed. Settings trims on write; not relied on. Null alone records none,
-// as the commit's number write reads it; every writer stores a blank as null.
+// Decision 15: exact once trimmed. Every writer trims, and stores a blank as null; not relied on.
 export function recordedNumber(account: RoutableAccount): string | null {
-  return account.externalAccountNumber?.trim() ?? null;
+  const trimmed = account.externalAccountNumber?.trim();
+  return trimmed ? trimmed : null;
 }
 
 export function routeStatement(
@@ -100,12 +101,12 @@ export function routeStatement(
     if (accountNumber !== null && !firstRow.has(accountNumber)) firstRow.set(accountNumber, row);
   }
 
-  const openByNumber = new Map(
-    open.flatMap((account) => {
-      const number = recordedNumber(account);
-      return number === null ? [] : [[number, account] as const];
-    }),
-  );
+  // The index compares stored bytes, this the trimmed number: two it tells apart can fold to one.
+  const openByNumber = new Map<string, OpenAccount[]>();
+  for (const account of open) {
+    const number = recordedNumber(account);
+    if (number !== null) openByNumber.set(number, [...(openByNumber.get(number) ?? []), account]);
+  }
 
   // Recorded number first, then answer (decision 2).
   const routes: Array<{ number: string; account: OpenAccount; answered: boolean }> = [];
@@ -114,7 +115,20 @@ export function routeStatement(
   const skippedNumbers: string[] = [];
 
   for (const [number, row] of firstRow) {
-    const holder = openByNumber.get(number);
+    const [holder, ...others] = openByNumber.get(number) ?? [];
+    if (holder !== undefined && others.length > 0) {
+      const names = [holder, ...others].map((account) => account.name);
+      problems.push({
+        kind: "shared-number",
+        accountNumber: number,
+        row,
+        column,
+        message:
+          `Account number "${number}" is recorded on ${listSentence(names)}, and a file's rows ` +
+          "go to one account per number. Clear it from all but one of them in Settings.",
+      });
+      continue;
+    }
     if (holder !== undefined) {
       routes.push({ number, account: holder, answered: false });
       continue;

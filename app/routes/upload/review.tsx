@@ -681,9 +681,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
         <Form method="post">
           {diff.accounts.map((section) => (
-            <section key={section.accountId} aria-label={section.accountName}>
+            // The heading, not the bare name: two accounts can share one.
+            <section key={section.accountId} aria-labelledby={`account-${section.accountId}`}>
               <header className="panel-header">
-                <h3 className="panel-title">
+                <h3 className="panel-title" id={`account-${section.accountId}`}>
                   <span>
                     {section.accountName}
                     <AccountNumberTail tail={section.accountNumberTail} /> — owned by{" "}

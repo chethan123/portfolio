@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { closeAccount, getAccount, updateAccount } from "~/lib/accounts.server";
+import { closeAccount, getAccount } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { resolveAll } from "~/lib/instrument-resolution.server";
 import {
@@ -25,6 +25,7 @@ import {
 } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { renumber } from "./support/fixtures.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { TestContext } from "./support/database.ts";
@@ -118,16 +119,6 @@ function posted(review: UploadDiff, extra: CommitInput = {}): CommitInput {
     fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
   }
   return { ...fields, ...extra };
-}
-
-/** Settings recording `number` on an account (null clears it), every other field as it was. */
-async function renumber(db: TestContext["db"], account: SeededAccount, number: string | null) {
-  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
-  await updateAccount(
-    account.id,
-    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
-    db,
-  );
 }
 
 async function reviewAndRecord(
@@ -789,10 +780,72 @@ describe("recording a file with answered account numbers", () => {
       expect(refusal).toBeInstanceOf(RefusedUpload);
       expect(refusal.fieldErrors.form).toBe(
         "Long: An account number must be 64 characters or fewer. " +
-          `Account number "${long}" is longer, so nothing was recorded.`,
+          `Account number "${long}" is longer — check which column is mapped as the account ` +
+          "number. Nothing was recorded.",
       );
       expect(await setsOf(ctx.db, account.id)).toEqual([]);
       expect(await numberOf(ctx.db, account)).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses an over-long answered number naming its account ahead of any confirmation another account is owed",
+    withDatabase(async (ctx) => {
+      const first = await ctx.seedAccount({ name: "First", externalAccountNumber: "A-1" });
+      const account = await ctx.seedAccount({ name: "Long" });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", name: "VTI" });
+      await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      // Dropped by the file, so First's removal is owed a tick the number makes pointless.
+      const held = await ctx.seedInstrument({ symbol: "OLD", name: "OLD" });
+      await ctx.seedPositionSet({
+        account: first,
+        asOf: "2026-05-31",
+        holdings: [{ instrument: held, quantity: "1" }],
+      });
+      const long = "L".repeat(65);
+      const draftId = await stage(
+        ctx,
+        new TextEncoder().encode(`Account,Symbol,Qty,Basis\nA-1,VTI,1,\n${long},VTI,2,\n`),
+        INLINE,
+      );
+      await ctx.seedDraftAccountAnswer({ draftId, accountNumber: long, account });
+
+      const refusal = await refusalOf(() =>
+        reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" }),
+      );
+
+      expect(refusal).toBeInstanceOf(RefusedUpload);
+      expect(refusal.fieldErrors.form).toMatch(/^Long: An account number must be 64 characters/);
+      expect(refusal.fieldErrors.form).not.toMatch(/confirm/);
+      expect(await setsOf(ctx.db, first.id)).toHaveLength(1);
+    }),
+  );
+
+  it(
+    "refuses to write an answered number over a blank one its account holds, recording nothing",
+    withDatabase(async (ctx) => {
+      // Only a hand edit stores one: every writer trims, and stores a blank as null.
+      const account = await ctx.seedAccount({ name: "Blank", externalAccountNumber: " " });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", name: "VTI" });
+      await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const draftId = await stage(
+        ctx,
+        new TextEncoder().encode("Account,Symbol,Qty,Basis\nB-2,VTI,1,\n"),
+        INLINE,
+      );
+      await answerAccountNumbers(draftId, { "number-0": "B-2", "accountId-0": account.id }, ctx.db);
+
+      const refusal = await refusalOf(() =>
+        reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" }),
+      );
+
+      expect(refusal.fieldErrors.form).toBe(
+        'Blank holds a blank account number rather than none, so "B-2" was not written over it ' +
+          "and nothing was recorded. Save the account once in Settings, which clears it, and " +
+          "record again.",
+      );
+      expect(await setsOf(ctx.db, account.id)).toEqual([]);
+      expect(await numberOf(ctx.db, account)).toBe(" ");
     }),
   );
 

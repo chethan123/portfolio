@@ -190,7 +190,7 @@ export async function parseUploadForm(form: FormData): Promise<DraftInput> {
 function closedRefusal(account: Account): ValidationError {
   return ValidationError.form(
     `${account.name} is closed, and a closed account's history does not change. ` +
-      "Reopen it from Settings if this statement is still real.",
+      "If this statement is still real, record it into the open account that continues it.",
   );
 }
 
@@ -511,32 +511,51 @@ function savedParse(
   return { mapping: saved.data, parsed };
 }
 
-export async function parseDraft(
-  draft: UploadDraft,
-  db: Kysely<Database> = getDb(),
-): Promise<DraftParse> {
-  const saved = savedParse(draft);
-  if ("problems" in saved) return { step: "columns", problems: saved.problems };
-  const { mapping, parsed } = saved;
+// The saved parse, and a multi-account draft's routing over the accounts and answers as they are
+// now (null when single). Rerun on every read: an account closed or renumbered since the mapping
+// was saved moves rows.
+type DraftRead = {
+  mapping: StatementMapping;
+  parsed: ParsedStatement;
+  routing: { inputs: DraftRouting; statement: RoutedStatement } | null;
+};
 
-  // Rerun on every read: an account closed or renumbered since the mapping was saved moves rows.
+async function readDraft(
+  draft: UploadDraft,
+  db: Kysely<Database>,
+): Promise<DraftRead | { problems: ParseProblem[] }> {
+  const saved = savedParse(draft);
+  if ("problems" in saved) return saved;
+  const { mapping, parsed } = saved;
+  if (parsed.multiAccount !== true) return { mapping, parsed, routing: null };
+
+  const inputs = await routingInputs(draft.id, db);
+  const statement = routeStatement(parsed, mapping, inputs);
+  return { mapping, parsed, routing: { inputs, statement } };
+}
+
+async function stepOf(
+  { mapping, parsed, routing }: DraftRead,
+  draft: UploadDraft,
+  db: Kysely<Database>,
+): Promise<DraftParse> {
   let routed: RoutedAccount[] | null = null;
   let accountsSkipped: boolean | null = null;
   let skippedNumbers: string[] = [];
-  if (parsed.multiAccount === true) {
-    const routing = await routeDraft(parsed, mapping, draft.id, db);
-    const refused = refusalsByStep(routing);
+  if (routing !== null) {
+    const { statement } = routing;
+    const refused = refusalsByStep(statement);
     if (refused.columns.length > 0) return { step: "columns", problems: refused.columns };
     if (refused.accounts.length > 0) {
       const owed = new Set(refused.accounts.map((problem) => problem.accountNumber));
       return {
         step: "accounts",
-        unanswered: routing.unknownNumbers.filter((number) => owed.has(number)),
+        unanswered: statement.unknownNumbers.filter((number) => owed.has(number)),
       };
     }
-    routed = routing.accounts;
-    accountsSkipped = routing.unknownNumbers.length === 0;
-    skippedNumbers = routing.skippedNumbers;
+    routed = statement.accounts;
+    accountsSkipped = statement.unknownNumbers.length === 0;
+    skippedNumbers = statement.skippedNumbers;
   }
 
   const unresolved = await unresolvedStrings(
@@ -549,6 +568,15 @@ export async function parseDraft(
   }
 
   return { step: null, parsed, mapping, routed, accountsSkipped, skippedNumbers };
+}
+
+export async function parseDraft(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<DraftParse> {
+  const read = await readDraft(draft, db);
+  if ("problems" in read) return { step: "columns", problems: read.problems };
+  return stepOf(read, draft, db);
 }
 
 export type BlockedDraft = {
@@ -614,6 +642,8 @@ export type AccountQuestion = {
 };
 
 export type AccountsScreen = {
+  // parseDraft's, from the read the questions come from, so the route's redirect agrees with them.
+  step: DraftParse["step"];
   questions: AccountQuestion[];
   choices: PickerGroup[]; // grouped as /upload's picker
 };
@@ -621,6 +651,18 @@ export type AccountsScreen = {
 // Decision 12: all an unknown number can be given.
 function numberlessOpen(open: ReadonlyArray<Account>): Account[] {
   return open.filter((account) => recordedNumber(account) === null);
+}
+
+// Settings' own field rule, so no upload records a number the form refuses: trimmed, a blank
+// none, bounded. The refusal names the number; each caller says what follows.
+function boundedNumber(number: string): { number: string | null } | { refusal: string } {
+  const bounded = accountInput.shape.externalAccountNumber.safeParse(number);
+  if (bounded.success) return { number: bounded.data };
+  return {
+    refusal:
+      `${bounded.error.issues.map((issue) => issue.message).join(" ")} Account number ` +
+      `"${number}" is longer — check which column is mapped as the account number.`,
+  };
 }
 
 type NumberQuestions = {
@@ -635,16 +677,14 @@ async function numberQuestions(
   draft: UploadDraft,
   db: Kysely<Database>,
 ): Promise<NumberQuestions | null> {
-  const saved = savedParse(draft);
-  if ("problems" in saved) return null;
-  const { mapping, parsed } = saved;
-  if (parsed.multiAccount !== true) return null;
+  const read = await readDraft(draft, db);
+  if ("problems" in read || read.routing === null || read.parsed.multiAccount !== true) {
+    return null;
+  }
+  const { inputs, statement } = read.routing;
+  if (refusalsByStep(statement).columns.length > 0) return null;
 
-  const inputs = await routingInputs(draft.id, db);
-  const routing = routeStatement(parsed, mapping, inputs);
-  if (refusalsByStep(routing).columns.length > 0) return null;
-
-  return { mapping, parsed, inputs, routing };
+  return { mapping: read.mapping, parsed: read.parsed, inputs, routing: statement };
 }
 
 // Every number no account records, answered or not, so a revisit shows the answers standing.
@@ -652,19 +692,22 @@ export async function accountsScreen(
   draft: UploadDraft,
   db: Kysely<Database> = getDb(),
 ): Promise<AccountsScreen> {
-  const asked = await numberQuestions(draft, db);
-  if (asked === null) return { questions: [], choices: [] };
-  const { parsed, inputs, routing } = asked;
+  const read = await readDraft(draft, db);
+  if ("problems" in read) return { step: "columns", questions: [], choices: [] };
+  const { step } = await stepOf(read, draft, db);
+  const { parsed, routing } = read;
+  if (routing === null || step === "columns") return { step, questions: [], choices: [] };
+  const { inputs, statement } = routing;
 
   const stale = new Map(
-    routing.problems.flatMap((problem) =>
+    statement.problems.flatMap((problem) =>
       problem.kind === "stale-answer" && problem.accountNumber !== null
         ? [[problem.accountNumber, problem.message] as const]
         : [],
     ),
   );
 
-  const questions = routing.unknownNumbers.map((number) => {
+  const questions = statement.unknownNumbers.map((number) => {
     const positions = parsed.positions.filter((position) => position.accountNumber === number);
     const combined = parsed.combined.filter((entry) => entry.accountNumber === number);
     const lines =
@@ -684,7 +727,7 @@ export async function accountsScreen(
     };
   });
 
-  return { questions, choices: accountPickerGroups(numberlessOpen(inputs.open)) };
+  return { step, questions, choices: accountPickerGroups(numberlessOpen(inputs.open)) };
 }
 
 // The accounts step's one write (spec 0023 decision 2), refused whole unless every answer holds.
@@ -724,15 +767,13 @@ export async function answerAccountNumbers(
             ? `Choose the account "${number}" belongs to, or skip its rows.`
             : `Only an open account recording no number yet can take "${number}". Choose again.`;
       } else {
-        // Settings' bound, which the commit applies too: a longer number can only be skipped.
-        const bounded = accountInput.shape.externalAccountNumber.safeParse(number);
-        if (bounded.success) {
-          answers.set(number, choice);
-        } else {
+        // The commit refuses it too, so a longer number can only be skipped.
+        const bounded = boundedNumber(number);
+        if ("refusal" in bounded) {
           errors[`accountId-${index}`] =
-            `${bounded.error.issues.map((issue) => issue.message).join(" ")} This one is ` +
-            "longer, so its rows can only be skipped — or check which column is mapped as the " +
-            "account number.";
+            `${bounded.refusal} Otherwise its rows can only be skipped.`;
+        } else {
+          answers.set(number, choice);
         }
       }
     }
@@ -904,8 +945,9 @@ export class StaleReviewError extends ValidationError {
   constructor(
     diff: UploadDiff,
     asOf: IsoDate | null,
-    reason: "date_changed" | "revision_changed" = "revision_changed",
-    // Accounts with figures recorded since the review, when the form says which.
+    reason: "date_changed" | "revision_changed" | "rerouted" = "revision_changed",
+    // Accounts with figures recorded since the review, when the form says which; rerouted: those
+    // the file's numbers name now, unlocked.
     moved: readonly string[] = [],
   ) {
     super({
@@ -913,11 +955,15 @@ export class StaleReviewError extends ValidationError {
         reason === "date_changed"
           ? `This comparison was drawn for a different statement date. Here it is for ${asOf}. ` +
             "Nothing was recorded — check it and record again."
-          : moved.length > 0
-            ? `Figures were recorded on ${listSentence(moved)} after this review. Nothing was ` +
-              `recorded — check ${moved.length === 1 ? "it" : "them"} and record again.`
-            : "This statement or its account changed after this review. Nothing was recorded — " +
-              "check it and record again.",
+          : reason === "rerouted"
+            ? "An account number changed while this file was being recorded, and its rows now " +
+              `go to ${listSentence(moved)}. Nothing was recorded — check ` +
+              `${moved.length === 1 ? "it" : "them"} and record again.`
+            : moved.length > 0
+              ? `Figures were recorded on ${listSentence(moved)} after this review. Nothing was ` +
+                `recorded — check ${moved.length === 1 ? "it" : "them"} and record again.`
+              : "This statement or its account changed after this review. Nothing was recorded " +
+                "— check it and record again.",
     });
     this.diff = diff;
     this.asOf = asOf;
@@ -1737,25 +1783,22 @@ async function commitUploadUnderLock(
     }
   }
 
-  // Settings' own field rule, trimmed and bounded, so a capture can't record what the form refuses.
-  // Parsed only for an account with none: a recorded number is never overwritten (below).
-  const captured = accountInput.shape.externalAccountNumber.safeParse(
-    account.externalAccountNumber === null ? fileAccountNumber : null,
-  );
-  if (!captured.success) {
-    throw new RefusedUpload(
-      `${captured.error.issues.map((issue) => issue.message).join(" ")} This file's is longer, ` +
-        "so nothing was recorded — check which column is mapped as the account number.",
-      diff,
-    );
+  // Only for an account with none: a recorded number is never overwritten (below).
+  const captured =
+    account.externalAccountNumber === null && fileAccountNumber !== null
+      ? boundedNumber(fileAccountNumber)
+      : { number: null };
+  if ("refusal" in captured) {
+    throw new RefusedUpload(`${captured.refusal} Nothing was recorded.`, diff);
   }
 
-  const capturedNumber = captured.data;
+  const capturedNumber = captured.number;
   const recordedElsewhere = (who: string) =>
     new RefusedUpload(
       `This file says it describes account "${capturedNumber}", which is already recorded ` +
         `on ${who}. A statement lands in the account it describes — check which account ` +
-        "this export belongs to.",
+        'this export belongs to. If both accounts genuinely share this number, choose "Not in ' +
+        'this file" for the account-number column and upload again.',
       diff,
     );
   // Read ahead of the confirmations, so none is asked for a file that cannot land here. Settings
@@ -1773,7 +1816,7 @@ async function commitUploadUnderLock(
   const setId = await insertStatement(account.id, asOf, draft, rows, db);
 
   if (capturedNumber !== null) {
-    await recordAccountNumber(account.id, capturedNumber, db, recordedElsewhere);
+    await recordAccountNumber(account, capturedNumber, db, recordedElsewhere);
   }
 
   return {
@@ -1810,9 +1853,10 @@ async function commitMultiAccountUpload(
   );
 }
 
-// Hard refusals (closed, moved baseline, overflow) stop at the first, in account order; a missing
-// confirmation is collected across every account and refused in one sentence per account
-// (decision 9), so the reader is not walked back one account at a time.
+// Hard refusals (closed, moved baseline, an answered number past Settings' bound, overflow) stop at
+// the first, in account order, ahead of any confirmation; a missing confirmation is collected
+// across every account and refused in one sentence per account (decision 9), so the reader is not
+// walked back one account at a time.
 async function commitMultiAccountUnderLocks(
   draftId: string,
   locked: Account[],
@@ -1835,9 +1879,10 @@ async function commitMultiAccountUnderLocks(
   );
 
   // Routing re-read under the locks can name an account the unlocked read did not.
-  if (accounts.some(({ diff: section }) => !locked.some(({ id }) => id === section.accountId))) {
-    throw new StaleReviewError(diff, asOf);
-  }
+  const unlocked = accounts.flatMap(({ diff: section }) =>
+    locked.some(({ id }) => id === section.accountId) ? [] : [section.accountName],
+  );
+  if (unlocked.length > 0) throw new StaleReviewError(diff, asOf, "rerouted", unlocked);
   // Decision 9: history written since review names its account. The watermark, not the baseline:
   // a changed date alone moves baselines, never a watermark.
   const moved = accounts.flatMap(({ diff: section }) => {
@@ -1856,8 +1901,10 @@ async function commitMultiAccountUnderLocks(
     moved,
   );
 
+  // Numbers the draft's answers routed by, for the write below.
+  const answeredNumbers: Array<{ section: AccountDiff; number: string }> = [];
   const confirmations: string[] = [];
-  for (const { diff: section, rows } of accounts) {
+  for (const { diff: section, rows, accountNumber, answered } of accounts) {
     const posted = {
       baselineSetId: raw[`baselineSetId-${section.accountId}`],
       confirmRemovals: raw[`confirmRemovals-${section.accountId}`],
@@ -1866,6 +1913,18 @@ async function commitMultiAccountUnderLocks(
     if (baselineMoved(section, posted.baselineSetId)) {
       throw new RefusedUpload(`${section.accountName}: ${baselineSentence(section)}`, diff);
     }
+    if (answered) {
+      const bounded = boundedNumber(accountNumber);
+      if ("refusal" in bounded) {
+        throw new RefusedUpload(
+          `${section.accountName}: ${bounded.refusal} Nothing was recorded.`,
+          diff,
+        );
+      }
+      // Router keys are trimmed, non-blank cells.
+      if (bounded.number === null) throw new Error("Rows were routed by a blank account number.");
+      answeredNumbers.push({ section, number: bounded.number });
+    }
     const named = { section, rows, accountName: section.accountName, named: true };
     confirmations.push(...reasonsToRefuse(named, posted, diff));
   }
@@ -1873,26 +1932,15 @@ async function commitMultiAccountUnderLocks(
 
   await promoteAnswers(draft.id, resolved, db);
 
-  // Numbers the draft's answers routed by, written before the delete takes the answers with it;
-  // trimmed and bounded by Settings' own rule.
-  for (const { diff: section, accountNumber, answered } of accounts) {
-    if (!answered) continue;
-    const bounded = accountInput.shape.externalAccountNumber.safeParse(accountNumber);
-    if (!bounded.success) {
-      throw new RefusedUpload(
-        `${section.accountName}: ${bounded.error.issues.map((issue) => issue.message).join(" ")} ` +
-          `Account number "${accountNumber}" is longer, so nothing was recorded.`,
-        diff,
-      );
-    }
-    if (bounded.data === null) continue;
+  // Before the delete takes the answers with it.
+  for (const { section, number } of answeredNumbers) {
     await recordAccountNumber(
-      section.accountId,
-      bounded.data,
+      { id: section.accountId, name: section.accountName },
+      number,
       db,
       (who) =>
         new RefusedUpload(
-          `${section.accountName}: account number "${accountNumber}" is already recorded on ` +
+          `${section.accountName}: account number "${number}" is already recorded on ` +
             `${who}, so nothing was recorded. Choose again for it.`,
           diff,
         ),
@@ -2043,27 +2091,34 @@ async function insertStatement(
   return set.id;
 }
 
-// Only where the column is still null, recordedNumber's none: never overwrite a hand-recorded
-// number. The lock makes a concurrent one impossible; the predicate stays as the write's own
-// statement of the rule.
+// Only where the column is null: never over a recorded number. Settings' update waits on the
+// locked row, so zero rows is a stored blank, which the router reads as none. Zero rows written is
+// the refusal (§7.2).
 async function recordAccountNumber(
-  accountId: string,
+  account: Pick<Account, "id" | "name">,
   number: string,
   db: Kysely<Database>,
   refuse: (who: string) => Error,
 ): Promise<void> {
-  await refusingDuplicateNumber(
+  const written = await refusingDuplicateNumber(
     number,
     db,
     () =>
       db
         .updateTable("account")
         .set({ external_account_number: number })
-        .where("id", "=", accountId)
+        .where("id", "=", account.id)
         .where("external_account_number", "is", null)
-        .execute(),
+        .executeTakeFirst(),
     refuse,
   );
+  if (written.numUpdatedRows === 0n) {
+    throw ValidationError.form(
+      `${account.name} holds a blank account number rather than none, so "${number}" was not ` +
+        "written over it and nothing was recorded. Save the account once in Settings, which " +
+        "clears it, and record again.",
+    );
+  }
 }
 
 // Whether the confirmation was posted against the baseline the diff just classified against

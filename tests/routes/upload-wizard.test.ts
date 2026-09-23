@@ -1356,7 +1356,11 @@ describe("a multi-account draft routed by account number", () => {
       await mapColumns(draft.id);
 
       const markup = renderRoute(Review, `/upload/${draft.id}/review`, await reviewPage(draft.id));
-      const rothSection = markup.split('aria-label="Roth IRA"')[1]?.split("</section>")[0] ?? "";
+      const rothSection =
+        markup.split(`aria-labelledby="account-${roth.id}"`)[1]?.split("</section>")[0] ?? "";
+
+      // Named by its heading, owner and all: two accounts can share a name.
+      expect(rothSection).toContain(`<h3 class="panel-title" id="account-${roth.id}">`);
 
       expect(rothSection).toContain("0 ADDED · 0 UPDATED · 0 REMOVED");
       expect(rothSection).toContain(
@@ -1446,6 +1450,7 @@ describe("a multi-account draft routed by account number", () => {
     };
     for (const section of diff.accounts ?? []) {
       fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
+      fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
     }
     return fields;
   }
@@ -1511,6 +1516,38 @@ describe("a multi-account draft routed by account number", () => {
       });
       expect(markup).toContain("Roth IRA: This statement was measured against figures");
       expect(markup).toContain("Home mortgage");
+    }),
+  );
+
+  it(
+    "re-renders a commit refused over figures recorded since review, naming the account they landed on",
+    withDatabase(async (ctx) => {
+      const [, , mortgage] = await seedAccounts(ctx);
+      const { loan } = await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+      expect(renderRoute(Review, `/upload/${draft.id}/review`, page)).toContain(
+        `name="appendWatermark-${mortgage.id}"`,
+      );
+
+      // After the file's 2026-07-15, so no baseline moves: only the account's history does.
+      await ctx.seedPositionSet({
+        account: mortgage,
+        asOf: "2026-08-01",
+        source: "manual",
+        holdings: [{ instrument: loan, quantity: "300000" }],
+      });
+
+      const refused = await reviewAction(
+        args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+      );
+      if (refused instanceof Response) throw new Error(`Expected a refusal, got ${refused.status}.`);
+
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
+        actionData: refused,
+      });
+      expect(markup).toContain("Figures were recorded on Home mortgage after this review.");
     }),
   );
 

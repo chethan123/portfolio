@@ -9,7 +9,8 @@ export function couldBeId(id: string): boolean {
 
 // Never Number() (NaN breaks sort's total order; past 2^53 it rounds). Digit ids first, by length
 // then code-unit compare — not localeCompare, whose ICU collation varies by deployment. Numeric
-// order only without leading zeros: the driver never sends them, owner-filter.ts strips them.
+// order only without leading zeros: callers pass driver ids, or strip leading zeros first
+// (owner-filter.ts does).
 export function compareIds(a: string, b: string): number {
   const aNumeric = DIGITS.test(a);
   const bNumeric = DIGITS.test(b);

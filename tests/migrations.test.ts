@@ -17,7 +17,7 @@ import {
 } from "../server/migrations.ts";
 
 import type { Kysely } from "kysely";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 // Real Postgres required: docker compose -f compose.test.yaml up -d --wait
 // Every writing test rolls back its own transaction.
@@ -429,7 +429,25 @@ describe("the schema's planner costs", () => {
 });
 
 describe("the open-account number index", () => {
-  it("refuses to build over open accounts already sharing a number, naming the number and those accounts", async () => {
+  /** Accounts as `values` rows of (name, number, closed_at) state them, for one owner. */
+  const numbered = (values: string) => `
+    with owner as (insert into person (name) values ('Alex Rivera') returning id)
+    insert into account
+      (name, institution, kind, owner_id, tax_treatment, external_account_number, closed_at)
+    select seeded.name, 'Schwab', 'brokerage', owner.id, 'taxable', seeded.number, seeded.closed_at
+    from owner, (values ${values}) as seeded (name, number, closed_at)
+    returning id
+  `;
+
+  /** 0015 over the accounts `seed` inserts, as an upgrade meets them: its index not yet built. */
+  async function upgradingOver(
+    seed: string,
+    check: (
+      seeded: Array<{ id: string }>,
+      migrate: () => Promise<unknown>,
+      client: PoolClient,
+    ) => Promise<void>,
+  ): Promise<void> {
     const migration = await readFile(
       path.join(migrationsDirectory(), "0015_account_open_number_unique.sql"),
       "utf8",
@@ -439,28 +457,56 @@ describe("the open-account number index", () => {
       await client.query("begin");
       // DDL is transactional: the rollback below puts the index back.
       await client.query("drop index account_open_number_unique");
-      const { rows } = await client.query<{ id: string }>(`
-        with owner as (insert into person (name) values ('Alex Rivera') returning id)
-        insert into account
-          (name, institution, kind, owner_id, tax_treatment, external_account_number, closed_at)
-        select seeded.name, 'Schwab', 'brokerage', owner.id, 'taxable', '8391-2245', seeded.closed_at
-        from owner, (values
-          ('Schwab One', null::timestamptz),
-          ('Schwab Two', null),
-          ('Schwab Old', now())
-        ) as seeded (name, closed_at)
-        returning id
-      `);
-      const [one, two] = rows;
-
-      // Ends at the period: the closed account shares the number and is no duplicate.
-      await expect(client.query(migration)).rejects.toThrow(
-        `: "8391-2245" on Schwab One (id ${one?.id}), Schwab Two (id ${two?.id}). `,
-      );
+      const { rows } = await client.query<{ id: string }>(seed);
+      await check(rows, () => client.query(migration), client);
     } finally {
       await client.query("rollback").catch(() => {});
       client.release();
     }
+  }
+
+  it("refuses to build over open accounts already sharing a number, naming the number and those accounts", async () => {
+    await upgradingOver(
+      numbered(`
+        ('Schwab One', '8391-2245', null::timestamptz),
+        ('Schwab Two', '8391-2245', null),
+        ('Schwab Old', '8391-2245', now())
+      `),
+      async ([one, two], migrate) => {
+        // Ends at the period: the closed account shares the number and is no duplicate.
+        await expect(migrate()).rejects.toThrow(
+          `: "8391-2245" on Schwab One (id ${one?.id}), Schwab Two (id ${two?.id}). `,
+        );
+      },
+    );
+  });
+
+  it("names open accounts whose numbers differ only by surrounding spaces, as the router folds them", async () => {
+    await upgradingOver(
+      numbered(`('Padded', ' A-1', null::timestamptz), ('Plain', 'A-1', null)`),
+      async ([padded, plain], migrate) => {
+        await expect(migrate()).rejects.toThrow(
+          `: "A-1" on Padded (id ${padded?.id}), Plain (id ${plain?.id}). `,
+        );
+      },
+    );
+  });
+
+  it("stores a lone padded number trimmed, and a blank one as none", async () => {
+    await upgradingOver(
+      numbered(`('Padded', ' A-1 ', null::timestamptz), ('Blank', '', null)`),
+      async (seeded, migrate, client) => {
+        await migrate();
+        const { rows } = await client.query(
+          "select name, external_account_number from account where id = any($1) order by id",
+          [seeded.map(({ id }) => id)],
+        );
+        expect(rows).toEqual([
+          { name: "Padded", external_account_number: "A-1" },
+          { name: "Blank", external_account_number: null },
+        ]);
+      },
+    );
   });
 });
 
