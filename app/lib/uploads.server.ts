@@ -1008,11 +1008,8 @@ async function commitUploadUnderLock(
   }
   const rawStrings = [...resolved.keys()];
 
-  // Whether the baseline confirmation was posted against the figures the diff just classified.
-  // A revision mismatch takes precedence below: a moved baseline cannot hide another draft,
-  // alias or account-state change. Matching revisions still reach the confirmation aggregation,
-  // where stale baseline evidence voids both ticks.
-  const baselineMoved = (raw.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+  // Ahead of reasonsToRefuse's baseline compare-and-set: a moved baseline cannot hide another
+  // draft, alias or account-state change.
   if (
     raw.reviewRevision === undefined ||
     diff.reviewRevision === null ||
@@ -1072,99 +1069,8 @@ async function commitUploadUnderLock(
     }
   }
 
-  // All three multiplications the view performs; unchecked, the view raises on every request after.
-  for (const row of rows) {
-    if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
-      throw new RefusedUpload(
-        `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check both columns against the " +
-          "sample rows — a cost basis is what one share cost, not what the whole position did.",
-        diff,
-      );
-    }
-    if (!fitsTheMoneyColumn(row.quantity, row.price)) {
-      throw new RefusedUpload(
-        `${row.name}'s quantity valued at its current price is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check the quantity column against " +
-          "the sample rows.",
-        diff,
-      );
-    }
-    if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
-      throw new RefusedUpload(
-        `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
-          "dividend than this application can hold, so nothing was recorded. Check the " +
-          "quantity column against the sample rows.",
-        diff,
-      );
-    }
-  }
-
-  // Every reason to refuse the statement itself, collected once rather than three round trips
-  // (#181), and thrown together: the household reloading a stale review should not have to walk
-  // it back one tick at a time.
-  //
-  // A confirmation is given against the figures on screen; when the baseline moved, those are not
-  // these, so the ticks are void and have to be given again against what is now shown.
-  const confirmedFiledBehind = !baselineMoved && raw.confirmFiledBehind === "true";
-  const confirmedRemovals = !baselineMoved && raw.confirmRemovals === "true";
-  const unconfirmedFiledBehind = diff.filedBehind !== null && !confirmedFiledBehind;
-  const unconfirmedRemoval = diff.majorityRemoved && !confirmedRemovals;
-
-  if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
-    const reasons: string[] = [];
-
-    // Reason 2 subsumes reason 1 when a moved baseline also reveals an unconfirmed filed-behind
-    // statement: the specific acknowledgement is the useful next action, without a second sentence
-    // saying that the baseline moved. Reason 1 fires when no filed-behind tick already explains it.
-    //
-    // This is a structural guarantee, not a heuristic: the outer `if` above fires only when one of
-    // baselineMoved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps
-    // to a push below (baselineMoved to this one exactly when unconfirmedFiledBehind does not, the
-    // other two unconditionally), so `reasons` can never come out empty. The guard past the ifs
-    // below is what keeps that true under a future edit rather than merely by inspection today.
-    if (baselineMoved && !unconfirmedFiledBehind) {
-      const measuredAgainst =
-        diff.baselineAsOf !== null
-          ? `what ${draft.accountName} held on ${diff.baselineAsOf}`
-          : `an account with nothing recorded on or before this statement's date`;
-      reasons.push(
-        "This statement was measured against figures that are no longer current: it is now " +
-          `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +
-          "shown and confirm again.",
-      );
-    }
-
-    if (unconfirmedFiledBehind && diff.filedBehind !== null) {
-      const { asOf: behindAsOf, currentAsOf } = diff.filedBehind;
-      reasons.push(
-        `This statement is dated ${behindAsOf}, behind the ${currentAsOf} figures ` +
-          `${draft.accountName} currently reports. Recording it changes this account's history ` +
-          `between ${behindAsOf} and the next statement recorded after it, and with it the net ` +
-          "worth chart over those dates, but it does not change what the account holds now. " +
-          "Nothing was recorded — confirm to file it behind.",
-      );
-    }
-
-    if (unconfirmedRemoval) {
-      // "this account holds" is only true of today's holdings — wrong once filed behind means
-      // these counts are the baseline's own, not what the account currently reports (#181).
-      const held =
-        diff.filedBehind !== null ? `recorded on ${diff.baselineAsOf}` : "this account holds";
-      const ratio = diff.removesEverything
-        ? `This file removes every position ${held} — all ${diff.currentCount}.`
-        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ${held}.`;
-      reasons.push(`${ratio} Nothing was recorded — confirm the removals to record this statement.`);
-    }
-
-    // A refusal with nothing to say is the silent no-op #181 exists to kill, reintroduced inside
-    // the machinery meant to fix it — this is what the comment above claims, made unrepresentable.
-    if (reasons.length === 0) {
-      throw new Error("A refusal must carry a sentence.");
-    }
-
-    throw new RefusedUpload(reasons.join(" "), diff);
-  }
+  const reasons = reasonsToRefuse({ diff, rows }, raw);
+  if (reasons.length > 0) throw new RefusedUpload(reasons.join(" "), diff);
 
   // Promotion first, since the draft delete below cascades the answers away. Only the strings
   // this file states: one answered, then mapped out of the instrument column, was never a
@@ -1286,6 +1192,113 @@ async function commitUploadUnderLock(
       removed: diff.removed.length,
     },
   };
+}
+
+// Per account, once its diff is drawn (spec 0023, "The commit"). Hard refusals throw at the first;
+// missing confirmations come back, for the caller to refuse together with any other account's.
+function reasonsToRefuse(
+  { diff, rows }: Pick<AssembledDiff, "diff" | "rows">,
+  posted: Pick<CommitInput, "baselineSetId" | "confirmRemovals" | "confirmFiledBehind">,
+): string[] {
+  // Whether the baseline confirmation was posted against the figures the diff just classified.
+  // Matching revisions reach here, where stale baseline evidence voids both ticks.
+  const baselineMoved = (posted.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+
+  // All three multiplications the view performs; unchecked, the view raises on every request after.
+  for (const row of rows) {
+    if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
+      throw new RefusedUpload(
+        `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
+          "application can hold, so nothing was recorded. Check both columns against the " +
+          "sample rows — a cost basis is what one share cost, not what the whole position did.",
+        diff,
+      );
+    }
+    if (!fitsTheMoneyColumn(row.quantity, row.price)) {
+      throw new RefusedUpload(
+        `${row.name}'s quantity valued at its current price is a larger figure than this ` +
+          "application can hold, so nothing was recorded. Check the quantity column against " +
+          "the sample rows.",
+        diff,
+      );
+    }
+    if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
+      throw new RefusedUpload(
+        `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
+          "dividend than this application can hold, so nothing was recorded. Check the " +
+          "quantity column against the sample rows.",
+        diff,
+      );
+    }
+  }
+
+  // Every reason to refuse the statement itself, collected once rather than three round trips
+  // (#181), and refused together: the household reloading a stale review should not have to walk
+  // it back one tick at a time.
+  //
+  // A confirmation is given against the figures on screen; when the baseline moved, those are not
+  // these, so the ticks are void and have to be given again against what is now shown.
+  const confirmedFiledBehind = !baselineMoved && posted.confirmFiledBehind === "true";
+  const confirmedRemovals = !baselineMoved && posted.confirmRemovals === "true";
+  const unconfirmedFiledBehind = diff.filedBehind !== null && !confirmedFiledBehind;
+  const unconfirmedRemoval = diff.majorityRemoved && !confirmedRemovals;
+
+  if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
+    const reasons: string[] = [];
+
+    // Reason 2 subsumes reason 1 when a moved baseline also reveals an unconfirmed filed-behind
+    // statement: the specific acknowledgement is the useful next action, without a second sentence
+    // saying that the baseline moved. Reason 1 fires when no filed-behind tick already explains it.
+    //
+    // This is a structural guarantee, not a heuristic: the outer `if` above fires only when one of
+    // baselineMoved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps
+    // to a push below (baselineMoved to this one exactly when unconfirmedFiledBehind does not, the
+    // other two unconditionally), so `reasons` can never come out empty. The guard past the ifs
+    // below is what keeps that true under a future edit rather than merely by inspection today.
+    if (baselineMoved && !unconfirmedFiledBehind) {
+      const measuredAgainst =
+        diff.baselineAsOf !== null
+          ? `what ${diff.accountName} held on ${diff.baselineAsOf}`
+          : `an account with nothing recorded on or before this statement's date`;
+      reasons.push(
+        "This statement was measured against figures that are no longer current: it is now " +
+          `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +
+          "shown and confirm again.",
+      );
+    }
+
+    if (unconfirmedFiledBehind && diff.filedBehind !== null) {
+      const { asOf: behindAsOf, currentAsOf } = diff.filedBehind;
+      reasons.push(
+        `This statement is dated ${behindAsOf}, behind the ${currentAsOf} figures ` +
+          `${diff.accountName} currently reports. Recording it changes this account's history ` +
+          `between ${behindAsOf} and the next statement recorded after it, and with it the net ` +
+          "worth chart over those dates, but it does not change what the account holds now. " +
+          "Nothing was recorded — confirm to file it behind.",
+      );
+    }
+
+    if (unconfirmedRemoval) {
+      // "this account holds" is only true of today's holdings — wrong once filed behind means
+      // these counts are the baseline's own, not what the account currently reports (#181).
+      const held =
+        diff.filedBehind !== null ? `recorded on ${diff.baselineAsOf}` : "this account holds";
+      const ratio = diff.removesEverything
+        ? `This file removes every position ${held} — all ${diff.currentCount}.`
+        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ${held}.`;
+      reasons.push(`${ratio} Nothing was recorded — confirm the removals to record this statement.`);
+    }
+
+    // A refusal with nothing to say is the silent no-op #181 exists to kill, reintroduced inside
+    // the machinery meant to fix it — this is what the comment above claims, made unrepresentable.
+    if (reasons.length === 0) {
+      throw new Error("A refusal must carry a sentence.");
+    }
+
+    return reasons;
+  }
+
+  return [];
 }
 
 export type UploadReceipt = {
