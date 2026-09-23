@@ -61,6 +61,8 @@ export type RoutedStatement = {
   problems: RoutingProblem[];
   // Numbers no account records, first-line order: the accounts step's questions, answered or not.
   unknownNumbers: string[];
+  // Those answered skip, first-line order: rows no account receives.
+  skippedNumbers: string[];
 };
 
 // Decision 15: exact once trimmed. Settings trims on write; not relied on. Null alone records none,
@@ -109,7 +111,7 @@ export function routeStatement(
   const routes: Array<{ number: string; account: OpenAccount; answered: boolean }> = [];
   const answeredNumbers: Array<{ number: string; row: number; accountId: string }> = [];
   const unknownNumbers: string[] = [];
-  let skippedNumbers = 0;
+  const skippedNumbers: string[] = [];
 
   for (const [number, row] of firstRow) {
     const holder = openByNumber.get(number);
@@ -143,7 +145,7 @@ export function routeStatement(
         message: `No account records account number "${number}". Choose one, or skip its rows.`,
       });
     } else if (answer === null) {
-      skippedNumbers += 1;
+      skippedNumbers.push(number);
     } else {
       answeredNumbers.push({ number, row, accountId: answer });
     }
@@ -220,11 +222,11 @@ export function routeStatement(
       row: null,
       column: null,
       message:
-        skippedNumbers > 0
+        skippedNumbers.length > 0
           ? "Every account number in the file is skipped, so this upload would record nothing."
           : "No row of the file states a position, so this upload would record nothing.",
     });
   }
 
-  return { accounts, problems, unknownNumbers };
+  return { accounts, problems, unknownNumbers, skippedNumbers };
 }

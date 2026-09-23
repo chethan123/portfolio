@@ -108,6 +108,22 @@ describe("an unknown number (decision 2)", () => {
     expect(routed.accounts.map((account) => account.answered)).toEqual([false, true]);
   });
 
+  it("names a number answered skip as skipped, until an open account records it", () => {
+    const answers: Array<[string, string | null]> = [["0045501234", null]];
+
+    expect(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, roth, unnumbered(mortgage)],
+        answers,
+      }).skippedNumbers,
+    ).toEqual(["0045501234"]);
+    // Recorded number outranks the answer: its rows route, so nothing is skipped.
+    expect(
+      route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage], answers })
+        .skippedNumbers,
+    ).toEqual([]);
+  });
+
   it("routes by a recorded number and ignores an answer for it", () => {
     const joint: OpenAccount = { ...unnumbered(individual), id: "20", name: "Joint brokerage" };
     const routed = route(spreadsheetRows, spreadsheet, {

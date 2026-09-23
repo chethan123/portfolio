@@ -26,7 +26,9 @@ import { changeAlias } from "~/lib/instrument-aliases.server";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
 import {
+  SKIP_NUMBER,
   STALE_REVIEW_MESSAGE,
+  answerAccountNumbers,
   parseDraft,
   rememberMapping,
   requireDraft,
@@ -1239,10 +1241,17 @@ describe("a multi-account draft routed by account number", () => {
   async function resolveEveryString(
     ctx: Pick<TestContext, "seedInstrument" | "seedInstrumentAlias">,
   ) {
-    for (const rawString of ["VTI", "AAPL", "FXAIX", "Home mortgage"]) {
+    const resolve = async (rawString: string) => {
       const instrument = await ctx.seedInstrument({ name: rawString });
       await ctx.seedInstrumentAlias({ instrument, rawString });
-    }
+      return instrument;
+    };
+    return {
+      vti: await resolve("VTI"),
+      aapl: await resolve("AAPL"),
+      fxaix: await resolve("FXAIX"),
+      loan: await resolve("Home mortgage"),
+    };
   }
 
   it(
@@ -1327,6 +1336,68 @@ describe("a multi-account draft routed by account number", () => {
       const { draftId } = await stageDraft(ctx, { resolved: false });
       const single = await parseDraft(await requireDraft(draftId, ctx.db), ctx.db);
       expect(single).toMatchObject({ step: null, routed: null });
+    }),
+  );
+
+  it(
+    "draws an account the file leaves unchanged as its unchanged count alone, with no empty table",
+    withDatabase(async (ctx) => {
+      const [, roth] = await seedAccounts(ctx);
+      const { vti, fxaix } = await resolveEveryString(ctx);
+      await ctx.seedPositionSet({
+        account: roth,
+        asOf: "2026-05-31",
+        holdings: [
+          { instrument: vti, quantity: "40.5", costBasisPerShare: "231.40" },
+          { instrument: fxaix, quantity: "84.512", costBasisPerShare: "151.33" },
+        ],
+      });
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, await reviewPage(draft.id));
+      const rothSection = markup.split('aria-label="Roth IRA"')[1]?.split("</section>")[0] ?? "";
+
+      expect(rothSection).toContain("0 ADDED · 0 UPDATED · 0 REMOVED");
+      expect(rothSection).toContain(
+        '<span class="u-data">2</span> rows are unchanged and are not listed.',
+      );
+      expect(rothSection).not.toContain("<table");
+      // The other two accounts' first statements still list what they add.
+      expect(markup).toContain("<table");
+    }),
+  );
+
+  it(
+    "names a number skipped at the accounts step in review's intro, and nothing once it is given to an account",
+    withDatabase(async (ctx) => {
+      await ctx.seedAccount({ name: "Individual brokerage", externalAccountNumber: "Z12-345678" });
+      await ctx.seedAccount({ name: "Roth IRA", kind: "ira", externalAccountNumber: "Z98-765432" });
+      const mortgage = await ctx.seedAccount({ name: "Home mortgage", kind: "liability" });
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/accounts`);
+      const answer = (accountId: string) =>
+        answerAccountNumbers(
+          draft.id,
+          { "number-0": "0045501234", "accountId-0": accountId },
+          ctx.db,
+        );
+
+      await answer(SKIP_NUMBER);
+      const skipped = await reviewPage(draft.id);
+      expect(skipped.diff.skippedNumbers).toEqual(["0045501234"]);
+      expect(renderRoute(Review, `/upload/${draft.id}/review`, skipped)).toContain(
+        'The rows of account number <span class="u-data">0045501234</span> were skipped at the ' +
+          "accounts step, so they are not recorded.",
+      );
+
+      await answer(mortgage.id);
+      const given = await reviewPage(draft.id);
+      expect(given.diff.skippedNumbers).toEqual([]);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, given);
+      expect(markup).toContain("3 ACCOUNTS");
+      expect(markup).not.toContain("were skipped at the accounts step");
     }),
   );
 

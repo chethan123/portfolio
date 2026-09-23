@@ -474,6 +474,7 @@ export async function rememberMapping(
 // step names the earliest step still owed; null = diffable and committable. routed: a
 // multi-account draft's groups, ascending account id (spec 0023 "Routing"); null when single.
 // accountsSkipped: the strip's accounts step, true when every number matched; null when single.
+// skippedNumbers: the router's, empty when single.
 export type DraftParse =
   | { step: "columns"; problems: DraftProblem[] }
   // First-line order; empty when every number is answered and all of them skipped.
@@ -492,6 +493,7 @@ export type DraftParse =
       mapping: StatementMapping;
       routed: RoutedAccount[] | null;
       accountsSkipped: boolean | null;
+      skippedNumbers: string[];
     };
 
 // The draft's file under its saved mapping, or the columns step's problems.
@@ -520,6 +522,7 @@ export async function parseDraft(
   // Rerun on every read: an account closed or renumbered since the mapping was saved moves rows.
   let routed: RoutedAccount[] | null = null;
   let accountsSkipped: boolean | null = null;
+  let skippedNumbers: string[] = [];
   if (parsed.multiAccount === true) {
     const routing = await routeDraft(parsed, mapping, draft.id, db);
     const refused = refusalsByStep(routing);
@@ -533,6 +536,7 @@ export async function parseDraft(
     }
     routed = routing.accounts;
     accountsSkipped = routing.unknownNumbers.length === 0;
+    skippedNumbers = routing.skippedNumbers;
   }
 
   const unresolved = await unresolvedStrings(
@@ -544,7 +548,7 @@ export async function parseDraft(
     return { step: "instruments", parsed, mapping, routed, accountsSkipped, unresolved };
   }
 
-  return { step: null, parsed, mapping, routed, accountsSkipped };
+  return { step: null, parsed, mapping, routed, accountsSkipped, skippedNumbers };
 }
 
 export type BlockedDraft = {
@@ -884,6 +888,7 @@ export type UploadDiff = DiffSection & {
   // True only when columns recorded no first sightings; false for a pre-bit draft too.
   instrumentsSkipped: boolean;
   accountsSkipped: boolean | null; // DraftParse's
+  skippedNumbers: string[]; // DraftParse's: no section records their rows
   // Evidence of the exact server-rendered review. Null only when an undated file's requested date
   // is invalid, so the page can show the field error without issuing usable authorization.
   reviewRevision: string | null;
@@ -1382,6 +1387,7 @@ async function assembleDiff(
           : { source: "asked", date: asOf },
       instrumentsSkipped: instrumentsStepSkipped(draft),
       accountsSkipped: result.accountsSkipped,
+      skippedNumbers: result.skippedNumbers,
       reviewRevision,
       asOfInput,
       asOfError,
@@ -1402,7 +1408,7 @@ async function assembleMultiDiff(
   asked: ReviewDate,
   db: Kysely<Database>,
 ): Promise<AssembledMultiDiff> {
-  const { parsed, mapping, routed, accountsSkipped } = await readyParse(draft, db);
+  const { parsed, mapping, routed, accountsSkipped, skippedNumbers } = await readyParse(draft, db);
   // Unreachable: parseDraft routes every null-account draft whose mapping it accepts.
   if (routed === null) throw new DraftNotReadyError("columns", null);
 
@@ -1509,6 +1515,7 @@ async function assembleMultiDiff(
           : { source: "file", date: firstDate },
       instrumentsSkipped: instrumentsStepSkipped(draft),
       accountsSkipped,
+      skippedNumbers,
       baselineSetId: null,
       baselineAsOf: null,
       filedBehind: null,

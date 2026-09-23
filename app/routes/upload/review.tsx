@@ -290,6 +290,9 @@ function SkippedLines({ skipped }: { skipped: DiffSection["skipped"] }) {
 
 // Additions first (read fastest), removals last (why the screen exists).
 function DiffTable({ section }: { section: DiffSection }) {
+  // Nothing to list: Comparison's unchanged count says so, and a bare header reads as rows lost.
+  if (section.added.length + section.updated.length + section.removed.length === 0) return null;
+
   return (
     <div className="data-table-scroll">
       <table className="data-table">
@@ -666,6 +669,13 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
             <strong>{diff.filename}</strong> · several accounts
           </p>
           <p>An open account this file does not name is left as it is.</p>
+          {diff.skippedNumbers.length > 0 ? (
+            <p>
+              The rows of account {diff.skippedNumbers.length === 1 ? "number" : "numbers"}{" "}
+              <span className="u-data">{diff.skippedNumbers.join(", ")}</span> were skipped at
+              the accounts step, so they are not recorded.
+            </p>
+          ) : null}
           <SkippedLines skipped={diff.skipped} />
         </div>
 
