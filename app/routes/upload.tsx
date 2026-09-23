@@ -94,7 +94,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
           <p className="empty-state-headline">Every account is closed.</p>
           <p className="empty-state-detail">
             A statement lands in an open account, and a closed account's history does not
-            change. Reopen or add one under{" "}
+            change. Add one under{" "}
             <Link to="/settings/accounts">Settings → Accounts</Link>.
           </p>
         </div>

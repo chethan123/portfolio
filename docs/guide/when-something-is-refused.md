@@ -137,8 +137,15 @@ step, and with it a few refusals of its own:
   same way, both naming the account that already holds it. If both of your own accounts genuinely
   share one institution number, choose **Not in this file** for the account-number column and
   upload again.
+- **A number two open accounts both hold once spacing is trimmed.** Settings can let two accounts'
+  numbers differ only by a leading or trailing space, but routing trims before it compares, so the
+  file's rows have nowhere single to go. The message names both accounts; clear the number from all
+  but one of them in Settings.
 - **An answer gone stale.** If the account you chose for an unknown number has recorded a number of
   its own since you answered, the upload sends you back to the accounts step to choose again.
+- **An account number changed while the file was being recorded.** Its rows now go to a different
+  account than the review showed. Nothing was recorded — the review re-renders so you can check and
+  confirm again.
 - **Every number skipped.** Telling every unknown number to skip its rows means the upload would
   record nothing, so it is refused rather than doing that silently.
 - **One account given two numbers.** An account offered for an unknown number can be chosen for only
