@@ -5,6 +5,7 @@ import {
   findMapping,
   headerFingerprint,
   parseMappingForm,
+  requiredColumns,
 } from "~/lib/column-mapping.server";
 import { defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
 import {
@@ -39,12 +40,12 @@ export function meta() {
 
 // Form fields, in the order the screen draws them.
 const COLUMN_CONTROLS = [
-  { field: "instrument", caption: "Instrument", optional: false },
-  { field: "quantity", caption: "Quantity", optional: false },
-  { field: "name", caption: "Name", optional: true },
-  { field: "costBasis", caption: "Cost basis", optional: true },
-  { field: "asOf", caption: "As-of date", optional: true },
-  { field: "accountNumber", caption: "Account number", optional: true },
+  { field: "instrument", caption: "Instrument" },
+  { field: "quantity", caption: "Quantity" },
+  { field: "name", caption: "Name" },
+  { field: "costBasis", caption: "Cost basis" },
+  { field: "asOf", caption: "As-of date" },
+  { field: "accountNumber", caption: "Account number" },
 ] as const;
 
 // Saved mapping forces its recorded delimiter, so a re-read can't disagree with the original sniff.
@@ -163,6 +164,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       },
       institution: scope.institution,
       multiAccount: scope.multiAccount,
+      requiredColumns: requiredColumns(scope),
       headerRow,
       headerOptions,
       headerCells,
@@ -256,6 +258,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
     draft,
     institution,
     multiAccount,
+    requiredColumns: required,
     headerRow,
     headerOptions,
     headerCells,
@@ -283,7 +286,6 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   const columnSelect = (
     field: (typeof COLUMN_CONTROLS)[number]["field"],
     caption: string,
-    optional: boolean,
   ) => (
     <div key={field}>
       <label htmlFor={`map-${field}`}>
@@ -296,7 +298,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
         >
           <option value="">Choose…</option>
           {/* "unset" and "deliberately absent" are different answers — only the latter survives a save. */}
-          {optional && !(multiAccount && field === "accountNumber") ? (
+          {!required.includes(field) ? (
             <option value={notInFile}>Not in this file</option>
           ) : null}
           {headerCells
@@ -420,9 +422,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
       <Form method="post" className="panel-form">
         <input type="hidden" name="headerRow" value={headerRow} />
 
-        {COLUMN_CONTROLS.map(({ field, caption, optional }) =>
-          columnSelect(field, caption, optional),
-        )}
+        {COLUMN_CONTROLS.map(({ field, caption }) => columnSelect(field, caption))}
 
         {/* Always rendered — a reveal reacting to another control needs JavaScript. */}
         <fieldset>

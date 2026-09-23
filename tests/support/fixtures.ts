@@ -204,6 +204,8 @@ export async function clearRaces(db: Kysely<Database>): Promise<void> {
 
   // holding and upload_draft cascade; an alias onto the seeded USD row has no instrument to cascade from.
   await db.deleteFrom("position_set").where("account_id", "in", accounts).execute();
+  // A multi-account draft names no account to cascade from.
+  await db.deleteFrom("upload_draft").where("filename", "like", pattern).execute();
   await db.deleteFrom("account").where("name", "like", pattern).execute();
   await db.deleteFrom("instrument_alias").where("raw_string", "like", pattern).execute();
   await db.deleteFrom("instrument").where("name", "like", pattern).execute();

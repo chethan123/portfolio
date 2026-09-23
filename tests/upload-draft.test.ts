@@ -10,6 +10,7 @@ import {
   commitUpload,
   createDraft,
   diffForDraft,
+  recordUpload,
   rememberMapping,
   requireDraft,
 } from "~/lib/uploads.server";
@@ -168,13 +169,16 @@ describe("requireDraft", () => {
 });
 
 // The multi-account draft (spec 0023, "Loading a draft with no account").
-const SIMPLE: StatementMapping = {
+const NUMBERED = new TextEncoder().encode("Symbol,Quantity,Acct\nVTI,100,A-1\n");
+
+const SEVERAL: StatementMapping = {
   headerRow: 0,
   delimiter: ",",
-  columns: { instrument: "Symbol", quantity: "Quantity" },
+  columns: { instrument: "Symbol", quantity: "Quantity", accountNumber: "Acct" },
   costBasisIs: "per_share",
   owedAsPositive: false,
   combineDuplicateRows: true,
+  multiAccount: true,
 };
 
 describe("a draft with no account", () => {
@@ -209,37 +213,36 @@ describe("a draft with no account", () => {
   );
 
   it(
-    "cannot be diffed once its columns are mapped, bouncing back to columns rather than reading a baseline off no account",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+    "is diffed once its columns are mapped, one section per account its numbers name, describing no account itself",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      const account = await seedAccount({ externalAccountNumber: "A-1" });
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
-      const draft = await seedUploadDraft({ account: null, bytes: CSV });
+      const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
 
-      // Fully resolved — parseDraft would say `step: null` if this were a single-account draft.
-      await expect(rememberMapping(draft.id, SIMPLE, db)).resolves.toEqual({ nextStep: "review" });
+      await expect(rememberMapping(draft.id, SEVERAL, db)).resolves.toEqual({ nextStep: "review" });
 
-      await expect(diffForDraft(draft.id, db)).rejects.toMatchObject({
-        name: "DraftNotReadyError",
-        step: "columns",
-        blocked: null,
-      });
+      const diff = await diffForDraft(draft.id, db);
+      expect(diff).toMatchObject({ accountId: null, accountName: null, added: [] });
+      expect(diff.accounts?.map((section) => [section.accountId, section.added.length])).toEqual([
+        [account.id, 1],
+      ]);
     }),
   );
 
   it(
-    "refuses to commit as its review refuses, with no one account to lock, while a gone draft stays a 404",
-    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+    "is recorded through recordUpload, never commitUpload's one account, while a gone draft stays a 404 for both",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      await seedAccount({ externalAccountNumber: "A-1" });
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
-      const draft = await seedUploadDraft({ account: null, bytes: CSV });
-      await rememberMapping(draft.id, SIMPLE, db);
+      const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
+      await rememberMapping(draft.id, SEVERAL, db);
 
-      await expect(commitUpload(draft.id, {}, db)).rejects.toMatchObject({
-        name: "DraftNotReadyError",
-        step: "columns",
-        blocked: null,
-      });
+      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(/recordUpload/);
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
       await expect(commitUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
+      await expect(recordUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
     }),
   );
 });

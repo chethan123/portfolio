@@ -11,6 +11,7 @@ import {
   type CombinedRows,
   type MultiAccountStatement,
   type ParsedPosition,
+  type SkippedRow,
   type StatementMapping,
 } from "./statement.ts";
 
@@ -36,6 +37,7 @@ export type RoutedAccount = {
   answered: boolean;
   positions: ParsedPosition[];
   combined: CombinedRows[];
+  skipped: SkippedRow[]; // this account's own; the rest are the file's
   asOfDate: string | null; // null: unmapped (one typed date for all, decision 8), blank or refused
 };
 
@@ -156,7 +158,7 @@ export function routeStatement(
     } else if (
       answeredNumbers.some((other) => other.accountId === accountId && other.number !== number)
     ) {
-      // Decision 12; the answer table's unique index (a later migration) refuses it first.
+      // Decision 12; the answer table's unique index refuses it first.
       stale = `${account.name}, and gave it another account number too`;
     } else {
       routes.push({ number, account, answered: true });
@@ -202,6 +204,7 @@ export function routeStatement(
       combined: parsed.combined
         .filter((entry) => entry.accountNumber === number)
         .map((entry) => (flips ? negateOwed(entry) : entry)),
+      skipped: parsed.skipped.filter((row) => row.accountNumber === number),
       asOfDate,
     });
   }

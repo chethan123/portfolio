@@ -919,6 +919,23 @@ describe("multi-account mode", () => {
     expect(parsed.asOfSightings?.map((sighting) => sighting.row)).toEqual([1, 2, 4]);
   });
 
+  it("keeps a skipped row's account number, when it states one, for that account's own review", () => {
+    const parsed = parseStatement(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["A1", "VTI", "10"],
+        [" A1 ", "CASH", "--"],
+        ["", "Total", "--"],
+      ],
+      mapping({ multiAccount: true, columns }),
+    );
+
+    expect(parsed.skipped).toEqual([
+      { row: 2, instrument: "CASH", accountNumber: "A1" },
+      { row: 3, instrument: "Total" },
+    ]);
+  });
+
   it("counts a whitespace-only number as blank, but not on a row skipped for stating no quantity", () => {
     const parsed = parseStatement(
       [

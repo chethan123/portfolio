@@ -20,7 +20,9 @@ import Review, {
   action as reviewAction,
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
+import Done, { loader as doneLoader } from "../../app/routes/upload/done.tsx";
 import { closeAccount } from "~/lib/accounts.server";
+import { changeAlias } from "~/lib/instrument-aliases.server";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
 import {
@@ -37,6 +39,7 @@ import { args, get, post, redirectTo } from "../support/routes.ts";
 import type { TestContext } from "../support/database.ts";
 import type { SeededAccount, SeededInstrument } from "../support/fixtures.ts";
 import type { StatementMapping } from "~/lib/statement";
+import type { UploadDiff } from "~/lib/uploads.server";
 
 afterAll(closeTestDatabase);
 
@@ -246,18 +249,20 @@ describe("a draft with no account", () => {
   );
 
   it(
-    "bounces a mapped, fully resolved draft's review back to columns, with no one account's baseline to diff",
+    "bounces a draft carrying a single-account mapping back to columns, as though it had none",
     withDatabase(async (ctx) => {
       const instrument = await ctx.seedInstrument({
         symbol: "VTI",
         name: "Vanguard Total Stock",
       });
       await ctx.seedInstrumentAlias({ instrument, rawString: "VTI" });
-      const draft = await ctx.seedUploadDraft({ account: null, bytes: encode(CSV) });
-
-      // Fully resolved — parseDraft would say `step: null` if this were a single-account draft.
-      const outcome = await rememberMapping(draft.id, MAPPING, ctx.db);
-      expect(outcome).toEqual({ nextStep: "review" });
+      // Planted: rememberMapping refuses a mapping of the other kind, so only a hand edit leaves
+      // one. Fully resolved, so parseDraft would say `step: null` were the draft single-account.
+      const draft = await ctx.seedUploadDraft({
+        account: null,
+        bytes: encode(CSV),
+        mapping: MAPPING,
+      });
 
       expect(
         await redirectTo(() =>
@@ -1285,9 +1290,9 @@ describe("a multi-account draft routed by account number", () => {
   );
 
   it(
-    "sends a fully resolved file on to review, which bounces it to columns unblocked, while a single-account draft carries no groups",
+    "sends a fully resolved file on to review, which draws a section per account, while a single-account draft carries no groups",
     withDatabase(async (ctx) => {
-      await seedAccounts(ctx);
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
       await resolveEveryString(ctx);
       const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
 
@@ -1297,11 +1302,22 @@ describe("a multi-account draft routed by account number", () => {
           resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
         ),
       ).toBe(`/upload/${draft.id}/review`);
-      expect(
-        await redirectTo(() =>
-          reviewLoader(args(get(`/upload/${draft.id}/review`), { draftId: draft.id })),
-        ),
-      ).toBe(`/upload/${draft.id}/columns`);
+
+      const page = await reviewPage(draft.id);
+      expect(page.diff.accounts?.map((section) => section.accountId)).toEqual([
+        individual.id,
+        roth.id,
+        mortgage.id,
+      ]);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page);
+      expect(markup).toContain("What this file changes");
+      expect(markup).toContain("3 ACCOUNTS");
+      for (const account of [individual, roth, mortgage]) {
+        expect(markup).toContain(account.name);
+        expect(markup).toContain(`name="baselineSetId-${account.id}"`);
+      }
+      expect(markup).toContain("The file dates this statement");
+      expect(markup).toContain("Record these statements");
 
       const multi = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
       expect(multi.step).toBeNull();
@@ -1347,6 +1363,117 @@ describe("a multi-account draft routed by account number", () => {
       );
       expect(columns.savedProblems).toEqual([expect.stringContaining(refusal)]);
       expect(columns.savedProblemFields).toEqual(["accountNumber"]);
+    }),
+  );
+
+  /** The review form's fields as the page posts them. */
+  function reviewForm(diff: UploadDiff): Record<string, string> {
+    const fields: Record<string, string> = {
+      accountId: "",
+      reviewedAsOf: diff.asOfInput,
+      reviewRevision: diff.reviewRevision ?? "",
+    };
+    for (const section of diff.accounts ?? []) {
+      fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
+    }
+    return fields;
+  }
+
+  it(
+    "records a reviewed file from the review form and lands on the done page, one line per account",
+    withDatabase(async (ctx) => {
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const landing = await redirectTo(() =>
+        reviewAction(
+          args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+        ),
+      );
+
+      const sets = await Promise.all(
+        [individual, roth, mortgage].map(
+          async (account) => (await lastRecorded(account.id, ctx.db))?.id,
+        ),
+      );
+      expect(landing).toBe(`/upload/done?sets=${sets.join(",")}`);
+
+      const done = await doneLoader(args(get(landing)));
+      expect(done.statements.map((statement) => statement.accountId)).toEqual([
+        individual.id,
+        roth.id,
+        mortgage.id,
+      ]);
+      const markup = renderRoute(Done, landing, done);
+      expect(markup).toContain(`href="/accounts/${roth.id}?uploaded=${sets[1]}"`);
+      expect(markup).toContain("Roth IRA");
+    }),
+  );
+
+  it(
+    "re-renders a refused commit with every account's section and the refusal naming its account",
+    withDatabase(async (ctx) => {
+      const [, roth] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const refused = await reviewAction(
+        args(
+          post(`/upload/${draft.id}/review`, {
+            ...reviewForm(page.diff),
+            [`baselineSetId-${roth.id}`]: "999999",
+          }),
+          { draftId: draft.id },
+        ),
+      );
+      if (refused instanceof Response) throw new Error(`Expected a refusal, got ${refused.status}.`);
+
+      expect(refused.formError).toMatch(/^Roth IRA: This statement was measured against figures/);
+      expect(refused.diff.accounts).toHaveLength(3);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
+        actionData: refused,
+      });
+      expect(markup).toContain("Roth IRA: This statement was measured against figures");
+      expect(markup).toContain("Home mortgage");
+    }),
+  );
+
+  it(
+    "sends a commit whose file lost a string after review back to instruments, marked stale",
+    withDatabase(async (ctx) => {
+      await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const fxaix = await ctx.db
+        .selectFrom("instrument_alias")
+        .select("instrument_id")
+        .where("raw_string", "=", "FXAIX")
+        .executeTakeFirstOrThrow();
+      await changeAlias(
+        {
+          intent: "forget",
+          rawString: "FXAIX",
+          fromInstrumentId: fxaix.instrument_id,
+          confirm: "true",
+        },
+        ctx.db,
+      );
+
+      expect(
+        await redirectTo(() =>
+          reviewAction(
+            args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+          ),
+        ),
+      ).toBe(`/upload/${draft.id}/instruments?stale=true`);
     }),
   );
 });

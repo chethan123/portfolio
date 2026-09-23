@@ -7,6 +7,7 @@ export default [
   route("analysis", "routes/analysis.tsx"),
   route("income", "routes/income.tsx"),
   route("upload", "routes/upload.tsx"),
+  route("upload/done", "routes/upload/done.tsx"),
 
   route("upload/:draftId", "routes/upload/draft.tsx", [
     index("routes/upload/index.tsx"),

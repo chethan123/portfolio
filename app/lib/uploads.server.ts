@@ -19,6 +19,7 @@ import {
   listAccounts,
   refusingDuplicateNumber,
   withAccountLock,
+  withAccountLocks,
   type Account,
 } from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
@@ -43,6 +44,7 @@ import { accountHoldings, accountHoldingsAt } from "./valuation.server.ts";
 
 import type { AssetClass, IsoDate } from "./valuation.server.ts";
 import type {
+  CombinedRows,
   MultiAccountStatement,
   ParseProblem,
   ParsedPosition,
@@ -114,10 +116,15 @@ export async function readUploadForm(request: Request): Promise<FormData> {
   return new Response(new Blob(chunks), { headers: { "content-type": contentType } }).formData();
 }
 
+// /upload's choice for a file of several accounts (spec 0023 decision 11): a draft with no account.
+export const SEVERAL_ACCOUNTS = "several";
+
 const uploadInput = z.object({
   accountId: z
     .string({ message: "Choose the account this statement describes." })
-    .regex(/^\d+$/, { message: "Choose the account this statement describes." }),
+    .refine((value) => value === SEVERAL_ACCOUNTS || /^\d+$/.test(value), {
+      message: "Choose the account this statement describes.",
+    }),
 
   // An empty file input submits a File with an empty name, so presence is the name.
   file: z.custom<File>((value) => value instanceof File && value.name !== "", {
@@ -156,7 +163,18 @@ export async function parseUploadForm(form: FormData): Promise<DraftInput> {
     });
   }
 
-  return { accountId: input.accountId, filename: input.file.name, bytes };
+  return {
+    accountId: input.accountId === SEVERAL_ACCOUNTS ? null : input.accountId,
+    filename: input.file.name,
+    bytes,
+  };
+}
+
+function closedRefusal(account: Account): ValidationError {
+  return ValidationError.form(
+    `${account.name} is closed, and a closed account's history does not change. ` +
+      "Reopen it from Settings if this statement is still real.",
+  );
 }
 
 // Sweeps stale drafts first: starting an upload is the one moment guaranteed to look at the table.
@@ -166,12 +184,7 @@ export async function createDraft(
 ): Promise<{ id: string; accountId: string | null }> {
   const account = accountId === null ? null : await getAccount(accountId, db);
 
-  if (account !== null && account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this statement is still real.",
-    );
-  }
+  if (account !== null && account.isClosed) throw closedRefusal(account);
 
   await db
     .deleteFrom("upload_draft")
@@ -335,6 +348,12 @@ async function routeDraft(
   };
 }
 
+// A multi-account mapping for a draft with no account, a single-account one otherwise: the other
+// kind would be routed, or not, against the wrong accounts and remembered in the wrong scope.
+function fitsDraft(mapping: StatementMapping, draft: UploadDraft): boolean {
+  return (mapping.multiAccount === true) === (draft.accountId === null);
+}
+
 // had_first_sightings is written here, where the answer exists: vocabulary misses, plus the
 // strings this draft already answered (a walk back to columns must not turn "passed" into
 // "skipped"). nextStep sends the reader on only for what is still unanswered. The draft update
@@ -345,6 +364,12 @@ export async function rememberMapping(
   db: Kysely<Database> = getDb(),
 ): Promise<{ problems: DraftProblem[] } | { nextStep: "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
+  if (!fitsDraft(mapping, draft)) {
+    throw ValidationError.form(
+      "This mapping was made for a different kind of upload than this one. Choose the columns " +
+        "again.",
+    );
+  }
 
   const { rows } = readCsv(draft.bytes, mapping.delimiter);
   const parsed = parseStatement(rows, mapping);
@@ -433,10 +458,7 @@ export async function parseDraft(
 ): Promise<DraftParse> {
   const saved = statementMapping.safeParse(draft.mapping);
   if (!saved.success) return { step: "columns", problems: [] };
-  // A mapping saved for the other kind of draft is none for this one.
-  if ((saved.data.multiAccount === true) !== (draft.accountId === null)) {
-    return { step: "columns", problems: [] };
-  }
+  if (!fitsDraft(saved.data, draft)) return { step: "columns", problems: [] };
 
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
@@ -543,13 +565,11 @@ export type DiffRemoved = DiffInstrument & {
   value: string | null;
 };
 
-export type UploadDiff = {
-  draftId: string;
-  accountId: string | null; // as UploadDraft's; assembleDiff refuses a multi-account draft
+// One account's statement, measured against its own baseline: the single-account review's whole
+// body, and one section of a multi-account one.
+export type DiffSection = {
   accountName: string | null;
-  ownerName: string | null;
   accountNumberTail: string | null;
-  filename: string;
   added: DiffAdded[];
   updated: DiffUpdated[];
   removed: DiffRemoved[];
@@ -560,8 +580,6 @@ export type UploadDiff = {
   removesEverything: boolean;
   skipped: Array<{ row: number; instrument: string }>;
   asOf: { source: "file"; date: IsoDate } | { source: "asked"; date: IsoDate | null };
-  // True only when columns recorded no first sightings; false for a pre-bit draft too.
-  instrumentsSkipped: boolean;
   // The set this diff was computed against — null for "nothing recorded on or before this date"
   // (CONTEXT.md, "Baseline"). The commit's binding confirmation: a form posting a different value
   // was drawn against figures a later read has moved past. "" is null's wire form (#181) — every
@@ -576,11 +594,30 @@ export type UploadDiff = {
   // rewrites history between its date and the next statement, even though it changes nothing the
   // account reports today.
   filedBehind: { asOf: IsoDate; currentAsOf: IsoDate } | null;
+};
+
+export type AccountDiff = DiffSection & {
+  accountId: string;
+  accountName: string;
+  ownerName: string;
+};
+
+// A multi-account draft's sections are `accounts`, ascending id (spec 0023 decision 10); its own
+// DiffSection fields then describe no account (null, empty, zero), bar `skipped`, the rows no
+// account claims, and `asOf`, "asked" only when some account's rows carry no date.
+export type UploadDiff = DiffSection & {
+  draftId: string;
+  accountId: string | null;
+  ownerName: string | null;
+  filename: string;
+  // True only when columns recorded no first sightings; false for a pre-bit draft too.
+  instrumentsSkipped: boolean;
   // Evidence of the exact server-rendered review. Null only when an undated file's requested date
   // is invalid, so the page can show the field error without issuing usable authorization.
   reviewRevision: string | null;
   asOfInput: string;
   asOfError: string | null;
+  accounts: AccountDiff[] | null;
 };
 
 export class StaleReviewError extends ValidationError {
@@ -642,6 +679,21 @@ type AssembledDiff = {
   asOf: IsoDate | null;
 };
 
+type AssembledAccount = {
+  diff: AccountDiff;
+  rows: FileRow[];
+  accountNumber: string;
+  answered: boolean;
+  asOf: IsoDate | null; // its own, or the typed one
+};
+
+type AssembledMultiDiff = {
+  diff: UploadDiff;
+  accounts: AssembledAccount[];
+  resolved: Map<string, string>; // AssembledDiff's, over every routed account's strings
+  asOf: IsoDate | null; // the typed date; null when no account asks for it
+};
+
 type ReviewDate =
   | { mode: "unknown" }
   | { mode: "review"; asOf: string | null }
@@ -670,15 +722,10 @@ function sameQuantity(before: string, after: string): boolean {
   return toUnits(before, QUANTITY_SCALE) === toUnits(after, QUANTITY_SCALE);
 }
 
-// Classified against the statement's own baseline (CONTEXT.md, "Baseline"): the latest set on or
-// before its date. Explicit unknown-mode domain reads retain the account's current-set view. Two
-// spellings of one fund fold as the parser folds a duplicate: quantities summed, basis
-// quantity-weighted.
-async function assembleDiff(
+async function readyParse(
   draft: UploadDraft,
-  asked: ReviewDate,
   db: Kysely<Database>,
-): Promise<AssembledDiff> {
+): Promise<Extract<DraftParse, { step: null }>> {
   const result = await parseDraft(draft, db);
   if (result.step !== null) {
     throw new DraftNotReadyError(
@@ -686,28 +733,29 @@ async function assembleDiff(
       result.step === "columns" ? blockedDraftFor(draft, result.problems) : null,
     );
   }
-  // No one account's baseline to diff against; spec 0023 "Review binding" is per routed group.
-  if (draft.accountId === null) {
-    throw new DraftNotReadyError("columns", null);
-  }
-  const accountId = draft.accountId;
-  const { parsed } = result;
+  return result;
+}
 
-  // Resolved once, ahead of its baseline and every guard. Review keeps a bad typed value visible
-  // and issues no revision; commit refuses the same value as ordinary field data.
+// The file's own date wins. Otherwise the typed one, resolved once, ahead of any baseline and
+// guard: review keeps a bad typed value visible and issues no revision; commit refuses it as
+// ordinary field data.
+function statementDate(
+  fileDate: IsoDate | null,
+  asked: ReviewDate,
+): { asOfInput: string; asOf: IsoDate | null; asOfError: string | null } {
   const defaultAsOf = new Date().toISOString().slice(0, 10);
   const asOfInput =
-    parsed.asOfDate ??
+    fileDate ??
     (asked.mode === "review"
       ? (asked.asOf ?? defaultAsOf)
       : asked.mode === "commit"
         ? (asked.asOf ?? "")
         : "");
-  let asOfResolved: IsoDate | null = parsed.asOfDate;
+  let asOf: IsoDate | null = fileDate;
   let asOfError: string | null = null;
-  if (parsed.asOfDate === null && asked.mode !== "unknown") {
+  if (fileDate === null && asked.mode !== "unknown") {
     try {
-      asOfResolved = parseInput(z.object({ asOf: recordedDate("The statement date") }), {
+      asOf = parseInput(z.object({ asOf: recordedDate("The statement date") }), {
         asOf: asOfInput,
       }).asOf;
     } catch (error) {
@@ -715,20 +763,38 @@ async function assembleDiff(
       asOfError = error.fieldErrors.asOf ?? "The statement date is invalid.";
     }
   }
+  return { asOfInput, asOf, asOfError };
+}
 
-  const strings = [...new Set(parsed.positions.map((position) => position.instrument))];
-  const aliases = await aliasesFor(strings, draft.id, db);
+type Comparison = {
+  figures: Omit<DiffSection, "accountName" | "accountNumberTail" | "skipped" | "asOf">;
+  rows: FileRow[];
+  baselineHoldings: Array<Pick<FileRow, "instrumentId" | "quantity" | "costBasisPerShare">>;
+  latestSetId: string | null;
+};
 
+// One account's rows against its baseline (CONTEXT.md, "Baseline"): the latest set on or before
+// `asOf`; a null `asOf` (explicit unknown-mode reads, an invalid review date) retains the
+// account's current-set view. Two spellings of one fund fold as the parser folds a duplicate:
+// quantities summed, basis quantity-weighted.
+async function compareAccount(
+  accountId: string,
+  positions: ReadonlyArray<ParsedPosition>,
+  combined: ReadonlyArray<CombinedRows>,
+  asOf: IsoDate | null,
+  aliases: ReadonlyMap<string, string>,
+  db: Kysely<Database>,
+): Promise<Comparison> {
   const groups = new Map<string, ParsedPosition[]>();
-  for (const position of parsed.positions) {
+  for (const position of positions) {
     const instrumentId = aliases.get(position.instrument);
-    if (instrumentId === undefined) continue; // unreachable: checked above
+    if (instrumentId === undefined) continue; // unreachable: parseDraft checked every string
     const group = groups.get(instrumentId);
     if (group === undefined) groups.set(instrumentId, [position]);
     else group.push(position);
   }
 
-  const combinedByRaw = new Map(parsed.combined.map((c) => [c.instrument, c.rowCount]));
+  const combinedByRaw = new Map(combined.map((c) => [c.instrument, c.rowCount]));
 
   type FoldedRow = Omit<FileRow, "name" | "price" | "annualDividendPerShare">;
   const folded: FoldedRow[] = [];
@@ -767,22 +833,17 @@ async function assembleDiff(
     });
   }
 
-  // The baseline (CONTEXT.md, "Baseline"): the latest set at or before the resolved date, or the
-  // account's own current one for an explicit unknown-mode read or invalid review date.
   // `latestRecorded` is always the account's current set (undated), read alongside so filedBehind
   // needs no second query later.
   const [latestRecorded, baselineRecord] =
-    asOfResolved === null
+    asOf === null
       ? await lastRecorded(accountId, db).then((latest) => [latest, latest] as const)
-      : await Promise.all([
-          lastRecorded(accountId, db),
-          lastRecorded(accountId, db, asOfResolved),
-        ]);
+      : await Promise.all([lastRecorded(accountId, db), lastRecorded(accountId, db, asOf)]);
 
   const current =
-    asOfResolved === null
+    asOf === null
       ? await accountHoldings(accountId, db)
-      : await accountHoldingsAt(accountId, asOfResolved, db);
+      : await accountHoldingsAt(accountId, asOf, db);
   const currentById = new Map(current.map((holding) => [holding.instrumentId, holding]));
 
   // `ids` must cover the baseline's own instruments too, or a removed row (below) has no fact row
@@ -911,29 +972,101 @@ async function assembleDiff(
   }
 
   const baselineSetId = baselineRecord?.id ?? null;
-  const baselineAsOf = baselineRecord?.asOf ?? null;
-  // Nothing recorded on or before the date — including the fallback undated read, so a truly
-  // empty account and a date before all its history read the same way.
-  const firstStatement = baselineSetId === null;
 
-  // Only meaningful once a date is known: recording ahead of the account's own current set is
-  // the ordinary case this compares nothing against.
-  const filedBehind: UploadDiff["filedBehind"] =
-    asOfResolved !== null && latestRecorded !== null && latestRecorded.asOf > asOfResolved
-      ? { asOf: asOfResolved, currentAsOf: latestRecorded.asOf }
-      : null;
+  return {
+    figures: {
+      added,
+      updated,
+      removed,
+      unchangedCount,
+      currentCount: current.length,
+      // Nothing recorded on or before the date — including the fallback undated read, so a truly
+      // empty account and a date before all its history read the same way.
+      firstStatement: baselineSetId === null,
+      majorityRemoved: removed.length * 2 > current.length,
+      removesEverything: current.length > 0 && removed.length === current.length,
+      baselineSetId,
+      baselineAsOf: baselineRecord?.asOf ?? null,
+      // Only meaningful once a date is known: recording ahead of the account's own current set is
+      // the ordinary case this compares nothing against.
+      filedBehind:
+        asOf !== null && latestRecorded !== null && latestRecorded.asOf > asOf
+          ? { asOf, currentAsOf: latestRecorded.asOf }
+          : null,
+    },
+    rows,
+    baselineHoldings: current
+      .map((holding) => ({
+        instrumentId: holding.instrumentId,
+        quantity: holding.quantity,
+        costBasisPerShare: holding.costBasisPerShare,
+      }))
+      .sort((a, b) =>
+        a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
+      ),
+    latestSetId: latestRecorded?.id ?? null,
+  };
+}
+
+// Baseline and latest-set ids cannot see a set appended strictly between their dates. History is
+// append-only and bigint ids increase, so this exact driver string changes on every account
+// history write without exposing another holding or figure to the client.
+async function appendWatermark(accountId: string, db: Kysely<Database>): Promise<string | null> {
+  const history = await db
+    .selectFrom("position_set")
+    .select(({ fn }) => fn.max("id").as("appendWatermark"))
+    .where("account_id", "=", accountId)
+    .executeTakeFirstOrThrow();
+  return history.appendWatermark;
+}
+
+function revisionRows(rows: ReadonlyArray<FileRow>) {
+  return rows
+    .map((row) => ({
+      instrumentId: row.instrumentId,
+      quantity: row.quantity,
+      costBasisPerShare: row.costBasisPerShare,
+      accountNumber: row.accountNumber,
+    }))
+    .sort((a, b) =>
+      a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
+    );
+}
+
+function revisionResolved(aliases: ReadonlyMap<string, string>) {
+  return [...aliases]
+    .map(([raw, instrumentId]) => ({ raw, instrumentId }))
+    .sort((a, b) => (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0));
+}
+
+async function assembleDiff(
+  draft: UploadDraft,
+  asked: ReviewDate,
+  db: Kysely<Database>,
+): Promise<AssembledDiff> {
+  const result = await readyParse(draft, db);
+  // Unreachable: reviewDiff and recordUpload send a draft with no account to assembleMultiDiff.
+  if (draft.accountId === null) throw new DraftNotReadyError("columns", null);
+  const accountId = draft.accountId;
+  const { parsed } = result;
+
+  const { asOfInput, asOf, asOfError } = statementDate(parsed.asOfDate, asked);
+
+  const strings = [...new Set(parsed.positions.map((position) => position.instrument))];
+  const aliases = await aliasesFor(strings, draft.id, db);
+
+  const { figures, rows, baselineHoldings, latestSetId } = await compareAccount(
+    accountId,
+    parsed.positions,
+    parsed.combined,
+    asOf,
+    aliases,
+    db,
+  );
 
   let reviewRevision: string | null = null;
-  if (asOfResolved !== null && asOfError === null) {
-    // Baseline and latest-set ids cannot see a set appended strictly between their dates. History
-    // is append-only and bigint ids increase, so this exact driver string changes on every account
-    // history write without exposing another holding or figure to the client.
-    const history = await db
-      .selectFrom("position_set")
-      .select(({ fn }) => fn.max("id").as("appendWatermark"))
-      .where("account_id", "=", accountId)
-      .executeTakeFirstOrThrow();
-    const appendWatermark: string | null = history.appendWatermark;
+  if (asOf !== null && asOfError === null) {
+    const accountHistoryAppendWatermark = await appendWatermark(accountId, db);
 
     const revision = createHash("sha256");
     revision.update("portfolio-upload-review-v3\0");
@@ -945,34 +1078,12 @@ async function assembleDiff(
         accountId,
         filename: draft.filename,
         mapping: result.mapping,
-        resolved: [...aliases]
-          .map(([raw, instrumentId]) => ({ raw, instrumentId }))
-          .sort((a, b) => (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0)),
-        rows: rows
-          .map((row) => ({
-            instrumentId: row.instrumentId,
-            quantity: row.quantity,
-            costBasisPerShare: row.costBasisPerShare,
-            accountNumber: row.accountNumber,
-          }))
-          .sort((a, b) =>
-            a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
-          ),
-        baseline: {
-          setId: baselineSetId,
-          holdings: current
-            .map((holding) => ({
-              instrumentId: holding.instrumentId,
-              quantity: holding.quantity,
-              costBasisPerShare: holding.costBasisPerShare,
-            }))
-            .sort((a, b) =>
-              a.instrumentId < b.instrumentId ? -1 : a.instrumentId > b.instrumentId ? 1 : 0,
-            ),
-        },
-        latestSetId: latestRecorded?.id ?? null,
-        accountHistoryAppendWatermark: appendWatermark,
-        asOf: asOfResolved,
+        resolved: revisionResolved(aliases),
+        rows: revisionRows(rows),
+        baseline: { setId: figures.baselineSetId, holdings: baselineHoldings },
+        latestSetId,
+        accountHistoryAppendWatermark,
+        asOf,
       }),
     );
     reviewRevision = `v3.${revision.digest("base64url")}`;
@@ -986,40 +1097,166 @@ async function assembleDiff(
       ownerName: draft.ownerName,
       accountNumberTail: draft.accountNumberTail,
       filename: draft.filename,
-      added,
-      updated,
-      removed,
-      unchangedCount,
-      currentCount: current.length,
-      firstStatement,
-      majorityRemoved: removed.length * 2 > current.length,
-      removesEverything: current.length > 0 && removed.length === current.length,
+      ...figures,
       skipped: parsed.skipped.map(({ row, instrument }) => ({ row, instrument })),
       asOf:
         parsed.asOfDate !== null
           ? { source: "file", date: parsed.asOfDate }
-          : { source: "asked", date: asOfResolved },
+          : { source: "asked", date: asOf },
       instrumentsSkipped: instrumentsStepSkipped(draft),
-      baselineSetId,
-      baselineAsOf,
-      filedBehind,
       reviewRevision,
       asOfInput,
       asOfError,
+      accounts: null,
     },
     rows,
     resolved: aliases,
     fileAccountNumber: rows.find((row) => row.accountNumber !== null)?.accountNumber ?? null,
-    asOf: asOfResolved,
+    asOf,
   };
+}
+
+// One section per routed account, each diffed against its own baseline at its own date (spec 0023
+// decisions 8, 10), read from the router's groups and never re-matched. One revision binds them
+// all, so a change to any account refuses the whole commit.
+async function assembleMultiDiff(
+  draft: UploadDraft,
+  asked: ReviewDate,
+  db: Kysely<Database>,
+): Promise<AssembledMultiDiff> {
+  const { parsed, mapping, routed } = await readyParse(draft, db);
+  // Unreachable: parseDraft routes every null-account draft whose mapping it accepts.
+  if (routed === null) throw new DraftNotReadyError("columns", null);
+
+  // Decision 8: one typed date, for every account whose rows carry none (single mode's rule).
+  const asksDate = routed.some((group) => group.asOfDate === null);
+  const typed = asksDate
+    ? statementDate(null, asked)
+    : { asOfInput: "", asOf: null, asOfError: null };
+
+  const strings = [
+    ...new Set(routed.flatMap((group) => group.positions.map((position) => position.instrument))),
+  ];
+  const aliases = await aliasesFor(strings, draft.id, db);
+
+  const accounts: AssembledAccount[] = [];
+  const bound: unknown[] = [];
+  for (const group of routed) {
+    const account = await getAccount(group.accountId, db);
+    const asOf = group.asOfDate ?? typed.asOf;
+    const { figures, rows, baselineHoldings, latestSetId } = await compareAccount(
+      account.id,
+      group.positions,
+      group.combined,
+      asOf,
+      aliases,
+      db,
+    );
+
+    accounts.push({
+      diff: {
+        accountId: account.id,
+        accountName: account.name,
+        ownerName: account.ownerName,
+        accountNumberTail: numberTail(group.accountNumber),
+        ...figures,
+        skipped: group.skipped.map(({ row, instrument }) => ({ row, instrument })),
+        asOf:
+          group.asOfDate !== null
+            ? { source: "file", date: group.asOfDate }
+            : { source: "asked", date: typed.asOf },
+      },
+      rows,
+      accountNumber: group.accountNumber,
+      answered: group.answered,
+      asOf,
+    });
+    bound.push({
+      accountId: account.id,
+      accountNumber: group.accountNumber,
+      answered: group.answered,
+      rows: revisionRows(rows),
+      baseline: { setId: figures.baselineSetId, holdings: baselineHoldings },
+      latestSetId,
+      accountHistoryAppendWatermark: await appendWatermark(account.id, db),
+      asOf,
+    });
+  }
+
+  let reviewRevision: string | null = null;
+  if (typed.asOfError === null && accounts.every((account) => account.asOf !== null)) {
+    const revision = createHash("sha256");
+    revision.update("portfolio-upload-review-v4\0");
+    revision.update(Buffer.from(draft.bytes));
+    revision.update("\0");
+    revision.update(
+      JSON.stringify({
+        draftId: draft.id,
+        filename: draft.filename,
+        mapping,
+        resolved: revisionResolved(aliases),
+        accounts: bound, // routed order: ascending account id
+      }),
+    );
+    reviewRevision = `v4.${revision.digest("base64url")}`;
+  }
+
+  const claimed = new Set(routed.flatMap((group) => group.skipped));
+  const firstDate = routed[0]?.asOfDate ?? null;
+
+  return {
+    diff: {
+      draftId: draft.id,
+      accountId: null,
+      accountName: null,
+      ownerName: null,
+      accountNumberTail: null,
+      filename: draft.filename,
+      added: [],
+      updated: [],
+      removed: [],
+      unchangedCount: 0,
+      currentCount: 0,
+      firstStatement: false,
+      majorityRemoved: false,
+      removesEverything: false,
+      skipped: parsed.skipped
+        .filter((row) => !claimed.has(row))
+        .map(({ row, instrument }) => ({ row, instrument })),
+      asOf:
+        asksDate || firstDate === null
+          ? { source: "asked", date: typed.asOf }
+          : { source: "file", date: firstDate },
+      instrumentsSkipped: instrumentsStepSkipped(draft),
+      baselineSetId: null,
+      baselineAsOf: null,
+      filedBehind: null,
+      reviewRevision,
+      asOfInput: typed.asOfInput,
+      asOfError: typed.asOfError,
+      accounts: accounts.map((account) => account.diff),
+    },
+    accounts,
+    resolved: aliases,
+    asOf: typed.asOf,
+  };
+}
+
+async function reviewDiff(
+  draft: UploadDraft,
+  asked: ReviewDate,
+  db: Kysely<Database>,
+): Promise<UploadDiff> {
+  return draft.accountId === null
+    ? (await assembleMultiDiff(draft, asked, db)).diff
+    : (await assembleDiff(draft, asked, db)).diff;
 }
 
 export async function diffForDraft(
   draftId: string,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadDiff> {
-  const draft = await requireDraft(draftId, db);
-  return (await assembleDiff(draft, { mode: "unknown" }, db)).diff;
+  return reviewDiff(await requireDraft(draftId, db), { mode: "unknown" }, db);
 }
 
 export async function reviewForDraft(
@@ -1027,9 +1264,10 @@ export async function reviewForDraft(
   requestedAsOf: string | null,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadDiff> {
-  const draft = await requireDraft(draftId, db);
-  return (await assembleDiff(draft, { mode: "review", asOf: requestedAsOf }, db)).diff;
+  return reviewDiff(await requireDraft(draftId, db), { mode: "review", asOf: requestedAsOf }, db);
 }
+
+type Confirmation = "baselineSetId" | "confirmRemovals" | "confirmFiledBehind";
 
 export type CommitInput = {
   asOf?: string;
@@ -1041,6 +1279,8 @@ export type CommitInput = {
   confirmFiledBehind?: string;
   reviewRevision?: string;
   reviewedAsOf?: string;
+  // A multi-account review's three per account, suffixed with its id (spec 0023 "Review binding").
+  [perAccount: `${Confirmation}-${string}`]: string | undefined;
 };
 
 export type CommittedUpload = {
@@ -1052,13 +1292,32 @@ export type CommittedUpload = {
   counts: { added: number; updated: number; unchanged: number; removed: number };
 };
 
-// The flow's one write: the draft's answers promoted to vocabulary, immutable position_set, one
-// holding per parsed row, draft deleted — one transaction under withAccountLock (§7.2), so the
-// diff and every guard read the statement this one lands on. Every refusal runs first, each
-// commented below — reordered by #181: assembleDiff, and the date it resolves, now run ahead of
-// the intra-file and account-number guards, because the date decides the baseline every guard
-// after it reads. A second upload for an already-recorded date is allowed (latest_position_set's
-// tie-break resolves it); re-posting a committed draft is a NotFoundError.
+// A multi-account draft's sets are one per routed account, ascending id.
+export type RecordedUpload =
+  | { multiAccount: false; recorded: CommittedUpload }
+  | { multiAccount: true; recorded: CommittedUpload[] };
+
+// The review's one write, for either kind of draft.
+export async function recordUpload(
+  draftId: string,
+  raw: CommitInput,
+  db: Kysely<Database> = getDb(),
+): Promise<RecordedUpload> {
+  const accountId = await draftAccountId(draftId, db);
+  if (accountId === undefined) throw new NotFoundError(EXPIRED);
+
+  return accountId === null
+    ? { multiAccount: true, recorded: await commitMultiAccountUpload(draftId, raw, db) }
+    : { multiAccount: false, recorded: await commitUpload(draftId, raw, db) };
+}
+
+// A single-account draft's write: the draft's answers promoted to vocabulary, immutable
+// position_set, one holding per parsed row, draft deleted — one transaction under withAccountLock
+// (§7.2), so the diff and every guard read the statement this one lands on. Every refusal runs
+// first, each commented below — reordered by #181: assembleDiff, and the date it resolves, now run
+// ahead of the intra-file and account-number guards, because the date decides the baseline every
+// guard after it reads. A second upload for an already-recorded date is allowed
+// (latest_position_set's tie-break resolves it); re-posting a committed draft is a NotFoundError.
 export async function commitUpload(
   draftId: string,
   raw: CommitInput,
@@ -1066,12 +1325,40 @@ export async function commitUpload(
 ): Promise<CommittedUpload> {
   const accountId = await draftAccountId(draftId, db);
   if (accountId === undefined) throw new NotFoundError(EXPIRED);
-  // No one account to lock (spec 0023 "The commit"); refused as its review is.
-  if (accountId === null) throw new DraftNotReadyError("columns", null);
+  if (accountId === null) {
+    throw new Error("A multi-account draft records a set per account, through recordUpload.");
+  }
 
   return withAccountLock(accountId, db, (account, trx) =>
     commitUploadUnderLock(draftId, account, raw, trx),
   );
+}
+
+// Ahead of the per-account compare-and-sets: a moved baseline cannot hide another draft, alias or
+// account-state change. A different posted date is only an assertion: `reviewedRevision`
+// rebuilds the current draft and account state at the reviewed date, which must reproduce the
+// submitted revision before the gentler explanation is credible; missing, invalid, forged or
+// concurrently changed evidence falls back to stale.
+async function refuseStaleReview(
+  raw: CommitInput,
+  diff: UploadDiff,
+  asOf: IsoDate | null,
+  reviewedRevision: (reviewedAsOf: string) => Promise<string | null>,
+): Promise<void> {
+  if (
+    raw.reviewRevision !== undefined &&
+    diff.reviewRevision !== null &&
+    raw.reviewRevision === diff.reviewRevision
+  ) {
+    return;
+  }
+
+  let reviewed: string | null = null;
+  if (raw.asOf !== undefined && raw.reviewedAsOf !== undefined && raw.asOf !== raw.reviewedAsOf) {
+    reviewed = await reviewedRevision(raw.reviewedAsOf);
+  }
+  const dateChanged = reviewed !== null && reviewed === raw.reviewRevision;
+  throw new StaleReviewError(diff, asOf, dateChanged ? "date_changed" : "revision_changed");
 }
 
 async function commitUploadUnderLock(
@@ -1086,12 +1373,7 @@ async function commitUploadUnderLock(
   if (draft === undefined) throw new NotFoundError(EXPIRED);
 
   // First: a closed account isn't fixable by a ticked box or typed date.
-  if (account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this statement is still real.",
-    );
-  }
+  if (account.isClosed) throw closedRefusal(account);
 
   // Hidden field feeds the expired page's link only — a different account is stale/forged.
   if (raw.accountId !== undefined && raw.accountId !== account.id) {
@@ -1121,37 +1403,14 @@ async function commitUploadUnderLock(
   if (asOf === null) {
     throw new Error("assembleDiff resolved no date on the commit path, which always asks for one.");
   }
-  const rawStrings = [...resolved.keys()];
 
-  // Ahead of reasonsToRefuse's baseline compare-and-set: a moved baseline cannot hide another
-  // draft, alias or account-state change.
-  if (
-    raw.reviewRevision === undefined ||
-    diff.reviewRevision === null ||
-    raw.reviewRevision !== diff.reviewRevision
-  ) {
-    // A different posted date is only an assertion. Rebuilding the current draft and account
-    // state at the reviewed date must reproduce the submitted revision before the gentler
-    // explanation is credible; missing, invalid, forged or concurrently changed evidence falls
-    // back to stale.
-    let reviewedRevision: string | null = null;
-    if (
-      raw.asOf !== undefined &&
-      raw.reviewedAsOf !== undefined &&
-      raw.asOf !== raw.reviewedAsOf
-    ) {
-      reviewedRevision = (
-        await assembleDiff(draft, { mode: "review", asOf: raw.reviewedAsOf }, db)
-      ).diff.reviewRevision;
-    }
-    const dateChanged =
-      reviewedRevision !== null && reviewedRevision === raw.reviewRevision;
-    throw new StaleReviewError(
-      diff,
-      asOf,
-      dateChanged ? "date_changed" : "revision_changed",
-    );
-  }
+  await refuseStaleReview(
+    raw,
+    diff,
+    asOf,
+    async (reviewedAsOf) =>
+      (await assembleDiff(draft, { mode: "review", asOf: reviewedAsOf }, db)).diff.reviewRevision,
+  );
 
   // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
   const numbers = rows.flatMap((row) =>
@@ -1163,7 +1422,8 @@ async function commitUploadUnderLock(
     throw new RefusedUpload(
       `This file says it describes account "${firstNumber}" on one row and ` +
         `"${differingNumber}" on another, and a statement describes one account. ` +
-        "Check which account this export belongs to — nothing was recorded.",
+        "Check which account this export belongs to — nothing was recorded. A file holding " +
+        'several accounts uploads as "Several accounts", which routes each row by its number.',
       diff,
     );
   }
@@ -1197,42 +1457,214 @@ async function commitUploadUnderLock(
     );
   }
 
-  const reasons = reasonsToRefuse({ diff, rows, accountName: account.name }, raw);
+  const reasons = reasonsToRefuse({ section: diff, rows, accountName: account.name }, raw, diff);
   if (reasons.length > 0) throw new RefusedUpload(reasons.join(" "), diff);
 
-  // Promotion first, since the draft delete below cascades the answers away. Only the strings
-  // this file states: one answered, then mapped out of the instrument column, was never a
-  // fact about a recorded statement. A row vocabulary already holds wins, as at resolve time.
-  if (rawStrings.length > 0) {
-    await db
-      .insertInto("instrument_alias")
-      .columns(["raw_string", "instrument_id"])
-      .expression(
-        db
-          .selectFrom("upload_draft_answer")
-          .select(["raw_string", "instrument_id"])
-          .where("draft_id", "=", draft.id)
-          .where("raw_string", "in", rawStrings)
-          // Insert order is lock order: two commits promoting the same strings the other way round would deadlock.
-          .orderBy("raw_string"),
-      )
-      .onConflict((conflict) => conflict.column("raw_string").doNothing())
-      .execute();
+  await promoteAnswers(draft.id, resolved, db);
+  await deleteDraft(draft.id, db);
+  await verifyVocabulary(resolved, diff, db);
+
+  const setId = await insertStatement(account.id, asOf, draft, rows, db);
+
+  const capturedNumber = captured.data;
+  if (capturedNumber !== null) {
+    await recordAccountNumber(
+      account.id,
+      capturedNumber,
+      db,
+      (who) =>
+        new RefusedUpload(
+          `This file says it describes account "${capturedNumber}", which is already recorded ` +
+            `on ${who}. A statement lands in the account it describes — check which account ` +
+            "this export belongs to.",
+          diff,
+        ),
+    );
   }
 
-  // Deletion leads the rest of the writes. A concurrent commit is refused by the re-read above;
-  // zero rows here is createDraft's sweep, which runs under no lock, taking a day-old draft in
-  // between, and the throw takes the promotion back with it — no second set, no vocabulary.
-  const taken = await db
-    .deleteFrom("upload_draft")
-    .where("id", "=", draft.id)
-    .executeTakeFirst();
-  if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
+  return {
+    setId,
+    accountId: account.id,
+    accountName: account.name,
+    filename: draft.filename,
+    asOf,
+    counts: {
+      added: diff.added.length,
+      updated: diff.updated.length,
+      unchanged: diff.unchangedCount,
+      removed: diff.removed.length,
+    },
+  };
+}
 
-  // Vocabulary as the transaction sees it must be what the diff resolved against: a string
-  // another upload recorded, or Settings repointed or forgot, in the gap would otherwise land
-  // this holding under an instrument the alias no longer names, for the next re-upload to diff
-  // away. Refused, promotion and all. Share-locked, so a repoint waits for this commit.
+// Spec 0023 "The commit": all or nothing. The draft is read unlocked only to learn which accounts
+// to lock; withAccountLocks takes them in ascending id, one transaction, and everything is read
+// again under them.
+async function commitMultiAccountUpload(
+  draftId: string,
+  raw: CommitInput,
+  db: Kysely<Database>,
+): Promise<CommittedUpload[]> {
+  const draft = await findDraft(draftId, db);
+  if (draft === undefined) throw new NotFoundError(EXPIRED);
+  const { routed } = await readyParse(draft, db);
+
+  return withAccountLocks(
+    (routed ?? []).map((group) => group.accountId),
+    db,
+    (accounts, trx) => commitMultiAccountUnderLocks(draftId, accounts, raw, trx),
+  );
+}
+
+// Hard refusals (closed, moved baseline, overflow) stop at the first, in account order; a missing
+// confirmation is collected across every account and refused in one sentence per account
+// (decision 9), so the reader is not walked back one account at a time.
+async function commitMultiAccountUnderLocks(
+  draftId: string,
+  locked: Account[],
+  raw: CommitInput,
+  db: Kysely<Database>,
+): Promise<CommittedUpload[]> {
+  await lockDraft(draftId, db);
+  const draft = await findDraft(draftId, db);
+  if (draft === undefined) throw new NotFoundError(EXPIRED);
+
+  const closed = locked.find((account) => account.isClosed);
+  if (closed !== undefined) throw closedRefusal(closed);
+
+  // Re-routed under the locks: a number recorded, cleared or closed since, or a stale answer,
+  // refuses here as the router's problem.
+  const { diff, accounts, resolved, asOf } = await assembleMultiDiff(
+    draft,
+    { mode: "commit", asOf: raw.asOf },
+    db,
+  );
+
+  // Routing re-read under the locks can name an account the unlocked read did not.
+  if (accounts.some(({ diff: section }) => !locked.some(({ id }) => id === section.accountId))) {
+    throw new StaleReviewError(diff, asOf);
+  }
+  await refuseStaleReview(
+    raw,
+    diff,
+    asOf,
+    async (reviewedAsOf) =>
+      (await assembleMultiDiff(draft, { mode: "review", asOf: reviewedAsOf }, db)).diff
+        .reviewRevision,
+  );
+
+  const confirmations: string[] = [];
+  for (const { diff: section, rows } of accounts) {
+    const posted = {
+      baselineSetId: raw[`baselineSetId-${section.accountId}`],
+      confirmRemovals: raw[`confirmRemovals-${section.accountId}`],
+      confirmFiledBehind: raw[`confirmFiledBehind-${section.accountId}`],
+    };
+    if (baselineMoved(section, posted.baselineSetId)) {
+      throw new RefusedUpload(`${section.accountName}: ${baselineSentence(section)}`, diff);
+    }
+    const named = { section, rows, accountName: section.accountName, named: true };
+    confirmations.push(...reasonsToRefuse(named, posted, diff));
+  }
+  if (confirmations.length > 0) throw new RefusedUpload(confirmations.join(" "), diff);
+
+  await promoteAnswers(draft.id, resolved, db);
+
+  // Numbers the draft's answers routed by, written before the delete takes the answers with it;
+  // trimmed and bounded by Settings' own rule.
+  for (const { diff: section, accountNumber, answered } of accounts) {
+    if (!answered) continue;
+    const bounded = accountInput.shape.externalAccountNumber.safeParse(accountNumber);
+    if (!bounded.success) {
+      throw new RefusedUpload(
+        `${section.accountName}: ${bounded.error.issues.map((issue) => issue.message).join(" ")} ` +
+          `Account number "${accountNumber}" is longer, so nothing was recorded.`,
+        diff,
+      );
+    }
+    if (bounded.data === null) continue;
+    await recordAccountNumber(
+      section.accountId,
+      bounded.data,
+      db,
+      (who) =>
+        new RefusedUpload(
+          `${section.accountName}: account number "${accountNumber}" is already recorded on ` +
+            `${who}, so nothing was recorded. Choose again for it.`,
+          diff,
+        ),
+    );
+  }
+
+  await deleteDraft(draft.id, db);
+  await verifyVocabulary(resolved, diff, db);
+
+  const recorded: CommittedUpload[] = [];
+  for (const { diff: section, rows, asOf: accountAsOf } of accounts) {
+    // Non-null: a null date left the revision null, which refuseStaleReview refused.
+    if (accountAsOf === null) throw new Error("A multi-account commit reached a dateless account.");
+    recorded.push({
+      setId: await insertStatement(section.accountId, accountAsOf, draft, rows, db),
+      accountId: section.accountId,
+      accountName: section.accountName,
+      filename: draft.filename,
+      asOf: accountAsOf,
+      counts: {
+        added: section.added.length,
+        updated: section.updated.length,
+        unchanged: section.unchangedCount,
+        removed: section.removed.length,
+      },
+    });
+  }
+  return recorded;
+}
+
+// Promotion before the draft delete, which cascades the answers away. Only the strings the
+// recorded file states: one answered, then mapped out of the instrument column, was never a fact
+// about a recorded statement. A row vocabulary already holds wins, as at resolve time.
+async function promoteAnswers(
+  draftId: string,
+  resolved: ReadonlyMap<string, string>,
+  db: Kysely<Database>,
+): Promise<void> {
+  const rawStrings = [...resolved.keys()];
+  if (rawStrings.length === 0) return;
+
+  await db
+    .insertInto("instrument_alias")
+    .columns(["raw_string", "instrument_id"])
+    .expression(
+      db
+        .selectFrom("upload_draft_answer")
+        .select(["raw_string", "instrument_id"])
+        .where("draft_id", "=", draftId)
+        .where("raw_string", "in", rawStrings)
+        // Insert order is lock order: two commits promoting the same strings the other way round would deadlock.
+        .orderBy("raw_string"),
+    )
+    .onConflict((conflict) => conflict.column("raw_string").doNothing())
+    .execute();
+}
+
+// Deletion leads the history writes. A concurrent commit is refused by the re-read under the lock;
+// zero rows here is createDraft's sweep, which runs under no lock, taking a day-old draft in
+// between, and the throw takes the promotion back with it — no second set, no vocabulary.
+async function deleteDraft(draftId: string, db: Kysely<Database>): Promise<void> {
+  const taken = await db.deleteFrom("upload_draft").where("id", "=", draftId).executeTakeFirst();
+  if (taken.numDeletedRows === 0n) throw new NotFoundError(EXPIRED);
+}
+
+// Vocabulary as the transaction sees it must be what the diff resolved against: a string another
+// upload recorded, or Settings repointed or forgot, in the gap would otherwise land a holding
+// under an instrument the alias no longer names, for the next re-upload to diff away. Refused,
+// promotion and all. Share-locked, so a repoint waits for this commit.
+async function verifyVocabulary(
+  resolved: ReadonlyMap<string, string>,
+  diff: UploadDiff,
+  db: Kysely<Database>,
+): Promise<void> {
+  const rawStrings = [...resolved.keys()];
   const meanings =
     rawStrings.length === 0
       ? []
@@ -1268,11 +1700,20 @@ async function commitUploadUnderLock(
       diff,
     );
   }
+}
 
+// Every set keeps the whole file's bytes, a multi-account one's included (spec 0023 "The commit").
+async function insertStatement(
+  accountId: string,
+  asOf: IsoDate,
+  draft: UploadDraft,
+  rows: ReadonlyArray<FileRow>,
+  db: Kysely<Database>,
+): Promise<string> {
   const set = await db
     .insertInto("position_set")
     .values({
-      account_id: account.id,
+      account_id: accountId,
       as_of_date: asOf,
       source: "upload",
       source_filename: draft.filename,
@@ -1296,79 +1737,95 @@ async function commitUploadUnderLock(
       .execute();
   }
 
-  // Only where the column is still empty: never overwrite a hand-recorded number. The lock makes
-  // a concurrent one impossible; the predicate stays as the write's own statement of the rule.
-  const capturedNumber = captured.data;
-  if (capturedNumber !== null) {
-    await refusingDuplicateNumber(
-      capturedNumber,
-      db,
-      () =>
-        db
-          .updateTable("account")
-          .set({ external_account_number: capturedNumber })
-          .where("id", "=", account.id)
-          .where("external_account_number", "is", null)
-          .execute(),
-      (who) =>
-        new RefusedUpload(
-          `This file says it describes account "${capturedNumber}", which is already recorded ` +
-            `on ${who}. A statement lands in the account it describes — check which account ` +
-            "this export belongs to.",
-          diff,
-        ),
-    );
-  }
-
-  return {
-    setId: set.id,
-    accountId: account.id,
-    accountName: account.name,
-    filename: draft.filename,
-    asOf,
-    counts: {
-      added: diff.added.length,
-      updated: diff.updated.length,
-      unchanged: diff.unchangedCount,
-      removed: diff.removed.length,
-    },
-  };
+  return set.id;
 }
 
-// Per account, once its diff is drawn (spec 0023, "The commit"). Hard refusals throw at the first;
+// Only where the column is still empty: never overwrite a hand-recorded number. The lock makes
+// a concurrent one impossible; the predicate stays as the write's own statement of the rule.
+async function recordAccountNumber(
+  accountId: string,
+  number: string,
+  db: Kysely<Database>,
+  refuse: (who: string) => Error,
+): Promise<void> {
+  await refusingDuplicateNumber(
+    number,
+    db,
+    () =>
+      db
+        .updateTable("account")
+        .set({ external_account_number: number })
+        .where("id", "=", accountId)
+        .where("external_account_number", "is", null)
+        .execute(),
+    refuse,
+  );
+}
+
+// Whether the confirmation was posted against the baseline the diff just classified against
+// (#181). Matching revisions reach here, where stale baseline evidence voids both ticks.
+function baselineMoved(section: DiffSection, posted: string | undefined): boolean {
+  return (posted ?? "") !== (section.baselineSetId ?? "");
+}
+
+function baselineSentence(section: DiffSection): string {
+  const measuredAgainst =
+    section.baselineAsOf !== null
+      ? `what ${section.accountName} held on ${section.baselineAsOf}`
+      : `an account with nothing recorded on or before this statement's date`;
+  return (
+    "This statement was measured against figures that are no longer current: it is now " +
+    `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +
+    "shown and confirm again."
+  );
+}
+
+// Per account, once its diff is drawn (spec 0023, "The commit"). The overflow guard throws; the
 // missing confirmations come back, for the caller to refuse together with any other account's.
+// `named`: each sentence opens with the account, for a file of several.
 function reasonsToRefuse(
-  { diff, rows, accountName }: Pick<AssembledDiff, "diff" | "rows"> & { accountName: string },
-  posted: Pick<CommitInput, "baselineSetId" | "confirmRemovals" | "confirmFiledBehind">,
+  {
+    section,
+    rows,
+    accountName,
+    named = false,
+  }: { section: DiffSection; rows: ReadonlyArray<FileRow>; accountName: string; named?: boolean },
+  posted: Pick<CommitInput, Confirmation>,
+  refused: UploadDiff,
 ): string[] {
-  // Whether the baseline confirmation was posted against the figures the diff just classified.
-  // Matching revisions reach here, where stale baseline evidence voids both ticks.
-  const baselineMoved = (posted.baselineSetId ?? "") !== (diff.baselineSetId ?? "");
+  const say = (sentence: string) => (named ? `${accountName}: ${sentence}` : sentence);
+  const moved = baselineMoved(section, posted.baselineSetId);
 
   // All three multiplications the view performs; unchecked, the view raises on every request after.
   for (const row of rows) {
     if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
       throw new RefusedUpload(
-        `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check both columns against the " +
-          "sample rows — a cost basis is what one share cost, not what the whole position did.",
-        diff,
+        say(
+          `${row.name}'s quantity multiplied by its cost basis is a larger figure than this ` +
+            "application can hold, so nothing was recorded. Check both columns against the " +
+            "sample rows — a cost basis is what one share cost, not what the whole position did.",
+        ),
+        refused,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.price)) {
       throw new RefusedUpload(
-        `${row.name}'s quantity valued at its current price is a larger figure than this ` +
-          "application can hold, so nothing was recorded. Check the quantity column against " +
-          "the sample rows.",
-        diff,
+        say(
+          `${row.name}'s quantity valued at its current price is a larger figure than this ` +
+            "application can hold, so nothing was recorded. Check the quantity column against " +
+            "the sample rows.",
+        ),
+        refused,
       );
     }
     if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
       throw new RefusedUpload(
-        `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
-          "dividend than this application can hold, so nothing was recorded. Check the " +
-          "quantity column against the sample rows.",
-        diff,
+        say(
+          `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
+            "dividend than this application can hold, so nothing was recorded. Check the " +
+            "quantity column against the sample rows.",
+        ),
+        refused,
       );
     }
   }
@@ -1379,12 +1836,12 @@ function reasonsToRefuse(
   //
   // A confirmation is given against the figures on screen; when the baseline moved, those are not
   // these, so the ticks are void and have to be given again against what is now shown.
-  const confirmedFiledBehind = !baselineMoved && posted.confirmFiledBehind === "true";
-  const confirmedRemovals = !baselineMoved && posted.confirmRemovals === "true";
-  const unconfirmedFiledBehind = diff.filedBehind !== null && !confirmedFiledBehind;
-  const unconfirmedRemoval = diff.majorityRemoved && !confirmedRemovals;
+  const confirmedFiledBehind = !moved && posted.confirmFiledBehind === "true";
+  const confirmedRemovals = !moved && posted.confirmRemovals === "true";
+  const unconfirmedFiledBehind = section.filedBehind !== null && !confirmedFiledBehind;
+  const unconfirmedRemoval = section.majorityRemoved && !confirmedRemovals;
 
-  if (baselineMoved || unconfirmedFiledBehind || unconfirmedRemoval) {
+  if (moved || unconfirmedFiledBehind || unconfirmedRemoval) {
     const reasons: string[] = [];
 
     // Reason 2 subsumes reason 1 when a moved baseline also reveals an unconfirmed filed-behind
@@ -1392,30 +1849,24 @@ function reasonsToRefuse(
     // saying that the baseline moved. Reason 1 fires when no filed-behind tick already explains it.
     //
     // This is a structural guarantee, not a heuristic: the outer `if` above fires only when one of
-    // baselineMoved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps
-    // to a push below (baselineMoved to this one exactly when unconfirmedFiledBehind does not, the
-    // other two unconditionally), so `reasons` can never come out empty. The guard past the ifs
-    // below is what keeps that true under a future edit rather than merely by inspection today.
-    if (baselineMoved && !unconfirmedFiledBehind) {
-      const measuredAgainst =
-        diff.baselineAsOf !== null
-          ? `what ${accountName} held on ${diff.baselineAsOf}`
-          : `an account with nothing recorded on or before this statement's date`;
-      reasons.push(
-        "This statement was measured against figures that are no longer current: it is now " +
-          `measured against ${measuredAgainst}. Nothing was recorded — check the figures now ` +
-          "shown and confirm again.",
-      );
+    // moved, unconfirmedFiledBehind, unconfirmedRemoval is true, and each of the three maps to a
+    // push below (moved to this one exactly when unconfirmedFiledBehind does not, the other two
+    // unconditionally), so `reasons` can never come out empty. The guard past the ifs below is
+    // what keeps that true under a future edit rather than merely by inspection today.
+    if (moved && !unconfirmedFiledBehind) {
+      reasons.push(say(baselineSentence({ ...section, accountName })));
     }
 
-    if (unconfirmedFiledBehind && diff.filedBehind !== null) {
-      const { asOf: behindAsOf, currentAsOf } = diff.filedBehind;
+    if (unconfirmedFiledBehind && section.filedBehind !== null) {
+      const { asOf: behindAsOf, currentAsOf } = section.filedBehind;
       reasons.push(
-        `This statement is dated ${behindAsOf}, behind the ${currentAsOf} figures ` +
-          `${accountName} currently reports. Recording it changes this account's history ` +
-          `between ${behindAsOf} and the next statement recorded after it, and with it the net ` +
-          "worth chart over those dates, but it does not change what the account holds now. " +
-          "Nothing was recorded — confirm to file it behind.",
+        say(
+          `This statement is dated ${behindAsOf}, behind the ${currentAsOf} figures ` +
+            `${accountName} currently reports. Recording it changes this account's history ` +
+            `between ${behindAsOf} and the next statement recorded after it, and with it the net ` +
+            "worth chart over those dates, but it does not change what the account holds now. " +
+            "Nothing was recorded — confirm to file it behind.",
+        ),
       );
     }
 
@@ -1423,11 +1874,13 @@ function reasonsToRefuse(
       // "this account holds" is only true of today's holdings — wrong once filed behind means
       // these counts are the baseline's own, not what the account currently reports (#181).
       const held =
-        diff.filedBehind !== null ? `recorded on ${diff.baselineAsOf}` : "this account holds";
-      const ratio = diff.removesEverything
-        ? `This file removes every position ${held} — all ${diff.currentCount}.`
-        : `This file removes ${diff.removed.length} of the ${diff.currentCount} positions ${held}.`;
-      reasons.push(`${ratio} Nothing was recorded — confirm the removals to record this statement.`);
+        section.filedBehind !== null ? `recorded on ${section.baselineAsOf}` : "this account holds";
+      const ratio = section.removesEverything
+        ? `This file removes every position ${held} — all ${section.currentCount}.`
+        : `This file removes ${section.removed.length} of the ${section.currentCount} positions ${held}.`;
+      reasons.push(
+        say(`${ratio} Nothing was recorded — confirm the removals to record this statement.`),
+      );
     }
 
     // A refusal with nothing to say is the silent no-op #181 exists to kill, reintroduced inside
@@ -1547,4 +2000,56 @@ export async function uploadReceipt(
     isCurrent: latest.id === set.id,
     currentAsOf: latest.asOf,
   };
+}
+
+export type RecordedStatement = {
+  accountId: string;
+  accountName: string;
+  ownerName: string;
+  accountNumberTail: string | null;
+  receipt: UploadReceipt;
+};
+
+// /upload/done?sets= (spec 0023 decision 16), each set read as its own account's receipt reads it,
+// in the order named. The address is only claims: an id naming no upload set is left out, never
+// a 404.
+export async function recordedStatements(
+  sets: string | null,
+  db: Kysely<Database> = getDb(),
+): Promise<RecordedStatement[]> {
+  const ids = [...new Set((sets ?? "").split(",").map((id) => id.trim()))].filter(couldBeId);
+  if (ids.length === 0) return [];
+
+  const rows = await db
+    .selectFrom("position_set")
+    .innerJoin("account", "account.id", "position_set.account_id")
+    .innerJoin("person", "person.id", "account.owner_id")
+    .select([
+      "position_set.id",
+      "position_set.account_id",
+      "account.name",
+      "person.name as owner_name",
+      "account.external_account_number",
+    ])
+    .where("position_set.id", "in", ids)
+    .where("position_set.source", "=", "upload")
+    .execute();
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
+  const statements: RecordedStatement[] = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    if (row === undefined) continue;
+    const latest = await lastRecorded(row.account_id, db);
+    const receipt = await uploadReceipt(row.account_id, id, latest, db);
+    if (receipt === null) continue;
+    statements.push({
+      accountId: row.account_id,
+      accountName: row.name,
+      ownerName: row.owner_name,
+      accountNumberTail: numberTail(row.external_account_number),
+      receipt,
+    });
+  }
+  return statements;
 }

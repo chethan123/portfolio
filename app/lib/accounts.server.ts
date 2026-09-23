@@ -14,6 +14,7 @@ import {
   taxTreatmentValues,
 } from "./account-options.ts";
 import { currentStatement } from "./current-statement.server.ts";
+import { compareIds } from "./database-id.ts";
 import {
   getDb,
   guardedAgainstConstraintViolation,
@@ -145,7 +146,7 @@ export async function getAccount(
 // the account takes, stalling createDraft and any out-of-app insert behind a commit in flight.
 // Bare row locked, then the account read, not one locked join: a join re-checked on being granted
 // keeps the person tuple its first scan pinned, so an owner change mid-wait 404'd the account (#332).
-// READ COMMITTED only: the re-read must see the writer ahead. Several accounts: lock ids in order.
+// READ COMMITTED only: the re-read must see the writer ahead. Several accounts: withAccountLocks.
 export async function withAccountLock<T>(
   accountId: string,
   db: Kysely<Database>,
@@ -166,6 +167,24 @@ export async function withAccountLock<T>(
   };
 
   return inTransaction(db, locked);
+}
+
+// Several accounts in one transaction (spec 0023 "The commit"): each lock nested in the last, ids
+// ascending by compareIds, so two writers over overlapping accounts queue rather than deadlock.
+export async function withAccountLocks<T>(
+  accountIds: ReadonlyArray<string>,
+  db: Kysely<Database>,
+  body: (accounts: Account[], trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(accountIds)].sort(compareIds);
+
+  const nest = (held: Account[], trx: Kysely<Database>): Promise<T> => {
+    const next = ordered[held.length];
+    if (next === undefined) return body(held, trx);
+    return withAccountLock(next, trx, (account, inner) => nest([...held, account], inner));
+  };
+
+  return inTransaction(db, (trx) => nest([], trx));
 }
 
 // At most one open account per number (ADR-0015). The index decides, not a read first: Settings

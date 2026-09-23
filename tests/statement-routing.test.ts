@@ -466,6 +466,25 @@ describe("the groups", () => {
     expect(routed.accounts.map((account) => account.accountId)).not.toContain("2");
   });
 
+  it("gives each account the skipped lines its number states, leaving the rest to the file", () => {
+    const routed = route(
+      [
+        ["Account", "Symbol", "Qty"],
+        ["Z12-345678", "VTI", "10"],
+        ["Z12-345678", "CASH", "--"],
+        ["Z98-765432", "FXAIX", "1"],
+        ["", "Total", "--"],
+      ],
+      inline,
+      { open: [individual, roth] },
+    );
+
+    expect(routed.accounts.map((account) => [account.accountId, account.skipped])).toEqual([
+      ["10", [{ row: 2, instrument: "CASH", accountNumber: "Z12-345678" }]],
+      ["100", []],
+    ]);
+  });
+
   it("comes out in ascending account id order, so 9 precedes 10 and 100", () => {
     // file order and text order both give 10, 100, 9; the commit locks in this order
     const routed = route(spreadsheetRows, spreadsheet, { open: [roth, individual, mortgage] });

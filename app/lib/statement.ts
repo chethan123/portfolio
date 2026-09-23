@@ -89,6 +89,7 @@ export type CombinedRows = {
 export type SkippedRow = {
   row: number;
   instrument: string;
+  accountNumber?: string; // multi-account mode, when the row states one: its account's own to list
 };
 
 // Multi-account mode: a row that would be a position but names no account. Kept out of
@@ -404,7 +405,10 @@ export function parseStatement(
     const quantity = normaliseFigure(quantityCell);
 
     if (quantity.kind === "absent") {
-      skipped.push({ row, instrument });
+      const accountNumber = multiAccount ? optionalCell(cells, accountNumberIndex) : null;
+      skipped.push(
+        accountNumber === null ? { row, instrument } : { row, instrument, accountNumber },
+      );
       continue;
     }
     if (quantity.kind === "unparseable") {

@@ -4,7 +4,12 @@ import { UploadSteps } from "~/components/upload-steps";
 import { accountPickerGroups } from "~/lib/account-label";
 import { listAccounts } from "~/lib/accounts.server";
 import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { createDraft, parseUploadForm, readUploadForm } from "~/lib/uploads.server";
+import {
+  SEVERAL_ACCOUNTS,
+  createDraft,
+  parseUploadForm,
+  readUploadForm,
+} from "~/lib/uploads.server";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/upload";
@@ -31,6 +36,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     hasAccounts: accounts.length > 0,
     maxUploadMb: getConfig().MAX_UPLOAD_MB,
     prefillAccountId,
+    // Component can't import a `.server` module — the choice's value rides down with the data.
+    severalAccounts: SEVERAL_ACCOUNTS,
   };
 }
 
@@ -59,7 +66,8 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Upload({ loaderData, actionData }: Route.ComponentProps) {
-  const { accountGroups, hasAccounts, maxUploadMb, prefillAccountId } = loaderData;
+  const { accountGroups, hasAccounts, maxUploadMb, prefillAccountId, severalAccounts } =
+    loaderData;
   const errors = actionData?.errors;
 
   return (
@@ -133,6 +141,9 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                       ))}
                     </optgroup>
                   ))}
+                  <option value={severalAccounts}>
+                    Several accounts (the file has an account-number column)
+                  </option>
                 </select>
               </label>
               {errors?.accountId ? (

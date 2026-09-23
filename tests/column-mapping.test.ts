@@ -394,16 +394,51 @@ describe("rememberMapping", () => {
 
   it(
     "remembers a multi-account draft's mapping under the multi-account scope, not any institution's",
-    withDatabase(async ({ db, seedUploadDraft }) => {
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      await seedAccount({ externalAccountNumber: "A-1" });
       const draft = await seedUploadDraft({
         account: null,
-        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
+        bytes: new TextEncoder().encode("Symbol,Quantity,Acct\nVTI,100,A-1\n"),
+      });
+      const multi: StatementMapping = {
+        ...SIMPLE,
+        columns: { ...SIMPLE.columns, accountNumber: "Acct" },
+        multiAccount: true,
+      };
+
+      await expect(rememberMapping(draft.id, multi, db)).resolves.toEqual({
+        nextStep: "instruments",
       });
 
-      await rememberMapping(draft.id, SIMPLE, db);
+      const fingerprint = headerFingerprint(["Symbol", "Quantity", "Acct"]);
+      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(multi);
+      await expect(findMapping("Test Institution", fingerprint, db)).resolves.toBeNull();
+    }),
+  );
 
-      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
-      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(SIMPLE);
+  it(
+    "refuses a mapping made for the other kind of draft, writing nothing",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      const bytes = new TextEncoder().encode("Symbol,Quantity,Acct\nVTI,100,A-1\n");
+      const multi: StatementMapping = {
+        ...SIMPLE,
+        columns: { ...SIMPLE.columns, accountNumber: "Acct" },
+        multiAccount: true,
+      };
+      const several = await seedUploadDraft({ account: null, bytes });
+      const one = await seedUploadDraft({ account: await seedAccount(), bytes });
+
+      for (const [draft, mapping] of [
+        [several, SIMPLE],
+        [one, multi],
+      ] as const) {
+        await expect(rememberMapping(draft.id, mapping, db)).rejects.toMatchObject({
+          fieldErrors: { form: expect.stringContaining("a different kind of upload") },
+        });
+        expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+      }
+      const fingerprint = headerFingerprint(["Symbol", "Quantity", "Acct"]);
+      await expect(findMapping(null, fingerprint, db)).resolves.toBeNull();
       await expect(findMapping("Test Institution", fingerprint, db)).resolves.toBeNull();
     }),
   );

@@ -9,7 +9,13 @@ import { closeAccount, getAccount, withAccountLock } from "~/lib/accounts.server
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
-import { StaleReviewError, commitUpload, reviewForDraft } from "~/lib/uploads.server";
+import {
+  StaleReviewError,
+  commitUpload,
+  recordUpload,
+  reviewForDraft,
+  type CommitInput,
+} from "~/lib/uploads.server";
 
 import {
   backendPid,
@@ -59,7 +65,10 @@ async function behindTheLock<T>(
   database: Kysely<Database>,
   holds: Writer<unknown>,
   waits: Writer<T>,
-  { waiterBeginsFirst = false } = {},
+  {
+    waiterBeginsFirst = false,
+    whileWaiting,
+  }: { waiterBeginsFirst?: boolean; whileWaiting?: () => Promise<void> } = {},
 ): Promise<T> {
   const earlier = await database.startTransaction().execute();
   const later = await database.startTransaction().execute();
@@ -73,6 +82,7 @@ async function behindTheLock<T>(
     const pending = waits(waiter);
     pending.catch(() => {});
     await waitUntilBlocked(database, pid, { unless: pending });
+    await whileWaiting?.();
 
     await holder.commit().execute();
     try {
@@ -524,6 +534,123 @@ describe("the account lock", () => {
 
       expect(handed.ownerId).toBe(newOwner.id);
       expect(handed.ownerName).toBe(newOwner.name);
+    },
+    20_000,
+  );
+});
+
+type PlantedSeveral = {
+  lower: SeededAccount;
+  higher: SeededAccount;
+  x: SeededInstrument;
+  draftId: string;
+  fields: CommitInput;
+};
+
+const SEVERAL: StatementMapping = {
+  headerRow: 0,
+  delimiter: ",",
+  columns: { instrument: "Symbol", quantity: "Qty", accountNumber: "Account" },
+  costBasisIs: "per_share",
+  owedAsPositive: false,
+  combineDuplicateRows: true,
+  multiAccount: true,
+};
+
+/** Two committed, numbered accounts and a reviewed multi-account draft naming both, the higher
+ * id first in the file so that file order is not lock order. */
+async function plantSeveral(database: Kysely<Database>, tag: string): Promise<PlantedSeveral> {
+  const fixtures = makeFixtures(database);
+  const name = (part: string) => `${RACE_PREFIX}${tag}-${part}`;
+  const owner = await fixtures.seedPerson({ name: name("owner") });
+  const classification = await fixtures.seedClassification({ name: name("class") });
+  const x = await fixtures.seedInstrument({ symbol: name("X"), name: name("X"), classification });
+  await fixtures.seedInstrumentAlias({ instrument: x, rawString: x.name });
+  const lower = await fixtures.seedAccount({
+    name: name("lower"),
+    owner,
+    externalAccountNumber: name("L"),
+  });
+  const higher = await fixtures.seedAccount({
+    name: name("higher"),
+    owner,
+    externalAccountNumber: name("H"),
+  });
+  const csv = `Account,Symbol,Qty\n${name("H")},${x.name},2\n${name("L")},${x.name},1\n`;
+  const draft = await fixtures.seedUploadDraft({
+    account: null,
+    filename: name("several.csv"),
+    bytes: new TextEncoder().encode(csv),
+    mapping: SEVERAL,
+    hadFirstSightings: false,
+  });
+
+  const review = await reviewForDraft(draft.id, today(), database);
+  const fields: CommitInput = {
+    asOf: today(),
+    reviewedAsOf: review.asOfInput,
+    reviewRevision: review.reviewRevision ?? "",
+  };
+  for (const section of review.accounts ?? []) fields[`baselineSetId-${section.accountId}`] = "";
+
+  return { lower, higher, x, draftId: draft.id, fields };
+}
+
+describe("a multi-account commit's locks", () => {
+  it(
+    "takes them in ascending id, already holding the lower while it waits on the higher",
+    async () => {
+      const database = await testDatabase();
+      const { lower, higher, x, draftId, fields } = await plantSeveral(database, "several-order");
+
+      await behindTheLock(
+        database,
+        (trx) => withAccountLock(higher.id, trx, async () => undefined),
+        (trx) => recordUpload(draftId, fields, trx),
+        {
+          whileWaiting: async () => {
+            const probe = await database.startTransaction().execute();
+            try {
+              await expect(
+                probe
+                  .selectFrom("account")
+                  .select("id")
+                  .where("id", "=", lower.id)
+                  .forNoKeyUpdate()
+                  .noWait()
+                  .execute(),
+              ).rejects.toMatchObject({ code: "55P03" });
+            } finally {
+              await probe.rollback().execute();
+            }
+          },
+        },
+      );
+
+      expect(await latestQuantities(database, lower.id)).toEqual({ [x.id]: "1.00000000" });
+      expect(await latestQuantities(database, higher.id)).toEqual({ [x.id]: "2.00000000" });
+    },
+    20_000,
+  );
+
+  it(
+    "keeps a correction that waited on it, carrying the upload forward",
+    async () => {
+      const database = await testDatabase();
+      const { lower, higher, x, draftId, fields } = await plantSeveral(
+        database,
+        "several-then-correction",
+      );
+
+      await behindTheLock(
+        database,
+        (trx) => recordUpload(draftId, fields, trx),
+        (trx) => revisePosition(lower.id, x.id, { quantity: "11", costBasisPerShare: "" }, trx),
+      );
+
+      expect(await latestQuantities(database, lower.id)).toEqual({ [x.id]: "11.00000000" });
+      expect(await positionSetCount(database, lower.id)).toBe(2);
+      expect(await latestQuantities(database, higher.id)).toEqual({ [x.id]: "2.00000000" });
     },
     20_000,
   );
