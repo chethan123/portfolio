@@ -492,9 +492,9 @@ describe("the open-account number index", () => {
     );
   });
 
-  it("stores a lone padded number trimmed, and a blank one as none", async () => {
+  it("stores a padded number trimmed of ASCII whitespace, and a blank one as none", async () => {
     await upgradingOver(
-      numbered(`('Padded', ' A-1 ', null::timestamptz), ('Blank', '', null)`),
+      numbered(`('Padded', ' A-1 ', null::timestamptz), ('Tabbed', '\tT-9', null), ('Blank', '', null)`),
       async (seeded, migrate, client) => {
         await migrate();
         const { rows } = await client.query(
@@ -503,6 +503,7 @@ describe("the open-account number index", () => {
         );
         expect(rows).toEqual([
           { name: "Padded", external_account_number: "A-1" },
+          { name: "Tabbed", external_account_number: "T-9" },
           { name: "Blank", external_account_number: null },
         ]);
       },

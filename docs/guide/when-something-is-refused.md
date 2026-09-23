@@ -134,9 +134,10 @@ step, and with it a few refusals of its own:
   reopening it to accept the file instead.
 - **A number already recorded on another open account.** Settings refuses giving a number to a
   second account, and a single-account upload whose account-number column is mapped is refused the
-  same way, both naming the account that already holds it. If both of your own accounts genuinely
-  share one institution number, choose **Not in this file** for the account-number column and
-  upload again.
+  same way, both naming the account that already holds it. If both accounts genuinely share this
+  number, choose **Not in this file** for the account-number column and upload again.
+- **An account number stored as blank space.** The app will not write an answered number over it;
+  save that account once in Settings, which clears it, and record again.
 - **A number two open accounts both hold once spacing is trimmed.** Settings can let two accounts'
   numbers differ only by a leading or trailing space, but routing trims before it compares, so the
   file's rows have nowhere single to go. The message names both accounts; clear the number from all

@@ -364,7 +364,8 @@ async function routeDraft(
 }
 
 // By the step that owns each: an answer missing or gone stale, or every unknown number skipped,
-// is the accounts step's; blank or closed-only numbers and disagreeing dates are the file's.
+// is the accounts step's; blank, shared or closed-only numbers and disagreeing dates are the
+// file's.
 function refusalsByStep(routing: RoutedStatement): {
   columns: RoutingProblem[];
   accounts: RoutingProblem[];

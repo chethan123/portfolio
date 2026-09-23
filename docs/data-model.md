@@ -511,6 +511,9 @@ Constraint: `upload_draft_account_answer_account_unique`, unique `(draft_id, acc
 `account_id is not null` — one account takes at most one number per draft; any number of rows may
 skip.
 
+Index: `upload_draft_account_answer_account_id_idx` (`account_id`) — the account cascade, as
+`upload_draft_answer_instrument_id_idx` is the instrument's.
+
 **`column_mapping`** is a saved CSV column mapping per institution and header shape, which is how a
 new institution costs zero code: the first upload maps its columns in a UI, the header row is
 fingerprinted, and the mapping auto-applies thereafter (DESIGN.md §5.3). A null `institution` is the

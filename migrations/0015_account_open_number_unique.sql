@@ -3,10 +3,13 @@
 -- multi-account one, where two open accounts sharing a number would leave a row's account a guess.
 -- Closed accounts are outside it: nothing is routed to one.
 -- Trimmed first, a blank as none: the router compares trimmed numbers (decision 15), so " A-1" and
--- "A-1" are one number to it and must be one to the index. The raise below rolls this back too.
+-- "A-1" are one number to it and must be one to the index. btrim's second argument is ASCII
+-- whitespace; anything else the router's shared-number refusal catches. The raise below rolls this
+-- back too.
 update account
-   set external_account_number = nullif(btrim(external_account_number), '')
- where external_account_number is distinct from nullif(btrim(external_account_number), '');
+   set external_account_number = nullif(btrim(external_account_number, E' \t\r\n\f\v'), '')
+ where external_account_number
+       is distinct from nullif(btrim(external_account_number, E' \t\r\n\f\v'), '');
 
 -- Duplicates already recorded are named, not chosen between. The index alone would fail naming a
 -- number but no account. Read in a crash-looping server's log (docker-entrypoint.sh migrates

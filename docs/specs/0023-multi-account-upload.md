@@ -11,7 +11,7 @@ is the pattern the account-number answer copies. `CONTEXT.md` has the amended **
 entry.
 
 > **Built with these differences.** This spec is marked implemented (`docs/specs/README.md`), and on
-> review of #383 six things below read differently from what landed. Corrected in place here, one
+> review of #383 nine things below read differently from what landed. Corrected in place here, one
 > block, rather than by rewriting the sections they touch (`docs/specs/README.md`'s banner
 > convention):
 >
@@ -24,19 +24,28 @@ entry.
 >   `0015_account_open_number_unique.sql`, `0016_multi_account_draft_and_mapping.sql`,
 >   `0017_upload_draft_account_answer.sql`.
 > - **Routing:** ~~"A pure function beside `statement.ts`"~~ — `app/lib/statement-routing.server.ts`.
->   A `.server.ts` module, not a sibling of `statement.ts` in the sense that matters here: it imports
->   `listSentence` from `input.server.ts` for its refusal messages, so it crosses the `.server`
->   bundle boundary `statement.ts` never does (ARCHITECTURE.md §4.3).
+>   It imports `listSentence` from `input.server.ts` for its refusal messages, so it was named
+>   `.server.ts` rather than adding a second plain module that value-imports `input.server.ts`, as
+>   `statement.ts` already does (ARCHITECTURE.md §4.3).
 > - **Review binding:** the per-account field list leaves out `appendWatermark-<accountId>`, which
->   the commit relies on to detect a write since review (`review.tsx:719-723` emits it,
->   `uploads.server.ts` reads it back at commit). Add it to the list below.
+>   the commit relies on to detect a write since review (`review.tsx:720-724` emits it,
+>   `uploads.server.ts:1889-1890` reads it back at commit). The binding built includes it, alongside
+>   `baselineSetId-<accountId>`, `confirmRemovals-<accountId>` and `confirmFiledBehind-<accountId>`.
 > - **The commit:** "`commitUpload` branches on the draft's account" is backwards — `recordUpload`
 >   does that branching; `commitUpload` itself refuses a multi-account draft outright
->   (`uploads.server.ts:1618-1622`).
+>   (`uploads.server.ts:1664-1668`).
 > - **The done page:** a set superseded since review is not left out — `uploadReceipt` shows it, with
 >   its filed-behind note, the same receipt contract spec 0005 §5 set. Only an id naming no upload
 >   set at all is left out. And the cap: at most the first 50 ids in `?sets=` (`MAX_RECORDED_SETS`)
 >   are read; the rest are ignored.
+> - **Shared numbers route nothing.** Two open accounts whose recorded numbers fold to the same
+>   trimmed key refuse the whole file at the columns step, naming both
+>   (`statement-routing.server.ts`'s `shared-number` problem).
+> - **Migration `0015` trims stored numbers before its duplicate pre-check**, a blank becoming null,
+>   so the pre-check and the unique index agree with the router's trimmed comparison (decision 15).
+> - **Decision 9's hard refusals also include an answered number over 64 characters** — Settings'
+>   bound (`accountInput`'s `externalAccountNumber`) — refused ahead of any confirmation, same as a
+>   closed account or a moved baseline.
 
 ## Problem Statement
 

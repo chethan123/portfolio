@@ -76,6 +76,6 @@ trustworthy, and the reversal depends on all three:
   with the account-number column mapped is refused, naming the account that already holds the
   number; the remedy is to map **Account number** as *Not in this file* for that upload. A
   multi-account export listing both under the shared number routes every one of its rows to the
-  account that recorded it — the other is untouched, per decision 7 above. `tests/accounts.test.ts:102`
-  carries this through the DESIGN.md §4.2 fixture: the Roth account is seeded with the shared
-  number, the Traditional one is not.
+  account that recorded it — the other is untouched, per decision 7 above. The DESIGN.md §4.2
+  fixture no longer models this: `tests/accounts.test.ts:85-104` now gives the two accounts distinct
+  numbers.
