@@ -82,7 +82,9 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
         </div>
       </header>
 
-      <UploadSteps steps={{ current: 1, draftId: null, instrumentsSkipped: false }} />
+      <UploadSteps
+        steps={{ current: 1, draftId: null, instrumentsSkipped: false, accountsSkipped: null }}
+      />
 
       {!hasAccounts ? (
         // Shell already renders the first-run prompt here — a second voice would double it.

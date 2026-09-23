@@ -154,6 +154,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         current: 2,
         draftId: draft.id,
         instrumentsSkipped: false,
+        accountsSkipped: scope.multiAccount ? false : null,
       } satisfies UploadStepsData,
       draft: {
         id: draft.id,

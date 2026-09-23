@@ -481,7 +481,7 @@ describe("a multi-account file the router refuses, on the columns step", () => {
   );
 
   it(
-    "names a number no open account records, pointing at Settings",
+    "refuses nothing for a number no open account records, saving the mapping and asking about it next",
     withDatabase(async (ctx) => {
       await ctx.seedAccount({ externalAccountNumber: "Z12-345678" });
       await ctx.seedAccount({ externalAccountNumber: "Z98-765432" });
@@ -491,12 +491,8 @@ describe("a multi-account file the router refuses, on the columns step", () => {
         bytes: readFixture("multi-account.csv"),
       });
 
-      const refused = await problemsOf(saveColumns(draft.id));
-
-      expect(refused.problems).toEqual([
-        'No open account records account number "0045501234". Record it on its account in ' +
-          "Settings, then save this mapping again.",
-      ]);
+      expect(await redirectTo(() => saveColumns(draft.id))).toBe(`/upload/${draft.id}/accounts`);
+      expect((await requireDraft(draft.id, ctx.db)).mapping).not.toBeNull();
     }),
   );
 });

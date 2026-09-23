@@ -1,9 +1,10 @@
 // Upload draft: the staging row behind an in-progress upload (DESIGN.md §5.1,
 // docs/specs/0004-ingest.md). Everything a step needs is on the one row, so
 // reload/back/bookmark all work. Its first-sighting answers ride with it (upload_draft_answer)
-// and become vocabulary only at commit. Drafts are swept at 24h by the next createDraft — no
-// cron. Size capped twice: the body as it streams in, File.size after. A commit is bound to its
-// reviewed revision; lock order is account → draft → aliases.
+// and become vocabulary only at commit; its answers to account numbers no account records
+// (upload_draft_account_answer) likewise land on their accounts only then. Drafts are swept at
+// 24h by the next createDraft — no cron. Size capped twice: the body as it streams in, File.size
+// after. A commit is bound to its reviewed revision; lock order is account → draft → aliases.
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
@@ -11,7 +12,7 @@ import { z } from "zod";
 import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
-import { numberTail } from "./account-label.ts";
+import { accountPickerGroups, numberTail, type PickerGroup } from "./account-label.ts";
 import { isOwed } from "./account-options.ts";
 import {
   accountInput,
@@ -26,15 +27,30 @@ import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
 import { couldBeId } from "./database-id.ts";
-import { getDb, inTransaction, type Database } from "./db.server.ts";
+import {
+  getDb,
+  guardedAgainstConstraintViolation,
+  inTransaction,
+  uniqueViolationConstraint,
+  type Database,
+} from "./db.server.ts";
 import { describeInstrument } from "./format.ts";
 import { holdingNote } from "./holdings-view.ts";
-import { FORM_ERROR, NotFoundError, ValidationError, parseInput, recordedDate } from "./input.server.ts";
+import {
+  FORM_ERROR,
+  NotFoundError,
+  ValidationError,
+  listSentence,
+  parseInput,
+  recordedDate,
+} from "./input.server.ts";
 import { aliasesFor, unresolvedStrings } from "./instrument-resolution.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, divide, render, toUnits } from "./money.ts";
 import { fitsTheMoneyColumn } from "./positions.server.ts";
+import { sameRawStrings } from "./raw-string.ts";
 import { foldLots, parseStatement, statementMapping } from "./statement.ts";
 import {
+  recordedNumber,
   routeStatement,
   type RoutedAccount,
   type RoutedStatement,
@@ -319,32 +335,47 @@ export async function mappingScope(
 // A columns-step refusal: the parse's, or a multi-account file's router's (kind set).
 export type DraftProblem = ParseProblem & { kind?: RoutingProblem["kind"] };
 
-// Every account, open and closed. The draft records no answers, so an unanswered number refuses
-// here, with Settings its fix.
+type DraftRouting = { open: Account[]; closed: Account[]; answers: Map<string, string | null> };
+
+// What the router reads for a draft: every account, open and closed, and the draft's own answers.
+async function routingInputs(draftId: string, db: Kysely<Database>): Promise<DraftRouting> {
+  const accounts = await listAccounts(db);
+  const answers = await db
+    .selectFrom("upload_draft_account_answer")
+    .select(["account_number", "account_id"])
+    .where("draft_id", "=", draftId)
+    .execute();
+
+  return {
+    open: accounts.filter((account) => !account.isClosed),
+    closed: accounts.filter((account) => account.isClosed),
+    answers: new Map(answers.map((answer) => [answer.account_number, answer.account_id])),
+  };
+}
+
 async function routeDraft(
   parsed: MultiAccountStatement,
   mapping: StatementMapping,
+  draftId: string,
   db: Kysely<Database>,
 ): Promise<RoutedStatement> {
-  const accounts = await listAccounts(db);
-  const routed = routeStatement(parsed, mapping, {
-    open: accounts.filter((account) => !account.isClosed),
-    closed: accounts.filter((account) => account.isClosed),
-    answers: new Map(),
-  });
+  return routeStatement(parsed, mapping, await routingInputs(draftId, db));
+}
+
+// By the step that owns each: an answer missing or gone stale, or every unknown number skipped,
+// is the accounts step's; blank or closed-only numbers and disagreeing dates are the file's.
+function refusalsByStep(routing: RoutedStatement): {
+  columns: RoutingProblem[];
+  accounts: RoutingProblem[];
+} {
+  const asksAgain = (problem: RoutingProblem) =>
+    problem.kind === "unanswered" ||
+    problem.kind === "stale-answer" ||
+    (problem.kind === "nothing-to-record" && routing.unknownNumbers.length > 0);
 
   return {
-    ...routed,
-    problems: routed.problems.map((problem) =>
-      problem.kind === "unanswered"
-        ? {
-            ...problem,
-            message:
-              `No open account records account number "${problem.accountNumber}". Record it ` +
-              "on its account in Settings, then save this mapping again.",
-          }
-        : problem,
-    ),
+    columns: routing.problems.filter((problem) => !asksAgain(problem)),
+    accounts: routing.problems.filter(asksAgain),
   };
 }
 
@@ -362,7 +393,7 @@ export async function rememberMapping(
   draftId: string,
   mapping: StatementMapping,
   db: Kysely<Database> = getDb(),
-): Promise<{ problems: DraftProblem[] } | { nextStep: "instruments" | "review" }> {
+): Promise<{ problems: DraftProblem[] } | { nextStep: "accounts" | "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
   if (!fitsDraft(mapping, draft)) {
     throw ValidationError.form(
@@ -391,12 +422,15 @@ export async function rememberMapping(
     });
   }
 
+  let asksAccounts = false;
   if (parsed.multiAccount === true) {
-    const { problems } = await routeDraft(parsed, mapping, db);
-    if (problems.length > 0) return { problems };
+    const refused = refusalsByStep(await routeDraft(parsed, mapping, draft.id, db));
+    if (refused.columns.length > 0) return { problems: refused.columns };
+    asksAccounts = refused.accounts.length > 0;
   }
 
-  // Every string in the file, a multi-account one's across all its accounts (spec 0023).
+  // Every string in the file, a multi-account one's across all its accounts, a skipped number's
+  // too (spec 0023, "Implied by the above").
   const strings = parsed.positions.map((position) => position.instrument);
   const unresolved = await unresolvedStrings(strings, draft.id, db);
   const answered =
@@ -431,18 +465,24 @@ export async function rememberMapping(
     );
   });
 
-  return { nextStep: unresolved.length > 0 ? "instruments" : "review" };
+  return {
+    nextStep: asksAccounts ? "accounts" : unresolved.length > 0 ? "instruments" : "review",
+  };
 }
 
 // step names the earliest step still owed; null = diffable and committable. routed: a
 // multi-account draft's groups, ascending account id (spec 0023 "Routing"); null when single.
+// accountsSkipped: the strip's accounts step, true when every number matched; null when single.
 export type DraftParse =
   | { step: "columns"; problems: DraftProblem[] }
+  // First-line order; empty when every number is answered and all of them skipped.
+  | { step: "accounts"; unanswered: string[] }
   | {
       step: "instruments";
       parsed: ParsedStatement;
       mapping: StatementMapping;
       routed: RoutedAccount[] | null;
+      accountsSkipped: boolean | null;
       unresolved: string[];
     }
   | {
@@ -450,28 +490,48 @@ export type DraftParse =
       parsed: ParsedStatement;
       mapping: StatementMapping;
       routed: RoutedAccount[] | null;
+      accountsSkipped: boolean | null;
     };
 
-export async function parseDraft(
+// The draft's file under its saved mapping, or the columns step's problems.
+function savedParse(
   draft: UploadDraft,
-  db: Kysely<Database> = getDb(),
-): Promise<DraftParse> {
+): { mapping: StatementMapping; parsed: ParsedStatement } | { problems: ParseProblem[] } {
   const saved = statementMapping.safeParse(draft.mapping);
-  if (!saved.success) return { step: "columns", problems: [] };
-  if (!fitsDraft(saved.data, draft)) return { step: "columns", problems: [] };
+  if (!saved.success || !fitsDraft(saved.data, draft)) return { problems: [] };
 
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
 
   // A saved mapping only lands after a clean parse, so problems mean it predates a rule — remap.
-  if (parsed.problems.length > 0) return { step: "columns", problems: parsed.problems };
+  if (parsed.problems.length > 0) return { problems: parsed.problems };
+  return { mapping: saved.data, parsed };
+}
+
+export async function parseDraft(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<DraftParse> {
+  const saved = savedParse(draft);
+  if ("problems" in saved) return { step: "columns", problems: saved.problems };
+  const { mapping, parsed } = saved;
 
   // Rerun on every read: an account closed or renumbered since the mapping was saved moves rows.
   let routed: RoutedAccount[] | null = null;
+  let accountsSkipped: boolean | null = null;
   if (parsed.multiAccount === true) {
-    const routing = await routeDraft(parsed, saved.data, db);
-    if (routing.problems.length > 0) return { step: "columns", problems: routing.problems };
+    const routing = await routeDraft(parsed, mapping, draft.id, db);
+    const refused = refusalsByStep(routing);
+    if (refused.columns.length > 0) return { step: "columns", problems: refused.columns };
+    if (refused.accounts.length > 0) {
+      const owed = new Set(refused.accounts.map((problem) => problem.accountNumber));
+      return {
+        step: "accounts",
+        unanswered: routing.unknownNumbers.filter((number) => owed.has(number)),
+      };
+    }
     routed = routing.accounts;
+    accountsSkipped = routing.unknownNumbers.length === 0;
   }
 
   const unresolved = await unresolvedStrings(
@@ -480,10 +540,10 @@ export async function parseDraft(
     db,
   );
   if (unresolved.length > 0) {
-    return { step: "instruments", parsed, mapping: saved.data, routed, unresolved };
+    return { step: "instruments", parsed, mapping, routed, accountsSkipped, unresolved };
   }
 
-  return { step: null, parsed, mapping: saved.data, routed };
+  return { step: null, parsed, mapping, routed, accountsSkipped };
 }
 
 export type BlockedDraft = {
@@ -494,6 +554,7 @@ export type BlockedDraft = {
   ownerName: string | null;
   accountNumberTail: string | null;
   instrumentsSkipped: boolean;
+  accountsSkipped: boolean | null; // false for a multi-account draft: not yet decided
   problems: DraftProblem[];
 };
 
@@ -502,9 +563,14 @@ function instrumentsStepSkipped(draft: UploadDraft): boolean {
 }
 
 // A blank instrument or a routing refusal: remapping may not fix either, so review explains it.
+// An unanswered or stale number is the accounts step's to ask, never a block.
 function blockedDraftFor(draft: UploadDraft, problems: DraftProblem[]): BlockedDraft | null {
   const blocking = problems.filter(
-    (problem) => problem.code === "blank-instrument" || problem.kind !== undefined,
+    (problem) =>
+      problem.code === "blank-instrument" ||
+      (problem.kind !== undefined &&
+        problem.kind !== "unanswered" &&
+        problem.kind !== "stale-answer"),
   );
   if (blocking.length === 0) return null;
 
@@ -516,6 +582,7 @@ function blockedDraftFor(draft: UploadDraft, problems: DraftProblem[]): BlockedD
     ownerName: draft.ownerName,
     accountNumberTail: draft.accountNumberTail,
     instrumentsSkipped: instrumentsStepSkipped(draft),
+    accountsSkipped: draft.accountId === null ? false : null,
     problems: blocking,
   };
 }
@@ -524,14 +591,204 @@ function blockedDraftFor(draft: UploadDraft, problems: DraftProblem[]): BlockedD
 // narrow display payload Review needs to explain why no safe diff exists.
 export class DraftNotReadyError extends Error {
   override readonly name = "DraftNotReadyError";
-  readonly step: "columns" | "instruments";
+  readonly step: "columns" | "accounts" | "instruments";
   readonly blocked: BlockedDraft | null;
 
-  constructor(step: "columns" | "instruments", blocked: BlockedDraft | null) {
+  constructor(step: "columns" | "accounts" | "instruments", blocked: BlockedDraft | null) {
     super(`This draft has not passed the ${step} step.`);
     this.step = step;
     this.blocked = blocked;
   }
+}
+
+// /upload/:id/accounts's skip choice (spec 0023 decision 2); any other value names an account.
+export const SKIP_NUMBER = "skip";
+
+export type AccountQuestion = {
+  number: string;
+  lines: number; // rows naming it, quantity-less ones included
+  instruments: string[]; // distinct, trimmed, first-line order
+  // The draft's answer in the form's terms: an account id, SKIP_NUMBER, or "" for none or stale.
+  answer: string;
+  stale: string | null; // the router's sentence
+};
+
+export type AccountsScreen = {
+  questions: AccountQuestion[];
+  choices: PickerGroup[]; // grouped as /upload's picker
+};
+
+// Decision 12: all an unknown number can be given.
+function numberlessOpen(open: ReadonlyArray<Account>): Account[] {
+  return open.filter((account) => recordedNumber(account) === null);
+}
+
+type NumberQuestions = {
+  mapping: StatementMapping;
+  parsed: MultiAccountStatement;
+  inputs: DraftRouting;
+  routing: RoutedStatement;
+};
+
+// Null when this step has nothing to ask yet: a single-account draft, or columns still owed.
+async function numberQuestions(
+  draft: UploadDraft,
+  db: Kysely<Database>,
+): Promise<NumberQuestions | null> {
+  const saved = savedParse(draft);
+  if ("problems" in saved) return null;
+  const { mapping, parsed } = saved;
+  if (parsed.multiAccount !== true) return null;
+
+  const inputs = await routingInputs(draft.id, db);
+  const routing = routeStatement(parsed, mapping, inputs);
+  if (refusalsByStep(routing).columns.length > 0) return null;
+
+  return { mapping, parsed, inputs, routing };
+}
+
+// Every number no account records, answered or not, so a revisit shows the answers standing.
+export async function accountsScreen(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<AccountsScreen> {
+  const asked = await numberQuestions(draft, db);
+  if (asked === null) return { questions: [], choices: [] };
+  const { parsed, inputs, routing } = asked;
+
+  const stale = new Map(
+    routing.problems.flatMap((problem) =>
+      problem.kind === "stale-answer" && problem.accountNumber !== null
+        ? [[problem.accountNumber, problem.message] as const]
+        : [],
+    ),
+  );
+
+  const questions = routing.unknownNumbers.map((number) => {
+    const positions = parsed.positions.filter((position) => position.accountNumber === number);
+    const combined = parsed.combined.filter((entry) => entry.accountNumber === number);
+    const lines =
+      positions.reduce(
+        (sum, position) =>
+          sum + (combined.find((entry) => entry.instrument === position.instrument)?.rowCount ?? 1),
+        0,
+      ) + parsed.skipped.filter((row) => row.accountNumber === number).length;
+    const answer = inputs.answers.get(number);
+
+    return {
+      number,
+      lines,
+      instruments: [...new Set(positions.map((position) => position.instrument.trim()))],
+      answer: answer === undefined || stale.has(number) ? "" : (answer ?? SKIP_NUMBER),
+      stale: stale.get(number) ?? null,
+    };
+  });
+
+  return { questions, choices: accountPickerGroups(numberlessOpen(inputs.open)) };
+}
+
+// The accounts step's one write (spec 0023 decision 2), refused whole unless every answer holds.
+// The draft's answers are replaced outright under its lock: an upsert would trip the one-account
+// index halfway through a swap, and an answer kept for a number since recorded elsewhere would
+// come back unasked were that number cleared.
+export async function answerAccountNumbers(
+  draftId: string,
+  posted: Readonly<Record<string, string>>,
+  db: Kysely<Database> = getDb(),
+): Promise<{ nextStep: "columns" | "accounts" | "instruments" | "review" }> {
+  const draft = await requireDraft(draftId, db);
+  const asked = await numberQuestions(draft, db);
+  const numbers = asked?.routing.unknownNumbers ?? [];
+
+  if (asked !== null && numbers.length > 0) {
+    // Each answer posts its number: a form drawn over other numbers can't land one on another.
+    if (numbers.some((number, index) => !sameRawStrings(posted[`number-${index}`] ?? "", number))) {
+      throw ValidationError.form(
+        "The account numbers this upload asks about changed while this page was open — check " +
+          "the answers below and save again.",
+      );
+    }
+
+    const offered = new Map(
+      numberlessOpen(asked.inputs.open).map((account) => [account.id, account]),
+    );
+    const errors: Record<string, string> = {};
+    const answers = new Map<string, string | null>();
+    for (const [index, number] of numbers.entries()) {
+      const choice = posted[`accountId-${index}`] ?? "";
+      if (choice === SKIP_NUMBER) {
+        answers.set(number, null);
+      } else if (offered.has(choice)) {
+        answers.set(number, choice);
+      } else {
+        errors[`accountId-${index}`] =
+          choice === ""
+            ? `Choose the account "${number}" belongs to, or skip its rows.`
+            : `Only an open account recording no number yet can take "${number}". Choose again.`;
+      }
+    }
+
+    for (const [accountId, account] of offered) {
+      const given = numbers.flatMap((number, index) =>
+        answers.get(number) === accountId ? [{ number, index }] : [],
+      );
+      if (given.length < 2) continue;
+      const named = listSentence(given.map(({ number }) => `"${number}"`));
+      for (const { index } of given) {
+        errors[`accountId-${index}`] =
+          `${account.name} is given account numbers ${named}, and an account records one. ` +
+          "Choose one account for each.";
+      }
+    }
+    if (Object.keys(errors).length > 0) throw new ValidationError(errors);
+
+    // Decision 2: refused here, where the answers are, rather than at review.
+    const nothing = routeStatement(asked.parsed, asked.mapping, {
+      ...asked.inputs,
+      answers,
+    }).problems.find((problem) => problem.kind === "nothing-to-record");
+    if (nothing !== undefined) throw ValidationError.form(nothing.message);
+
+    await inTransaction(db, async (trx) => {
+      const locked = await trx
+        .selectFrom("upload_draft")
+        .select("id")
+        .where("id", "=", draft.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (locked === undefined) throw new NotFoundError(EXPIRED);
+
+      await trx
+        .deleteFrom("upload_draft_account_answer")
+        .where("draft_id", "=", draft.id)
+        .execute();
+      try {
+        await guardedAgainstConstraintViolation(trx, () =>
+          trx
+            .insertInto("upload_draft_account_answer")
+            .values(
+              [...answers].map(([number, accountId]) => ({
+                draft_id: draft.id,
+                account_number: number,
+                account_id: accountId,
+              })),
+            )
+            .execute(),
+        );
+      } catch (cause) {
+        // Decision 12's backstop; the check above refuses it first.
+        if (uniqueViolationConstraint(cause) !== "upload_draft_account_answer_account_unique") {
+          throw cause;
+        }
+        throw ValidationError.form(
+          "One account was given two account numbers, and an account records one. Choose one " +
+            "account for each.",
+        );
+      }
+    });
+  }
+
+  return { nextStep: (await parseDraft(draft, db)).step ?? "review" };
 }
 
 type DiffInstrument = {
@@ -600,6 +857,8 @@ export type AccountDiff = DiffSection & {
   accountId: string;
   accountName: string;
   ownerName: string;
+  // Posted back so a refused commit can name which account's history moved (decision 9).
+  appendWatermark: string | null;
 };
 
 // A multi-account draft's sections are `accounts`, ascending id (spec 0023 decision 10); its own
@@ -612,6 +871,7 @@ export type UploadDiff = DiffSection & {
   filename: string;
   // True only when columns recorded no first sightings; false for a pre-bit draft too.
   instrumentsSkipped: boolean;
+  accountsSkipped: boolean | null; // DraftParse's
   // Evidence of the exact server-rendered review. Null only when an undated file's requested date
   // is invalid, so the page can show the field error without issuing usable authorization.
   reviewRevision: string | null;
@@ -628,14 +888,19 @@ export class StaleReviewError extends ValidationError {
     diff: UploadDiff,
     asOf: IsoDate | null,
     reason: "date_changed" | "revision_changed" = "revision_changed",
+    // Accounts with figures recorded since the review, when the form says which.
+    moved: readonly string[] = [],
   ) {
     super({
       [FORM_ERROR]:
         reason === "date_changed"
           ? `This comparison was drawn for a different statement date. Here it is for ${asOf}. ` +
             "Nothing was recorded — check it and record again."
-          : "This statement or its account changed after this review. Nothing was recorded — " +
-            "check it and record again.",
+          : moved.length > 0
+            ? `Figures were recorded on ${listSentence(moved)} after this review. Nothing was ` +
+              `recorded — check ${moved.length === 1 ? "it" : "them"} and record again.`
+            : "This statement or its account changed after this review. Nothing was recorded — " +
+              "check it and record again.",
     });
     this.diff = diff;
     this.asOf = asOf;
@@ -1104,6 +1369,7 @@ async function assembleDiff(
           ? { source: "file", date: parsed.asOfDate }
           : { source: "asked", date: asOf },
       instrumentsSkipped: instrumentsStepSkipped(draft),
+      accountsSkipped: result.accountsSkipped,
       reviewRevision,
       asOfInput,
       asOfError,
@@ -1124,7 +1390,7 @@ async function assembleMultiDiff(
   asked: ReviewDate,
   db: Kysely<Database>,
 ): Promise<AssembledMultiDiff> {
-  const { parsed, mapping, routed } = await readyParse(draft, db);
+  const { parsed, mapping, routed, accountsSkipped } = await readyParse(draft, db);
   // Unreachable: parseDraft routes every null-account draft whose mapping it accepts.
   if (routed === null) throw new DraftNotReadyError("columns", null);
 
@@ -1152,6 +1418,7 @@ async function assembleMultiDiff(
       aliases,
       db,
     );
+    const watermark = await appendWatermark(account.id, db);
 
     accounts.push({
       diff: {
@@ -1165,6 +1432,7 @@ async function assembleMultiDiff(
           group.asOfDate !== null
             ? { source: "file", date: group.asOfDate }
             : { source: "asked", date: typed.asOf },
+        appendWatermark: watermark,
       },
       rows,
       accountNumber: group.accountNumber,
@@ -1178,7 +1446,7 @@ async function assembleMultiDiff(
       rows: revisionRows(rows),
       baseline: { setId: figures.baselineSetId, holdings: baselineHoldings },
       latestSetId,
-      accountHistoryAppendWatermark: await appendWatermark(account.id, db),
+      accountHistoryAppendWatermark: watermark,
       asOf,
     });
   }
@@ -1228,6 +1496,7 @@ async function assembleMultiDiff(
           ? { source: "asked", date: typed.asOf }
           : { source: "file", date: firstDate },
       instrumentsSkipped: instrumentsStepSkipped(draft),
+      accountsSkipped,
       baselineSetId: null,
       baselineAsOf: null,
       filedBehind: null,
@@ -1279,8 +1548,9 @@ export type CommitInput = {
   confirmFiledBehind?: string;
   reviewRevision?: string;
   reviewedAsOf?: string;
-  // A multi-account review's three per account, suffixed with its id (spec 0023 "Review binding").
-  [perAccount: `${Confirmation}-${string}`]: string | undefined;
+  // A multi-account review's three per account, suffixed with its id (spec 0023 "Review binding"),
+  // and each account's AccountDiff.appendWatermark, "" for null.
+  [perAccount: `${Confirmation | "appendWatermark"}-${string}`]: string | undefined;
 };
 
 export type CommittedUpload = {
@@ -1344,6 +1614,7 @@ async function refuseStaleReview(
   diff: UploadDiff,
   asOf: IsoDate | null,
   reviewedRevision: (reviewedAsOf: string) => Promise<string | null>,
+  moved: readonly string[] = [],
 ): Promise<void> {
   if (
     raw.reviewRevision !== undefined &&
@@ -1358,7 +1629,7 @@ async function refuseStaleReview(
     reviewed = await reviewedRevision(raw.reviewedAsOf);
   }
   const dateChanged = reviewed !== null && reviewed === raw.reviewRevision;
-  throw new StaleReviewError(diff, asOf, dateChanged ? "date_changed" : "revision_changed");
+  throw new StaleReviewError(diff, asOf, dateChanged ? "date_changed" : "revision_changed", moved);
 }
 
 async function commitUploadUnderLock(
@@ -1544,6 +1815,14 @@ async function commitMultiAccountUnderLocks(
   if (accounts.some(({ diff: section }) => !locked.some(({ id }) => id === section.accountId))) {
     throw new StaleReviewError(diff, asOf);
   }
+  // Decision 9: history written since review names its account. The watermark, not the baseline:
+  // a changed date alone moves baselines, never a watermark.
+  const moved = accounts.flatMap(({ diff: section }) => {
+    const reviewed = raw[`appendWatermark-${section.accountId}`];
+    return reviewed !== undefined && reviewed !== (section.appendWatermark ?? "")
+      ? [section.accountName]
+      : [];
+  });
   await refuseStaleReview(
     raw,
     diff,
@@ -1551,6 +1830,7 @@ async function commitMultiAccountUnderLocks(
     async (reviewedAsOf) =>
       (await assembleMultiDiff(draft, { mode: "review", asOf: reviewedAsOf }, db)).diff
         .reviewRevision,
+    moved,
   );
 
   const confirmations: string[] = [];

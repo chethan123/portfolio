@@ -31,9 +31,10 @@ import type {
 import type { Route } from "./+types/review";
 
 /**
- * Step four — the diff, then the commit (ingest brief §6), the flow's only
- * write. §5.2: a missing row means sold, so every removal is listed in
- * full, and removing more than half needs a ticked confirmation. Read-only
+ * Step four, five for a file of several accounts — the diff, then the commit
+ * (ingest brief §6), the flow's only write. §5.2: a missing row means sold,
+ * so every removal is listed in full, and removing more than half needs a
+ * ticked confirmation. Read-only
  * plus date and tick — mapping errors go back to Columns; source-file errors
  * need a corrected upload because a draft's bytes never change.
  */
@@ -48,10 +49,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     return {
       steps: {
-        current: 4,
+        current: diff.accountsSkipped === null ? 4 : 5,
         draftId: diff.draftId,
         // Written by the columns step, the one moment the answer existed — an alias doesn't say which draft wrote it.
         instrumentsSkipped: diff.instrumentsSkipped,
+        accountsSkipped: diff.accountsSkipped,
       } satisfies UploadStepsData,
       diff,
       staleReviewMessage:
@@ -64,9 +66,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       if (error.blocked !== null) {
         return {
           steps: {
-            current: 4,
+            current: error.blocked.accountsSkipped === null ? 4 : 5,
             draftId: error.blocked.draftId,
             instrumentsSkipped: error.blocked.instrumentsSkipped,
+            accountsSkipped: error.blocked.accountsSkipped,
           } satisfies UploadStepsData,
           diff: null,
           blocked: error.blocked,
@@ -702,6 +705,11 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                 type="hidden"
                 name={`baselineSetId-${section.accountId}`}
                 value={section.baselineSetId ?? ""}
+              />
+              <input
+                type="hidden"
+                name={`appendWatermark-${section.accountId}`}
+                value={section.appendWatermark ?? ""}
               />
               <FiledBehindConfirmation
                 section={section}

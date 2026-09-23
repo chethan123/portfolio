@@ -59,10 +59,12 @@ export type RoutingProblem = {
 export type RoutedStatement = {
   accounts: RoutedAccount[]; // ascending id: the commit's lock order
   problems: RoutingProblem[];
+  // Numbers no account records, first-line order: the accounts step's questions, answered or not.
+  unknownNumbers: string[];
 };
 
 // Decision 15: exact once trimmed. Settings trims on write; not relied on.
-function recorded(account: RoutableAccount): string | null {
+export function recordedNumber(account: RoutableAccount): string | null {
   const number = account.externalAccountNumber?.trim() ?? "";
   return number === "" ? null : number;
 }
@@ -98,7 +100,7 @@ export function routeStatement(
 
   const openByNumber = new Map(
     open.flatMap((account) => {
-      const number = recorded(account);
+      const number = recordedNumber(account);
       return number === null ? [] : [[number, account] as const];
     }),
   );
@@ -106,6 +108,7 @@ export function routeStatement(
   // Recorded number first, then answer (decision 2).
   const routes: Array<{ number: string; account: OpenAccount; answered: boolean }> = [];
   const answeredNumbers: Array<{ number: string; row: number; accountId: string }> = [];
+  const unknownNumbers: string[] = [];
   let skippedNumbers = 0;
 
   for (const [number, row] of firstRow) {
@@ -115,7 +118,7 @@ export function routeStatement(
       continue;
     }
 
-    const closedHolders = closed.filter((account) => recorded(account) === number);
+    const closedHolders = closed.filter((account) => recordedNumber(account) === number);
     for (const account of closedHolders) {
       problems.push({
         kind: "closed-number",
@@ -129,6 +132,7 @@ export function routeStatement(
     }
     if (closedHolders.length > 0) continue;
 
+    unknownNumbers.push(number);
     const answer = answers.get(number);
     if (answer === undefined) {
       problems.push({
@@ -147,7 +151,7 @@ export function routeStatement(
 
   for (const { number, row, accountId } of answeredNumbers) {
     const account = open.find((candidate) => candidate.id === accountId);
-    const holds = account === undefined ? null : recorded(account);
+    const holds = account === undefined ? null : recordedNumber(account);
     let stale: string;
 
     if (account === undefined) {
@@ -222,5 +226,5 @@ export function routeStatement(
     });
   }
 
-  return { accounts, problems };
+  return { accounts, problems, unknownNumbers };
 }

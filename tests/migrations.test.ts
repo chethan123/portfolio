@@ -464,6 +464,56 @@ describe("the open-account number index", () => {
   });
 });
 
+describe("a draft's answers to account numbers", () => {
+  /** The constraint a statement violated, or null when it ran clean. */
+  async function violatedBy(statements: string): Promise<string | null> {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(`
+        insert into person (name) values ('Answer Owner');
+        insert into account (name, institution, kind, owner_id, tax_treatment)
+          select 'Answer ' || n, '', 'brokerage', id, 'taxable'
+          from person, (values (1), (2)) as numbered (n) where name = 'Answer Owner';
+        insert into upload_draft (account_id, filename, raw_file)
+          values (null, 'answers-one.csv', ''), (null, 'answers-two.csv', '');
+      `);
+      await client.query(statements);
+      return null;
+    } catch (error) {
+      return (error as { constraint?: string }).constraint ?? "unknown";
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
+  }
+
+  const draft = (file: string) => `(select id from upload_draft where filename = '${file}')`;
+  const account = (n: number) => `(select id from account where name = 'Answer ${n}')`;
+
+  it("refuses one account given two numbers in one draft", async () => {
+    expect(
+      await violatedBy(`
+        insert into upload_draft_account_answer (draft_id, account_number, account_id) values
+          (${draft("answers-one.csv")}, 'A-1', ${account(1)}),
+          (${draft("answers-one.csv")}, 'B-2', ${account(1)});
+      `),
+    ).toBe("upload_draft_account_answer_account_unique");
+  });
+
+  it("allows any number of skips in one draft, and one account answered in two drafts", async () => {
+    expect(
+      await violatedBy(`
+        insert into upload_draft_account_answer (draft_id, account_number, account_id) values
+          (${draft("answers-one.csv")}, 'A-1', null),
+          (${draft("answers-one.csv")}, 'B-2', null),
+          (${draft("answers-one.csv")}, 'C-3', ${account(1)}),
+          (${draft("answers-two.csv")}, 'C-3', ${account(1)});
+      `),
+    ).toBeNull();
+  });
+});
+
 describe("instrument aliases", () => {
   it("matches the raw string case-sensitively, exactly as the brokerage wrote it", async () => {
     // case-sensitive: 'CASH' and 'Cash' may point at different instruments

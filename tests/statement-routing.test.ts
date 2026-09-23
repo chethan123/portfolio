@@ -170,6 +170,17 @@ describe("an unknown number (decision 2)", () => {
     ]);
   });
 
+  it("lists every number no account records as a question, answered or not, leaving out a closed-only one", () => {
+    const routed = route(spreadsheetRows, spreadsheet, {
+      open: [unnumbered(individual), unnumbered(roth)],
+      closed: [{ id: "3", name: "Old mortgage", externalAccountNumber: "0045501234" }],
+      answers: [["Z98-765432", "100"]],
+    });
+
+    // The closed-only number is the file's refusal, not the accounts step's question.
+    expect(routed.unknownNumbers).toEqual(["Z12-345678", "Z98-765432"]);
+  });
+
   it("reports nothing to record when every number is skipped", () => {
     const routed = route(spreadsheetRows, spreadsheet, {
       open: [unnumbered(individual)],

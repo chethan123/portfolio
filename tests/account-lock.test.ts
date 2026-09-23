@@ -5,12 +5,14 @@
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { closeAccount, getAccount, withAccountLock } from "~/lib/accounts.server";
+import { closeAccount, getAccount, updateAccount, withAccountLock } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
 import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
 import {
+  RefusedUpload,
   StaleReviewError,
+  answerAccountNumbers,
   commitUpload,
   recordUpload,
   reviewForDraft,
@@ -585,15 +587,60 @@ async function plantSeveral(database: Kysely<Database>, tag: string): Promise<Pl
     hadFirstSightings: false,
   });
 
-  const review = await reviewForDraft(draft.id, today(), database);
+  return { lower, higher, x, draftId: draft.id, fields: await reviewedFields(database, draft.id) };
+}
+
+/** The review form's fields for a multi-account draft over accounts with nothing recorded yet. */
+async function reviewedFields(database: Kysely<Database>, draftId: string): Promise<CommitInput> {
+  const review = await reviewForDraft(draftId, today(), database);
   const fields: CommitInput = {
     asOf: today(),
     reviewedAsOf: review.asOfInput,
     reviewRevision: review.reviewRevision ?? "",
   };
   for (const section of review.accounts ?? []) fields[`baselineSetId-${section.accountId}`] = "";
+  return fields;
+}
 
-  return { lower, higher, x, draftId: draft.id, fields };
+type PlantedNumber = {
+  owner: SeededPerson;
+  number: string;
+  name: (part: string) => string;
+  // A multi-account draft whose one row names `number`, over the accounts as they stand.
+  draftNaming: () => Promise<string>;
+};
+
+async function plantNumber(database: Kysely<Database>, tag: string): Promise<PlantedNumber> {
+  const fixtures = makeFixtures(database);
+  const name = (part: string) => `${RACE_PREFIX}${tag}-${part}`;
+  const owner = await fixtures.seedPerson({ name: name("owner") });
+  const classification = await fixtures.seedClassification({ name: name("class") });
+  const x = await fixtures.seedInstrument({ symbol: name("X"), name: name("X"), classification });
+  await fixtures.seedInstrumentAlias({ instrument: x, rawString: x.name });
+  const number = name("N");
+
+  const draftNaming = async () => {
+    const draft = await fixtures.seedUploadDraft({
+      account: null,
+      filename: name("one-number.csv"),
+      bytes: new TextEncoder().encode(`Account,Symbol,Qty\n${number},${x.name},1\n`),
+      mapping: SEVERAL,
+      hadFirstSightings: false,
+    });
+    return draft.id;
+  };
+
+  return { owner, number, name, draftNaming };
+}
+
+/** Settings' write of an account number, every other field as it was. */
+async function renumber(trx: Kysely<Database>, accountId: string, number: string | null) {
+  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(accountId, trx);
+  await updateAccount(
+    accountId,
+    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
+    trx,
+  );
 }
 
 describe("a multi-account commit's locks", () => {
@@ -651,6 +698,79 @@ describe("a multi-account commit's locks", () => {
       expect(await latestQuantities(database, lower.id)).toEqual({ [x.id]: "11.00000000" });
       expect(await positionSetCount(database, lower.id)).toBe(2);
       expect(await latestQuantities(database, higher.id)).toEqual({ [x.id]: "2.00000000" });
+    },
+    20_000,
+  );
+
+  it(
+    "refuses rows the locked re-read routes to an account it holds no lock on, recording nothing",
+    async () => {
+      const database = await testDatabase();
+      const { owner, number, name, draftNaming } = await plantNumber(database, "number-returns");
+      const moved = await makeFixtures(database).seedAccount({ name: name("moved"), owner });
+      const home = await makeFixtures(database).seedAccount({
+        name: name("home"),
+        owner,
+        externalAccountNumber: number,
+      });
+      const draftId = await draftNaming();
+      const fields = await reviewedFields(database, draftId);
+
+      // After review the number moves, so the commit's unlocked read locks the other account...
+      await renumber(database, home.id, null);
+      await renumber(database, moved.id, number);
+
+      const refusal = await refusalOf(() =>
+        behindTheLock(
+          database,
+          // ...and moves home while the commit waits, reproducing the reviewed revision exactly.
+          async (trx) => {
+            await renumber(trx, moved.id, null);
+            await renumber(trx, home.id, number);
+          },
+          (trx) => recordUpload(draftId, fields, trx),
+        ),
+      );
+
+      expect(refusal).toBeInstanceOf(StaleReviewError);
+      expect(await positionSetCount(database, home.id)).toBe(0);
+      expect(await positionSetCount(database, moved.id)).toBe(0);
+    },
+    20_000,
+  );
+});
+
+describe("an answered account number at commit", () => {
+  it(
+    "refuses a number Settings records on another open account while the commit waits to write it, naming that account",
+    async () => {
+      const database = await testDatabase();
+      const { owner, number, name, draftNaming } = await plantNumber(database, "number-taken");
+      const answered = await makeFixtures(database).seedAccount({ name: name("answered"), owner });
+      const other = await makeFixtures(database).seedAccount({ name: name("other"), owner });
+      const draftId = await draftNaming();
+      await answerAccountNumbers(
+        draftId,
+        { "number-0": number, "accountId-0": answered.id },
+        database,
+      );
+      const fields = await reviewedFields(database, draftId);
+
+      const refusal = await refusalOf(() =>
+        behindTheLock(
+          database,
+          (trx) => renumber(trx, other.id, number),
+          (trx) => recordUpload(draftId, fields, trx),
+        ),
+      );
+
+      expect(refusal).toBeInstanceOf(RefusedUpload);
+      expect(refusal.fieldErrors.form).toBe(
+        `${answered.name}: account number "${number}" is already recorded on ${other.name}, ` +
+          `owned by ${owner.name}, so nothing was recorded. Choose again for it.`,
+      );
+      expect(await positionSetCount(database, answered.id)).toBe(0);
+      expect((await getAccount(answered.id, database)).externalAccountNumber).toBeNull();
     },
     20_000,
   );

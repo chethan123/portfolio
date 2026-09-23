@@ -6,13 +6,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { closeAccount } from "~/lib/accounts.server";
+import { closeAccount, getAccount, updateAccount } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { resolveAll } from "~/lib/instrument-resolution.server";
 import {
   DraftNotReadyError,
   RefusedUpload,
+  SKIP_NUMBER,
   StaleReviewError,
+  answerAccountNumbers,
+  parseDraft,
   recordUpload,
   rememberMapping,
   requireDraft,
@@ -25,6 +28,7 @@ import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { TestContext } from "./support/database.ts";
+import type { SeededAccount } from "./support/fixtures.ts";
 
 afterAll(closeTestDatabase);
 
@@ -111,8 +115,19 @@ function posted(review: UploadDiff, extra: CommitInput = {}): CommitInput {
   };
   for (const section of review.accounts ?? []) {
     fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
+    fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
   }
   return { ...fields, ...extra };
+}
+
+/** Settings recording `number` on an account (null clears it), every other field as it was. */
+async function renumber(db: TestContext["db"], account: SeededAccount, number: string | null) {
+  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
+  await updateAccount(
+    account.id,
+    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
+    db,
+  );
 }
 
 async function reviewAndRecord(
@@ -500,12 +515,19 @@ describe("recording a multi-account file", () => {
   );
 
   it(
-    "refuses a review drawn before another write landed on one account, recording nothing",
+    "refuses a review drawn before other writes landed, naming each account they landed on and recording nothing",
     withDatabase(async (ctx) => {
-      const { individual, roth, mortgage, loan } = await seedHousehold(ctx);
+      const { individual, roth, mortgage, vti, loan } = await seedHousehold(ctx);
       const draftId = await stage(ctx, spreadsheet());
       const review = await reviewForDraft(draftId, null, ctx.db);
 
+      // Behind the file's 2026-06-30, so Roth IRA's baseline moves; the mortgage's lands after its
+      // date, moving no baseline, only what the account reports now.
+      const behind = await ctx.seedPositionSet({
+        account: roth,
+        asOf: "2026-06-15",
+        holdings: [{ instrument: vti, quantity: "1" }],
+      });
       const typed = await ctx.seedPositionSet({
         account: mortgage,
         asOf: "2026-08-01",
@@ -516,9 +538,12 @@ describe("recording a multi-account file", () => {
       const refusal = await refusalOf(() => recordUpload(draftId, posted(review), ctx.db));
 
       expect(refusal).toBeInstanceOf(StaleReviewError);
-      expect(refusal.fieldErrors.form).toMatch(/statement or its account changed after this review/);
+      expect(refusal.fieldErrors.form).toBe(
+        "Figures were recorded on Roth IRA and Home mortgage after this review. Nothing was " +
+          "recorded — check them and record again.",
+      );
       expect(await setsOf(ctx.db, individual.id)).toEqual([]);
-      expect(await setsOf(ctx.db, roth.id)).toEqual([]);
+      expect((await setsOf(ctx.db, roth.id)).map((set) => set.id)).toEqual([behind.id]);
       expect((await setsOf(ctx.db, mortgage.id)).map((set) => set.id)).toEqual([typed.id]);
     }),
   );
@@ -566,6 +591,224 @@ describe("recording a multi-account file", () => {
           { instrument_id: vti.id, quantity, cost_basis_per_share: null },
         ]);
       }
+    }),
+  );
+});
+
+// Decision 2: a number no account records is asked about, answered by the draft, and written onto
+// its account only by the commit. A recorded number outranks an answer.
+describe("an account number no account records", () => {
+  const ROTH = "Z98-765432";
+  const MORTGAGE = "0045501234";
+
+  /** seedHousehold's, with only Individual brokerage still recording its number. */
+  async function seedUnnumbered(ctx: TestContext) {
+    const household = await seedHousehold(ctx);
+    await renumber(ctx.db, household.roth, null);
+    await renumber(ctx.db, household.mortgage, null);
+    return household;
+  }
+
+  const answers = (roth: string) => ({
+    "number-0": ROTH,
+    "accountId-0": roth,
+    "number-1": MORTGAGE,
+    "accountId-1": SKIP_NUMBER,
+  });
+
+  it(
+    "sends the draft to the accounts step listing each such number in first-line order, then routes the answered rows as answered",
+    withDatabase(async (ctx) => {
+      const { individual, roth } = await seedUnnumbered(ctx);
+      const draftId = await stage(ctx, spreadsheet());
+      const draft = await requireDraft(draftId, ctx.db);
+
+      expect(await parseDraft(draft, ctx.db)).toEqual({
+        step: "accounts",
+        unanswered: [ROTH, MORTGAGE],
+      });
+
+      expect(await answerAccountNumbers(draftId, answers(roth.id), ctx.db)).toEqual({
+        nextStep: "review",
+      });
+
+      const ready = await parseDraft(draft, ctx.db);
+      if (ready.step !== null) throw new Error(`Expected a ready draft, got ${ready.step}.`);
+      expect(ready.accountsSkipped).toBe(false);
+      expect(
+        ready.routed?.map((group) => [group.accountId, group.accountNumber, group.answered]),
+      ).toEqual([
+        [individual.id, "Z12-345678", false],
+        [roth.id, ROTH, true],
+      ]);
+    }),
+  );
+
+  it(
+    "skips the accounts step when every number is recorded",
+    withDatabase(async (ctx) => {
+      await seedHousehold(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+
+      expect(await rememberMapping(draft.id, MULTI, ctx.db)).toEqual({ nextStep: "review" });
+      expect(await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db)).toMatchObject({
+        step: null,
+        accountsSkipped: true,
+      });
+    }),
+  );
+
+  it(
+    "sends the draft back to the accounts step once an answered account records a number of its own",
+    withDatabase(async (ctx) => {
+      const { roth } = await seedUnnumbered(ctx);
+      const draftId = await stage(ctx, spreadsheet());
+      await answerAccountNumbers(draftId, answers(roth.id), ctx.db);
+
+      await renumber(ctx.db, roth, "R-1");
+
+      expect(await parseDraft(await requireDraft(draftId, ctx.db), ctx.db)).toEqual({
+        step: "accounts",
+        unanswered: [ROTH],
+      });
+    }),
+  );
+});
+
+describe("recording a file with answered account numbers", () => {
+  /** A-1 recorded on First; B-2, padded as a spreadsheet pads it, and C-3 recorded nowhere. */
+  const PADDED = new TextEncoder().encode(
+    "Account,Symbol,Qty,Basis\nA-1,VTI,1,\n  B-2 ,VTI,2,\nC-3,VTI,3,\n",
+  );
+
+  /** B-2 answered with Second; C-3 skipped, or answered with Third. */
+  async function seedAnswered(ctx: TestContext, { skipC3 = true }: { skipC3?: boolean } = {}) {
+    const first = await ctx.seedAccount({ name: "First", externalAccountNumber: "A-1" });
+    const second = await ctx.seedAccount({ name: "Second" });
+    const third = await ctx.seedAccount({ name: "Third" });
+    const vti = await ctx.seedInstrument({ symbol: "VTI", name: "VTI" });
+    await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+    const draftId = await stage(ctx, PADDED, INLINE);
+    await answerAccountNumbers(
+      draftId,
+      {
+        "number-0": "B-2",
+        "accountId-0": second.id,
+        "number-1": "C-3",
+        "accountId-1": skipC3 ? SKIP_NUMBER : third.id,
+      },
+      ctx.db,
+    );
+    return { first, second, third, vti, draftId };
+  }
+
+  async function numberOf(db: TestContext["db"], account: SeededAccount) {
+    return (await getAccount(account.id, db)).externalAccountNumber;
+  }
+
+  it(
+    "writes each answered number onto its account as trimmed, drops the draft's answers with it, and a re-upload then matches without asking",
+    withDatabase(async (ctx) => {
+      const { first, second, third, draftId } = await seedAnswered(ctx, { skipC3: false });
+
+      const written = await reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" });
+
+      expect(written.multiAccount ? written.recorded.map((set) => set.accountId) : []).toEqual([
+        first.id,
+        second.id,
+        third.id,
+      ]);
+      expect(await numberOf(ctx.db, second)).toBe("B-2");
+      expect(await numberOf(ctx.db, third)).toBe("C-3");
+      expect(await ctx.db.selectFrom("upload_draft_account_answer").selectAll().execute()).toEqual(
+        [],
+      );
+
+      const again = await ctx.seedUploadDraft({ account: null, bytes: PADDED });
+      expect(await rememberMapping(again.id, INLINE, ctx.db)).toEqual({ nextStep: "review" });
+      expect(await parseDraft(await requireDraft(again.id, ctx.db), ctx.db)).toMatchObject({
+        step: null,
+        accountsSkipped: true,
+      });
+    }),
+  );
+
+  it(
+    "records nothing for a skipped number's rows, writing no set and no number for them",
+    withDatabase(async (ctx) => {
+      const { first, second, third, vti, draftId } = await seedAnswered(ctx);
+
+      const written = await reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" });
+
+      expect(written.multiAccount ? written.recorded.map((set) => set.accountId) : []).toEqual([
+        first.id,
+        second.id,
+      ]);
+      const [secondSet] = await setsOf(ctx.db, second.id);
+      expect(await holdingsOf(ctx.db, secondSet?.id ?? "")).toEqual([
+        { instrument_id: vti.id, quantity: "2.00000000", cost_basis_per_share: null },
+      ]);
+      expect(await setsOf(ctx.db, third.id)).toEqual([]);
+      expect(await numberOf(ctx.db, third)).toBeNull();
+    }),
+  );
+
+  it(
+    "routes a number recorded on another account since it was answered to that account, writing nothing onto the answered one",
+    withDatabase(async (ctx) => {
+      const { second, third, draftId } = await seedAnswered(ctx);
+      await renumber(ctx.db, third, "B-2");
+
+      await reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" });
+
+      expect(await setsOf(ctx.db, second.id)).toEqual([]);
+      expect(await numberOf(ctx.db, second)).toBeNull();
+      expect(await setsOf(ctx.db, third.id)).toHaveLength(1);
+    }),
+  );
+
+  it(
+    "refuses an answered number longer than Settings accepts, rather than writing it, recording nothing",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ name: "Long" });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", name: "VTI" });
+      await ctx.seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const long = "L".repeat(65);
+      const draftId = await stage(
+        ctx,
+        new TextEncoder().encode(`Account,Symbol,Qty,Basis\n${long},VTI,1,\n`),
+        INLINE,
+      );
+      await answerAccountNumbers(draftId, { "number-0": long, "accountId-0": account.id }, ctx.db);
+
+      const refusal = await refusalOf(() =>
+        reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" }),
+      );
+
+      expect(refusal).toBeInstanceOf(RefusedUpload);
+      expect(refusal.fieldErrors.form).toBe(
+        "Long: An account number must be 64 characters or fewer. " +
+          `Account number "${long}" is longer, so nothing was recorded.`,
+      );
+      expect(await setsOf(ctx.db, account.id)).toEqual([]);
+      expect(await numberOf(ctx.db, account)).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses the commit as stale once the answered account records a number in Settings, recording nothing",
+    withDatabase(async (ctx) => {
+      const { first, second, draftId } = await seedAnswered(ctx);
+      const review = await reviewForDraft(draftId, "2026-06-30", ctx.db);
+
+      await renumber(ctx.db, second, "S-9");
+
+      const refused = recordUpload(draftId, posted(review, { asOf: "2026-06-30" }), ctx.db);
+      await expect(refused).rejects.toBeInstanceOf(DraftNotReadyError);
+      await expect(refused).rejects.toMatchObject({ step: "accounts", blocked: null });
+      expect(await setsOf(ctx.db, first.id)).toEqual([]);
+      expect(await setsOf(ctx.db, second.id)).toEqual([]);
+      expect(await numberOf(ctx.db, second)).toBe("S-9");
     }),
   );
 });
