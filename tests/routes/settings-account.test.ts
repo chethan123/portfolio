@@ -175,8 +175,9 @@ describe("the account number the save form was drawn with", () => {
 
       // Only a forged post carries one: a single-line box strips newlines on the way out, and
       // statement.ts strips them on the way in. A break that reached the column would be a
-      // spelling the upload's mismatch check reads as another account (#312), and 0015 cleans
-      // the rows written before the parser stripped them — this is the door they came through.
+      // spelling the upload's mismatch check reads as another account, and the multi-account
+      // router as no account at all (#312); 0018 cleans the rows written before the parser
+      // stripped them — this is the door they came through.
       const blank = await seedAccount({ name: "Fidelity Taxable", owner });
       await action(
         args(
@@ -190,8 +191,9 @@ describe("the account number the save form was drawn with", () => {
       expect((await getAccount(blank.id, db)).externalAccountNumber).toBe("Z-999");
 
       // The same break in the copy the form was drawn with: still what is recorded, so the
-      // compare-and-set matches and the edit lands rather than reading as a conflict.
-      const recorded = await seedAccount({ name: "Schwab", owner, externalAccountNumber: "Z-999" });
+      // compare-and-set matches and the edit lands rather than reading as a conflict. Its own
+      // number, not the one above: account_open_number_unique takes one open account a number.
+      const recorded = await seedAccount({ name: "Schwab", owner, externalAccountNumber: "Y-888" });
       const saved = await action(
         args(
           post(
@@ -199,7 +201,7 @@ describe("the account number the save form was drawn with", () => {
             saveForm(owner.id, {
               name: "Schwab",
               externalAccountNumber: "A-111",
-              fromExternalAccountNumber: "Z-9\n99",
+              fromExternalAccountNumber: "Y-8\n88",
             }),
           ),
           { accountId: recorded.id },

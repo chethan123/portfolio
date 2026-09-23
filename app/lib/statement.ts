@@ -364,7 +364,8 @@ export function parseStatement(
   // input element): a quoted cell may hold one, and a value that keeps it can never come back
   // from a form unchanged — the account number it records would read as an edit against its own
   // box, or as a conflict no retry resolves (#312). Both sides of the upload's mismatch check
-  // read this, so the comparison stays one of like with like.
+  // read this, so the comparison stays one of like with like; so does the router, which folds
+  // only surrounding whitespace (ADR-0015) and would otherwise match a wrapped number to nothing.
   const optionalCell = (cells: ReadonlyArray<string>, index: number | null): string | null => {
     const value = index === null ? "" : (cells[index] ?? "").replace(/[\r\n]/g, "").trim();
     return value === "" ? null : value;

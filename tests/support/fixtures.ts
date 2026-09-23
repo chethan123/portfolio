@@ -227,10 +227,20 @@ export async function renumber(
   account: Pick<SeededAccount, "id">,
   number: string | null,
 ): Promise<void> {
-  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
+  const { name, institution, kind, ownerId, taxTreatment, externalAccountNumber } =
+    await getAccount(account.id, db);
   await updateAccount(
     account.id,
-    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
+    {
+      name,
+      institution,
+      kind,
+      ownerId,
+      taxTreatment,
+      externalAccountNumber: number ?? "",
+      // The box as Settings draws it, from the number recorded now (#312).
+      fromExternalAccountNumber: externalAccountNumber ?? "",
+    },
     db,
   );
 }

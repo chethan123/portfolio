@@ -391,14 +391,26 @@ export async function updateAccount(
   if (written.numUpdatedRows === 0n) {
     // Re-read rather than quote `existing`: a 404 if the account went, the number now otherwise.
     const now = await getAccount(existing.id, db);
+    const reload =
+      " Nothing was saved. Reload the account and make the change against what is recorded now.";
     throw new ValidationError({
       // Under the box, not the form: the route hands fieldErrors straight to AccountFields.
+      // Two situations, two sentences: a page carrying no copy was never told apart from a stale
+      // one, and naming a change that did not happen sends the reader hunting for another writer.
       externalAccountNumber:
-        `${now.name}'s account number changed while this page was open — it is ` +
-        (now.externalAccountNumber === null
-          ? "not recorded any more"
-          : `now recorded as "${now.externalAccountNumber}"`) +
-        ". Nothing was saved. Reload the account and make the change against what is recorded now.",
+        input.fromExternalAccountNumber === undefined
+          ? `${now.name}'s account number is ` +
+            (now.externalAccountNumber === null
+              ? "not recorded"
+              : `recorded as "${now.externalAccountNumber}"`) +
+            ", and this page is too old to say which number its box was drawn with." +
+            reload
+          : `${now.name}'s account number changed while this page was open — it is ` +
+            (now.externalAccountNumber === null
+              ? "not recorded any more"
+              : `now recorded as "${now.externalAccountNumber}"`) +
+            "." +
+            reload,
     });
   }
 

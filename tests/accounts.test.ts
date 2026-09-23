@@ -295,7 +295,16 @@ describe("one open account per account number", () => {
       );
 
       const errors = await refusalOf(
-        updateAccount(roth.id, { ...validInput(alice.id), name: "Fidelity Roth" }, db),
+        updateAccount(
+          roth.id,
+          // Drawn with the number it records, as Settings draws it, so the index decides (#312).
+          {
+            ...validInput(alice.id),
+            name: "Fidelity Roth",
+            fromExternalAccountNumber: "Z12-999999",
+          },
+          db,
+        ),
       );
 
       expect(errors.externalAccountNumber).toMatch(
@@ -511,6 +520,32 @@ describe("an account number saved against the form's own copy", () => {
           "account, and clear the box again to remove the number.",
       );
       expect(errors.form).toBeUndefined();
+      expect((await getAccount(account.id, db)).externalAccountNumber).toBe("Z-999");
+    }),
+  );
+
+  it(
+    "refuses a number typed on a form that carries no copy without naming a change that did not happen",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({
+        name: "Fidelity Taxable",
+        owner: alice,
+        externalAccountNumber: "Z-999",
+      });
+
+      // Nothing moved under this page. It never said which number its box was drawn with, which
+      // reads the same as a save against a number recorded since — so the refusal says that,
+      // rather than sending the reader hunting for another writer.
+      const errors = await refusalOf(
+        updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "A-111" }, db),
+      );
+
+      expect(errors.externalAccountNumber).toBe(
+        `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
+          "to say which number its box was drawn with. Nothing was saved. Reload the account " +
+          "and make the change against what is recorded now.",
+      );
       expect((await getAccount(account.id, db)).externalAccountNumber).toBe("Z-999");
     }),
   );
