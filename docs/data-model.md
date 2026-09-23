@@ -38,7 +38,7 @@ travel the same code path as a share position, and net worth is one `SUM` with n
 Everything else supports those two spines: `person` and `account` say whose money it is,
 `instrument` / `classification` / `instrument_alias` say what a holding is and how to label and
 price it, `manual_networth` covers the years before the app existed, and `upload_draft` /
-`upload_draft_answer` / `column_mapping` are the ingest machinery.
+`upload_draft_answer` / `upload_draft_account_answer` / `column_mapping` are the ingest machinery.
 
 ## 2. Entity-relationship diagram
 
@@ -230,10 +230,13 @@ deliberately unsupported; a workplace plan holding both Traditional and Roth mon
 | `kind` | `text` | no | `brokerage` \| `401k` \| `ira` \| `bank` \| `liability` (CHECK) |
 | `owner_id` | `bigint` → `person` | no | the single owner; `ON DELETE RESTRICT` |
 | `tax_treatment` | `text` | no | `taxable` \| `tax_deferred` \| `tax_free` (CHECK) |
-| `external_account_number` | `text` | yes | captured from a CSV; a guard against committing to the wrong account, never a selector |
+| `external_account_number` | `text` | yes | captured from a CSV or typed in Settings; a guard against committing to the wrong account on an upload made into a chosen account, and the selector routing an upload of several (ADR-0015) |
 | `closed_at` | `timestamptz` | yes | non-null means closed |
 
-Indexes: `account_owner_id_idx` on `(owner_id)`.
+Indexes: `account_owner_id_idx` on `(owner_id)`; `account_open_number_unique`, unique on
+`(external_account_number)` where `closed_at is null and external_account_number is not null` — at
+most one open account may record a given number (ADR-0015), so a multi-account upload's row can
+trust it as a key.
 
 Rules worth knowing when reading a dump:
 
@@ -446,18 +449,19 @@ into any computed figure.
 | `date` | `date` | no | primary key |
 | `amount` | `numeric(20,4)` | no | net worth on that date, as typed |
 
-### 4.6 Ingest machinery: `upload_draft`, `upload_draft_answer`, `column_mapping`
+### 4.6 Ingest machinery: `upload_draft`, `upload_draft_answer`, `upload_draft_account_answer`, `column_mapping`
 
 **`upload_draft`** is the staging row behind an in-progress statement upload. The upload flow is a
 sequence of URLs with no client state, so everything a step needs lives here: the bytes, the
-filename, and, as steps pass, the mapping. Drafts are scaffolding, not history: anything older
-than 24 hours is swept at the start of the next upload, and deleting an account cascades its drafts
-away (unlike `position_set`, which restricts).
+filename, and, as steps pass, the mapping. A null `account_id` is the multi-account draft (spec 0023,
+ADR-0015): no account was chosen, and every row is instead routed later by its own account number.
+Drafts are scaffolding, not history: anything older than 24 hours is swept at the start of the next
+upload, and deleting an account cascades its drafts away (unlike `position_set`, which restricts).
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
 | `id` | `bigint` identity | no | primary key |
-| `account_id` | `bigint` → `account` | no | `ON DELETE CASCADE` |
+| `account_id` | `bigint` → `account` | yes | `ON DELETE CASCADE`; null is the multi-account draft |
 | `filename` | `text` | no | as uploaded |
 | `raw_file` | `bytea` | no | the CSV bytes; not null here because a draft *is* a file, where a manual `position_set` has none |
 | `as_of_date` | `date` | yes | reserved for a resume-the-date flow; nothing writes or reads it yet |
@@ -482,18 +486,41 @@ a wrong match made in an upload nobody finished from resolving the next upload s
 
 Index: `upload_draft_answer_instrument_id_idx`.
 
+**`upload_draft_account_answer`** is a multi-account draft's own answers to the account numbers no
+open account records, one row per number the accounts step asked about, read by that draft alone.
+A null `account_id` is a skip: that number's rows are left out of the commit. The commit writes each
+answered number onto its account, trimmed, before deleting the draft, which cascades the rest away —
+the same lifecycle `upload_draft_answer` follows, for the same reason
+([ADR-0013](adr/0013-a-first-sighting-answer-is-the-drafts-until-recorded.md)'s pattern; spec 0023
+decision 2). A recorded number always outranks an answer.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `draft_id` | `bigint` → `upload_draft` | no | half the primary key; `ON DELETE CASCADE` |
+| `account_number` | `text collate "C"` | no | the other half; as the file wrote it, trimmed |
+| `account_id` | `bigint` → `account` | yes | `ON DELETE CASCADE`; null is a skip |
+
+Constraint: `upload_draft_account_answer_account_unique`, unique `(draft_id, account_id)` where
+`account_id is not null` — one account takes at most one number per draft; any number of rows may
+skip.
+
 **`column_mapping`** is a saved CSV column mapping per institution and header shape, which is how a
 new institution costs zero code: the first upload maps its columns in a UI, the header row is
-fingerprinted, and the mapping auto-applies thereafter (DESIGN.md §5.3).
+fingerprinted, and the mapping auto-applies thereafter (DESIGN.md §5.3). A null `institution` is the
+multi-account scope (spec 0023 decision 4): a mapping saved by header alone, since no one institution
+owns a file naming several accounts.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
 | `id` | `bigint` identity | no | primary key |
-| `institution` | `text` | no | unique with fingerprint |
+| `institution` | `text` | yes | unique with fingerprint; null is the multi-account scope |
 | `header_fingerprint` | `text` | no | fingerprint of the CSV header row |
 | `mapping` | `jsonb` | no | which CSV column feeds which field |
 
-Constraint: `column_mapping_one_per_fingerprint`, unique `(institution, header_fingerprint)`.
+Constraints: `column_mapping_institution_fingerprint_unique`, unique `(institution,
+header_fingerprint)` where `institution is not null`; `column_mapping_multi_account_fingerprint_unique`,
+unique `(header_fingerprint)` where `institution is null` — the two scopes can never find or
+overwrite each other's mapping for the same header.
 
 ### 4.7 Settings and bookkeeping: `app_setting`, `schema_migrations`
 

@@ -108,7 +108,9 @@ A statement is rejected outright, rather than partly imported, when it cannot be
   text.** The message names the line and populated columns. If the instrument is in another column,
   change the mapping. If the source row is wrong, edit the CSV outside Portfolio and start a new
   upload; an existing draft keeps its original file.
-- **Rows disagree about the account number.** Export one account per file; commit refuses mixed numbers.
+- **Rows disagree about the account number.** A single-account upload describes one account; export
+  one account per file, or upload it as **Several accounts (the file has an account-number column)**
+  instead, which routes each row by its own number.
 - **Quantity multiplied by price, per-share basis, or dividend rate exceeds the money field's limit.**
   Check the named row's quantity and basis mapping; commit refuses amounts it cannot store.
 - **The statement dates itself before 1970-01-01.** That is the earliest date this application can

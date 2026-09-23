@@ -50,7 +50,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0020](0020-the-lock-hardened.md) | The lock hardened before its first household: the launch review's conditions as tickets — the open redirect closed, the wiring pinned, one live grant per browser, registration narrowed, the family guide made true (implemented) |
 | [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (implemented) |
 | [0022](0022-chart-grain.md) | A chart range of at most 92 days drawn at a grain from the observation log, on a per-day axis (ADR-0014) |
-| [0023](0023-multi-account-upload.md) | One file covering several accounts, each row routed by its account number; the number becomes the selector there and stays the guard elsewhere (ADR-0015; proposed) |
+| [0023](0023-multi-account-upload.md) | One file covering several accounts, each row routed by its account number; the number becomes the selector there and stays the guard elsewhere (ADR-0015; implemented) |
 
 ## The ticket directories
 
