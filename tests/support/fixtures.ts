@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Pool, PoolClient } from "pg";
 
+import { getAccount, updateAccount } from "~/lib/accounts.server";
 import type { Database } from "~/lib/db.server";
 import { joinTransports } from "~/lib/lock";
 import type { BackfillOutcome } from "~/lib/prices.server";
@@ -18,7 +19,7 @@ export type SeededAccount = { id: string; name: string; ownerId: string };
 export type SeededClassification = { id: string; name: string; assetClass: AssetClass };
 export type SeededInstrument = { id: string; symbol: string | null; name: string };
 export type SeededPositionSet = { id: string; accountId: string; asOf: string };
-export type SeededUploadDraft = { id: string; accountId: string };
+export type SeededUploadDraft = { id: string; accountId: string | null };
 export type SeededPasskey = { credentialId: string; label: string };
 export type SeededUnlockGrant = { id: string; passkeyId: string };
 
@@ -77,7 +78,8 @@ export type Fixtures = {
 
   /** Bypasses createDraft: it refuses closed accounts and sweeps as a side effect, which would eat rows a sweep test just planted. */
   seedUploadDraft(options: {
-    account: SeededAccount;
+    /** null seeds a multi-account draft (spec 0023) — no account chosen yet. */
+    account: SeededAccount | null;
     filename?: string;
     bytes?: Uint8Array;
     /** Planted directly, as rememberMapping leaves it — for a draft that must be review-ready without that step's column_mapping row. */
@@ -86,6 +88,13 @@ export type Fixtures = {
     /** What the 24h sweep reads — backdate a draft through this. */
     createdAt?: Date | string;
   }): Promise<SeededUploadDraft>;
+
+  /** Bypasses answerAccountNumbers, for an answer it refuses — what the commit still guards. */
+  seedDraftAccountAnswer(options: {
+    draftId: string;
+    accountNumber: string;
+    account: SeededAccount;
+  }): Promise<void>;
 
   seedQuote(options: {
     instrument: SeededInstrument;
@@ -203,11 +212,27 @@ export async function clearRaces(db: Kysely<Database>): Promise<void> {
 
   // holding and upload_draft cascade; an alias onto the seeded USD row has no instrument to cascade from.
   await db.deleteFrom("position_set").where("account_id", "in", accounts).execute();
+  // A multi-account draft names no account to cascade from.
+  await db.deleteFrom("upload_draft").where("filename", "like", pattern).execute();
   await db.deleteFrom("account").where("name", "like", pattern).execute();
   await db.deleteFrom("instrument_alias").where("raw_string", "like", pattern).execute();
   await db.deleteFrom("instrument").where("name", "like", pattern).execute();
   await db.deleteFrom("classification").where("name", "like", pattern).execute();
   await db.deleteFrom("person").where("name", "like", pattern).execute();
+}
+
+/** Settings' write of an account number (null clears it), every other field as it was: through updateAccount, so its trim and account_open_number_unique apply. */
+export async function renumber(
+  db: Kysely<Database>,
+  account: Pick<SeededAccount, "id">,
+  number: string | null,
+): Promise<void> {
+  const { name, institution, kind, ownerId, taxTreatment } = await getAccount(account.id, db);
+  await updateAccount(
+    account.id,
+    { name, institution, kind, ownerId, taxTreatment, externalAccountNumber: number ?? "" },
+    db,
+  );
 }
 
 export function makeFixtures(db: Kysely<Database>): Fixtures {
@@ -341,7 +366,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     const row = await db
       .insertInto("upload_draft")
       .values({
-        account_id: account.id,
+        account_id: account === null ? null : account.id,
         filename,
         raw_file: Buffer.from(bytes),
         ...(mapping === undefined ? {} : { mapping: JSON.stringify(mapping) }),
@@ -351,7 +376,18 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .returning("id")
       .executeTakeFirstOrThrow();
 
-    return { id: row.id, accountId: account.id };
+    return { id: row.id, accountId: account === null ? null : account.id };
+  };
+
+  const seedDraftAccountAnswer: Fixtures["seedDraftAccountAnswer"] = async ({
+    draftId,
+    accountNumber,
+    account,
+  }) => {
+    await db
+      .insertInto("upload_draft_account_answer")
+      .values({ draft_id: draftId, account_number: accountNumber, account_id: account.id })
+      .execute();
   };
 
   const seedQuote: Fixtures["seedQuote"] = async ({
@@ -528,6 +564,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedInstrumentAlias,
     seedPositionSet,
     seedUploadDraft,
+    seedDraftAccountAnswer,
     seedQuote,
     seedDailyClose,
     seedObservation,

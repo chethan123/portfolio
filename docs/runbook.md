@@ -2,9 +2,10 @@
 
 [`operating.md`](operating.md) is organised by topic and is written to be read when nothing is
 wrong. This file is organised by symptom and is written to be read at 2am. It carries no
-explanation on purpose: every entry is the symptom, how to confirm it, what to do, and a link to
-the section of `operating.md` that says why. When you want the reasoning, follow the link. It is
-not repeated here, so it cannot drift from here.
+explanation on purpose: every entry is the symptom, how to confirm it, what to do, and a link to the
+section of `operating.md` — or, for a restore, of [`restoring-a-dump.md`](restoring-a-dump.md) —
+that says why. When you want the reasoning, follow the link. It is not repeated here, so it cannot
+drift from here.
 
 Start here whatever the symptom is:
 
@@ -275,12 +276,12 @@ running image does not carry.
 **Do.** One of two, and only these two:
 
 - Go forward again to the image whose migrations match the ledger.
-- Restore the backup taken before the upgrade, on the older image. See
-  [I need to restore from a backup](#i-need-to-restore-from-a-backup).
+- Restore the dump taken before the upgrade, on the older image. See
+  [I need to restore from a dump](#i-need-to-restore-from-a-dump).
 
 Editing the ledger is not a third option.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -803,30 +804,65 @@ Why: [Environment variables](operating.md#environment-variables), [Backups](oper
 
 ---
 
-## I need to restore from a backup
+## I need to restore from a dump
 
-The procedure is in [Restoring](operating.md#restoring). Run it from there rather than from here.
-This entry lists only what people get wrong.
+The procedure is [`restoring-a-dump.md`](restoring-a-dump.md). Run it from there rather than from
+here. This entry lists only what people get wrong.
 
-- **Stop `app` first.** The in-process price poller holds a connection, and `dropdb` fails while it
-  does. `worker` may keep running. It holds no database connection of its own, and nothing about
-  the restore reaches it, so there is no `stop worker` line to add.
-- **Keep `--exit-on-error --single-transaction` on `pg_restore`.** Without both, it continues past
-  failures and leaves a half-old, half-new schema, which is the thing the restore is avoiding.
-- **The site answers `502` for the whole window.** `caddy` stays up and retries its upstream. That
-  is the restore working, not a second fault.
-- **Check the dump before you trust it.** `pg_dump ... > file` creates the file even when it fails,
-  so a truncated dump looks exactly like a backup. Check the exit status, and:
-
-  ```sh
-  docker compose exec -T db pg_restore --list < portfolio-2026-08-23.dump | head
-  ```
-
+- **`dump` comes down with `app`, and both go back up by name.** `docker compose start app` alone
+  leaves the dumper stopped for good. `worker` stays up; there is no `stop worker` line to add.
+- **A `dropdb` that goes through is not proof you stopped `app`.** It refuses only while a
+  connection happens to be open, and the app's pool closes and reopens one around its own
+  healthcheck.
+- **Keep `--exit-on-error --single-transaction` on `pg_restore`.** Without both it continues past
+  failures and leaves a half-old, half-new schema.
+- **The site answers `502` for the whole window.** That is the restore working, not a second fault.
+- **`pg_restore --list` is not the check.** It reads only the table of contents and passes an
+  archive truncated anywhere after it. Both commands
+  [Step 2](restoring-a-dump.md#step-2-prove-the-archive-before-you-trust-it) gives are the check,
+  and running one of the two is not running it.
 - **On a fresh machine, bring up `db` alone first** with `docker compose up -d db`, so `app` does
   not create and migrate an empty schema you are about to drop.
-- **A dump from an older release is fine.** On start, `app` applies the migrations the dump predates.
+- **An archive from an older release is fine.** On start, `app` applies the migrations it predates.
+- **If you stepped back to a much smaller database, the next dump is refused** at stage `shrink` and
+  the healthcheck stays green while it happens. See [My dumps have stopped](#my-dumps-have-stopped).
 
-Why: [Restoring](operating.md#restoring), [Backups](operating.md#backups).
+Why: [`restoring-a-dump.md`](restoring-a-dump.md), [Backups](operating.md#backups).
+
+---
+
+## My dumps have stopped
+
+**Confirm.** In this order — the markers answer it more often than the log does.
+
+```sh
+docker compose ps -a | grep dump
+cat volumes/dumps/last-attempt.json
+cat volumes/dumps/last-error.json
+docker compose logs --tail=50 dump
+```
+
+- `Exited (0)` is `DUMP_ENABLED=false`. A plain `docker compose ps` hides it, which is why this
+  reads `ps -a`.
+- A crash loop is a bad knob, and the log's last line names the variable.
+- `last-attempt.json`'s `outcome` is the answer. `last-error.json` outlives a later success, so read
+  its `failed_at` against the attempt marker before believing it.
+- `healthy` is not evidence. That check is the age of the newest archive and grants 30 hours.
+
+**Do.** `last-error.json`'s `stage` names the fault, and every one it can carry is below:
+
+- `space` — free disk, shorten `DUMP_KEEP_DAYS`, or set `DUMP_COMPRESS` to `6`. This one does not
+  retry on its own.
+- `shrink` — expected after a restore that stepped back; otherwise stop and find out what shrank.
+  To accept it: `rm volumes/dumps/last-success.json`, then `docker compose restart dump`.
+- `database`, `pg_dump` — `db` was unreachable or refused; the message carries Postgres's own.
+- `verify`, `size` — the archive did not decode whole, or could not be measured. Nothing was
+  published. A repeat is the disk.
+- `publish` — the archive was written but could not be renamed, hashed or recorded. Check
+  `./volumes/dumps` is still writable by `DUMP_UID`.
+
+Why: [Backups](operating.md#backups), [`restoring-a-dump.md`](restoring-a-dump.md#after-any-restore),
+[ADR-0009](adr/0009-the-stack-takes-dumps-not-backups.md).
 
 ---
 
@@ -890,9 +926,9 @@ Change the image tag in `compose.yaml`, bring up `db` alone, and restore into it
 docker compose up -d db
 ```
 
-Then follow [Restoring](operating.md#restoring), and start the rest.
+Then follow [`restoring-a-dump.md`](restoring-a-dump.md), and start the rest.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -918,7 +954,7 @@ that command: it drops the volume record and leaves the directory standing.
 `scripts/smoke-test.sh` still is one. It empties that directory itself, at both ends of a run.
 
 **Do.** If the cluster is gone, restore the most recent dump:
-[I need to restore from a backup](#i-need-to-restore-from-a-backup). If it is not gone, nothing here
+[I need to restore from a dump](#i-need-to-restore-from-a-dump). If it is not gone, nothing here
 needs a repair. Find the filter. The directory is `0700` uid 70, so ask Postgres what is in it
 rather than your own shell:
 
@@ -927,7 +963,7 @@ ls -ld volumes/db/data
 docker compose exec db ls /var/lib/postgresql/data | head
 ```
 
-Why: [Backups](operating.md#backups), [Restoring](operating.md#restoring).
+Why: [Backups](operating.md#backups), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -960,7 +996,7 @@ object, exactly as above. The repair is to make the ledger agree, or to restore 
 both together. There is no down path, no rollback command, and no checksums: editing an
 already-applied `.sql` file is a silent no-op forever.
 
-Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
+Why: [Upgrading](operating.md#upgrading), [`restoring-a-dump.md`](restoring-a-dump.md).
 
 ---
 
@@ -1002,4 +1038,5 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 ---
 
 For why any of this is the way it is, see [`operating.md`](operating.md). It covers installing,
-security, monitoring, backups, restoring, upgrading and growth, each as its own section.
+security, monitoring, backups, upgrading and growth, each as its own section. Restoring is the one
+procedure long enough to have its own document, [`restoring-a-dump.md`](restoring-a-dump.md).

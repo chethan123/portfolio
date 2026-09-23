@@ -6,9 +6,18 @@ import { sql } from "kysely";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
-import { createDraft, requireDraft } from "~/lib/uploads.server";
+import {
+  commitUpload,
+  createDraft,
+  diffForDraft,
+  recordUpload,
+  rememberMapping,
+  requireDraft,
+} from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+
+import type { StatementMapping } from "~/lib/statement";
 
 afterAll(closeTestDatabase);
 
@@ -155,6 +164,85 @@ describe("requireDraft", () => {
       // "abc" reaching Postgres would fail as a malformed bigint — a 500 wearing a bookmark
       await expect(requireDraft("abc", db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft("", db)).rejects.toThrow(NotFoundError);
+    }),
+  );
+});
+
+// The multi-account draft (spec 0023, "Loading a draft with no account").
+const NUMBERED = new TextEncoder().encode("Symbol,Quantity,Acct\nVTI,100,A-1\n");
+
+const SEVERAL: StatementMapping = {
+  headerRow: 0,
+  delimiter: ",",
+  columns: { instrument: "Symbol", quantity: "Quantity", accountNumber: "Acct" },
+  costBasisIs: "per_share",
+  owedAsPositive: false,
+  combineDuplicateRows: true,
+  multiAccount: true,
+};
+
+describe("a draft with no account", () => {
+  it(
+    "is created through the domain with a null account id, and requireDraft finds it unexpired with null account fields",
+    withDatabase(async ({ db }) => {
+      const draft = await createDraft({ accountId: null, filename: "multi.csv", bytes: CSV }, db);
+      expect(draft.accountId).toBeNull();
+
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({
+        id: draft.id,
+        accountId: null,
+        accountName: null,
+        ownerName: null,
+        accountNumberTail: null,
+      });
+    }),
+  );
+
+  it(
+    "is found by seedUploadDraft's account: null too, with the same null fields",
+    withDatabase(async ({ db, seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: CSV });
+      expect(draft.accountId).toBeNull();
+
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({
+        accountId: null,
+        accountName: null,
+        ownerName: null,
+      });
+    }),
+  );
+
+  it(
+    "is diffed once its columns are mapped, one section per account its numbers name, describing no account itself",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      const account = await seedAccount({ externalAccountNumber: "A-1" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
+
+      await expect(rememberMapping(draft.id, SEVERAL, db)).resolves.toEqual({ nextStep: "review" });
+
+      const diff = await diffForDraft(draft.id, db);
+      expect(diff).toMatchObject({ accountId: null, accountName: null, added: [] });
+      expect(diff.accounts?.map((section) => [section.accountId, section.added.length])).toEqual([
+        [account.id, 1],
+      ]);
+    }),
+  );
+
+  it(
+    "is recorded through recordUpload, never commitUpload's one account, while a gone draft stays a 404 for both",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      await seedAccount({ externalAccountNumber: "A-1" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
+      await rememberMapping(draft.id, SEVERAL, db);
+
+      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(NotFoundError);
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
+      await expect(commitUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
+      await expect(recordUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
     }),
   );
 });

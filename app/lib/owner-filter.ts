@@ -1,6 +1,7 @@
 // Owner filter (spec 0013, ADR-0008): household-wide account-owner selection carried in the URL,
 // never a cookie, so a pasted link reproduces the view. Canonical spelling must be a fixed point
 // of react-router's rebuild serialiser, not just the URL parser's — see toOwnerParam.
+import { compareIds } from "./database-id.ts";
 
 // bigint ids as strings — bigint doesn't survive Number() (server/db.ts).
 export type OwnerFilter = readonly string[];
@@ -72,16 +73,4 @@ function canonicalise(ids: readonly string[]): OwnerFilter {
 // ("000" -> "0"), matching no real id.
 function withoutLeadingZeros(id: string): string {
   return DIGITS.test(id) ? id.replace(/^0+(?=\d)/, "") : id;
-}
-
-// Never Number() (NaN breaks sort's total order and the redirect-loop guard). Digit ids first,
-// by length then code-unit compare — not localeCompare, whose ICU collation varies by deployment.
-function compareIds(a: string, b: string): number {
-  const aNumeric = DIGITS.test(a);
-  const bNumeric = DIGITS.test(b);
-
-  if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
-  if (aNumeric && a.length !== b.length) return a.length - b.length;
-
-  return a < b ? -1 : a > b ? 1 : 0;
 }

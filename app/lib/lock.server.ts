@@ -28,7 +28,12 @@ import type {
 
 import { getConfig } from "../../server/config.ts";
 import { readCookie } from "./cookies.ts";
-import { getDb, type Database } from "./db.server.ts";
+import {
+  getDb,
+  guardedAgainstConstraintViolation,
+  uniqueViolationConstraint,
+  type Database,
+} from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
 import { CHALLENGE_TTL_MS, IDLE_WINDOW_MS, LABEL_MAX_LENGTH, joinTransports, splitTransports } from "./lock.ts";
 
@@ -601,31 +606,6 @@ function toPasskey(row: PasskeyRow): Passkey {
     enrolledAt: row.enrolled_at,
     lastUsedAt: row.last_used_at,
   };
-}
-
-function uniqueViolationConstraint(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
-  return code === "23505" && typeof constraint === "string" ? constraint : undefined;
-}
-
-/** Savepoint so a caught violation does not leave the caller's transaction aborted. No-op outside one. */
-async function guardedAgainstConstraintViolation<T>(
-  db: Kysely<Database>,
-  body: () => Promise<T>,
-): Promise<T> {
-  if (!db.isTransaction) return body();
-
-  const savepoint = `lock_${randomBytes(4).toString("hex")}`;
-  await sql`savepoint ${sql.id(savepoint)}`.execute(db);
-  try {
-    const result = await body();
-    await sql`release savepoint ${sql.id(savepoint)}`.execute(db);
-    return result;
-  } catch (error) {
-    await sql`rollback to savepoint ${sql.id(savepoint)}`.execute(db);
-    throw error;
-  }
 }
 
 const BOOTSTRAP_TAKEN_MESSAGE =

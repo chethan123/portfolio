@@ -43,7 +43,14 @@ You do not have to tidy a file up first.
 Pick which account the statement describes, then the file. **Only open accounts are offered.** A
 closed account's history does not change, so a statement cannot land in one.
 
-The account you pick is the account the statement lands in. Nothing in the file selects it.
+When you pick an account, nothing in the file overrides it.
+
+**Or choose Several accounts (the file has an account-number column)**, for one export covering more
+than one account — a spreadsheet you keep yourself, or a brokerage's all-accounts download. Every
+row then routes to the open account whose recorded number matches it; a number no account records
+yet is asked about once, on a step of its own between columns and new instruments, and recording
+lands on a page listing every account the file changed rather than the one account page a
+single-account upload opens.
 
 ## The header row
 
@@ -81,9 +88,9 @@ where a cost basis is unknown (write `n/a`, never `0`, because a zero basis repo
 
 Three rules when filling it in:
 
-- **One file is one account.** The account is chosen on the upload screen, not by the file, and a
-  statement is a photograph of the whole account, so list *everything* that account holds, and
-  make a separate file for each account.
+- **This template is one account.** A statement is a photograph of the whole account, so list
+  *everything* that account holds, and copy the template again for another account — or, for a file
+  naming several accounts by number, upload it as **Several accounts** instead (above).
 - **Every row carries the same as-of date**, the day the figures are true for. Rows disagreeing
   refuse the file.
 - **Cost basis in the template is per share.** Map it and pick **Per share**; if you'd rather

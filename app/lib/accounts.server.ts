@@ -14,7 +14,14 @@ import {
   taxTreatmentValues,
 } from "./account-options.ts";
 import { currentStatement } from "./current-statement.server.ts";
-import { getDb, inTransaction, type Database } from "./db.server.ts";
+import { compareIds } from "./database-id.ts";
+import {
+  getDb,
+  guardedAgainstConstraintViolation,
+  inTransaction,
+  uniqueViolationConstraint,
+  type Database,
+} from "./db.server.ts";
 import {
   NotFoundError,
   ValidationError,
@@ -35,7 +42,8 @@ export type Account = {
   ownerId: string;
   ownerName: string;
   taxTreatment: TaxTreatment;
-  // Recorded from a statement; used by commit as a check against the wrong account, never a selector.
+  // A guard on a single-account upload, the selector on a multi-account one (ADR-0015); at most one
+  // open account records each (account_open_number_unique), trimmed on every write.
   externalAccountNumber: string | null;
   // timestamptz, not a calendar date — left as the driver returns it, not the date-as-string rule.
   closedAt: Date | null;
@@ -139,7 +147,7 @@ export async function getAccount(
 // the account takes, stalling createDraft and any out-of-app insert behind a commit in flight.
 // Bare row locked, then the account read, not one locked join: a join re-checked on being granted
 // keeps the person tuple its first scan pinned, so an owner change mid-wait 404'd the account (#332).
-// READ COMMITTED only: the re-read must see the writer ahead. Several accounts: lock ids in order.
+// READ COMMITTED only: the re-read must see the writer ahead. Several accounts: withAccountLocks.
 export async function withAccountLock<T>(
   accountId: string,
   db: Kysely<Database>,
@@ -162,6 +170,59 @@ export async function withAccountLock<T>(
   return inTransaction(db, locked);
 }
 
+// Several accounts in one transaction (spec 0023 "The commit"): each lock nested in the last, ids
+// ascending by compareIds, so two writers over overlapping accounts queue rather than deadlock.
+export async function withAccountLocks<T>(
+  accountIds: ReadonlyArray<string>,
+  db: Kysely<Database>,
+  body: (accounts: Account[], trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(accountIds)].sort(compareIds);
+
+  const nest = (held: Account[], trx: Kysely<Database>): Promise<T> => {
+    const next = ordered[held.length];
+    if (next === undefined) return body(held, trx);
+    return withAccountLock(next, trx, (account, inner) => nest([...held, account], inner));
+  };
+
+  return inTransaction(db, (trx) => nest([], trx));
+}
+
+// At most one open account per number (ADR-0015). The index decides, not a read first: Settings
+// takes no lock and a commit locks only its own account, so two writers could each pass a read.
+// Holder read after the violation, only to name it; may be gone again by then.
+export async function refusingDuplicateNumber<T>(
+  number: string | null,
+  db: Kysely<Database>,
+  write: () => Promise<T>,
+  refuse: (who: string) => Error,
+): Promise<T> {
+  try {
+    return await guardedAgainstConstraintViolation(db, write);
+  } catch (cause) {
+    if (number === null || uniqueViolationConstraint(cause) !== "account_open_number_unique") {
+      throw cause;
+    }
+    throw refuse((await numberHolder(number, db)) ?? "another open account");
+  }
+}
+
+// The open account recording `number`, as a refusal names it.
+export async function numberHolder(number: string, db: Kysely<Database>): Promise<string | null> {
+  const holder = await selectAccounts(db)
+    .where("account.external_account_number", "=", number)
+    .where("account.closed_at", "is", null)
+    .executeTakeFirst();
+  return holder === undefined ? null : `${holder.name}, owned by ${holder.owner_name}`;
+}
+
+const duplicateNumber = (who: string) =>
+  new ValidationError({
+    externalAccountNumber:
+      `This number is already recorded on ${who}. Only one open account can record a number, ` +
+      "since an upload can route rows by it. Clear it there first if it belongs here.",
+  });
+
 export async function createAccount(
   raw: unknown,
   db: Kysely<Database> = getDb(),
@@ -169,18 +230,24 @@ export async function createAccount(
   const input = parseInput(accountInput, raw);
   await requireOwner(input.ownerId, db);
 
-  const row = await db
-    .insertInto("account")
-    .values({
-      name: input.name,
-      institution: input.institution ?? "",
-      kind: input.kind,
-      owner_id: input.ownerId,
-      tax_treatment: input.taxTreatment,
-      external_account_number: input.externalAccountNumber,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
+  const row = await refusingDuplicateNumber(
+    input.externalAccountNumber,
+    db,
+    () =>
+      db
+        .insertInto("account")
+        .values({
+          name: input.name,
+          institution: input.institution ?? "",
+          kind: input.kind,
+          owner_id: input.ownerId,
+          tax_treatment: input.taxTreatment,
+          external_account_number: input.externalAccountNumber,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow(),
+    duplicateNumber,
+  );
 
   return getAccount(row.id, db);
 }
@@ -242,18 +309,24 @@ export async function updateAccount(
     }
   }
 
-  await db
-    .updateTable("account")
-    .set({
-      name: input.name,
-      institution: input.institution ?? "",
-      kind: input.kind,
-      owner_id: input.ownerId,
-      tax_treatment: input.taxTreatment,
-      external_account_number: input.externalAccountNumber,
-    })
-    .where("id", "=", existing.id)
-    .execute();
+  await refusingDuplicateNumber(
+    input.externalAccountNumber,
+    db,
+    () =>
+      db
+        .updateTable("account")
+        .set({
+          name: input.name,
+          institution: input.institution ?? "",
+          kind: input.kind,
+          owner_id: input.ownerId,
+          tax_treatment: input.taxTreatment,
+          external_account_number: input.externalAccountNumber,
+        })
+        .where("id", "=", existing.id)
+        .execute(),
+    duplicateNumber,
+  );
 
   return getAccount(existing.id, db);
 }

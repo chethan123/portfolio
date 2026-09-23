@@ -249,6 +249,11 @@ account already has one recorded, a disagreement refuses the commit — which is
 built first-class accounts to avoid, caught at the moment it would happen. When the account has none
 recorded, the file's value is captured on commit.
 
+**Reversed in part** by [0023](0023-multi-account-upload.md) and
+[ADR-0015](../adr/0015-an-account-number-selects-the-account-on-a-multi-account-upload.md): on an
+upload made without picking an account, the number is the selector, routing each row to the open
+account that records it. Everything above still holds for an upload into a chosen account.
+
 ### Uploads, and file size
 
 `MAX_UPLOAD_MB` joins `server/config.ts`, an integer defaulting to 10, minimum 1. A `Content-Length`
@@ -301,8 +306,12 @@ fingerprint matches an existing mapping.
 - **Settings → Instruments.** 0002's unbuilt UI — manual price entry for a CIT, alias editing,
   classification management as a screen. This slice creates instruments and classifications inline,
   where a first sighting forces the question, and nowhere else.
-- **One file covering several accounts.** §5.1's flow is per-account by construction. A household
-  export split across accounts is uploaded once per account.
+- ~~**One file covering several accounts.** §5.1's flow is per-account by construction. A household
+  export split across accounts is uploaded once per account.~~
+  **Reversed** by [0023](0023-multi-account-upload.md) and
+  [ADR-0015](../adr/0015-an-account-number-selects-the-account-on-a-multi-account-upload.md): a file
+  with an account-number column may cover any number of accounts, from any institutions, and is
+  recorded as one statement per account it names, in one transaction.
 - **Transactions, cash flow and realised gains.** §3's standing exclusion, unchanged.
 - **PDF and XLSX.** §5.3's answer is a hand-authored CSV in the app's template, which is just
   another saved mapping.

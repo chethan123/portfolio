@@ -10,7 +10,6 @@ import {
   GROUPINGS,
   applyFilters,
   availableFilters,
-  formatQuantity,
   groupHoldings,
   holdingNote,
   holdingYield,
@@ -866,22 +865,6 @@ describe("holdingYield", () => {
 
   it("reads a liability's two negatives as the rate it is charged at", () => {
     expect(holdingYield({ annualDividend: "-522.0000", value: "-14500.0000" })).toBe("0.036000");
-  });
-});
-
-describe("formatQuantity", () => {
-  it("trims the zeros scale-8 storage pads a share count with", () => {
-    expect(formatQuantity("145.23400000")).toBe("145.234");
-    expect(formatQuantity("1.00000000")).toBe("1");
-  });
-
-  it("groups thousands and uses the U+2212 minus, like every figure beside it", () => {
-    expect(formatQuantity("-14500.00000000")).toBe("−14,500");
-    expect(formatQuantity("1234567.00000000")).toBe("1,234,567");
-  });
-
-  it("has no negative zero", () => {
-    expect(formatQuantity("-0.00000000")).toBe("0");
   });
 });
 

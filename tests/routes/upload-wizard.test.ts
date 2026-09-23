@@ -2,11 +2,16 @@
 // no client state — "how far did this draft get" must read entirely off the row (parseDraft), which has no test of its
 // own; the matrix below pins it. Breaking this strands a reader rather than writing a wrong number. The one write-shaped
 // risk is the re-POST after commit: 404, never a second recording, never a forged account id in the link back.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { z } from "zod";
 
-import Columns, { loader as columnsLoader } from "../../app/routes/upload/columns.tsx";
+import Columns, {
+  action as columnsAction,
+  loader as columnsLoader,
+} from "../../app/routes/upload/columns.tsx";
 import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
 import Instruments, {
   loader as instrumentsLoader,
@@ -15,9 +20,19 @@ import Review, {
   action as reviewAction,
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
+import Done, { loader as doneLoader } from "../../app/routes/upload/done.tsx";
+import { closeAccount } from "~/lib/accounts.server";
+import { changeAlias } from "~/lib/instrument-aliases.server";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
-import { STALE_REVIEW_MESSAGE, rememberMapping, requireDraft } from "~/lib/uploads.server";
+import {
+  SKIP_NUMBER,
+  STALE_REVIEW_MESSAGE,
+  answerAccountNumbers,
+  parseDraft,
+  rememberMapping,
+  requireDraft,
+} from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -26,6 +41,7 @@ import { args, get, post, redirectTo } from "../support/routes.ts";
 import type { TestContext } from "../support/database.ts";
 import type { SeededAccount, SeededInstrument } from "../support/fixtures.ts";
 import type { StatementMapping } from "~/lib/statement";
+import type { UploadDiff } from "~/lib/uploads.server";
 
 afterAll(closeTestDatabase);
 
@@ -199,6 +215,62 @@ describe("a draft's bare address", () => {
       expect(renderRoute(Review, `/upload/${draftId}/review?stale=true`, stalePage)).toContain(
         STALE_REVIEW_MESSAGE,
       );
+    }),
+  );
+});
+
+// The multi-account draft (spec 0023, "Loading a draft with no account").
+describe("a draft with no account", () => {
+  it(
+    "sends a freshly created multi-account draft's bare address to columns, same as a single-account one",
+    withDatabase(async ({ seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: encode(CSV) });
+
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+    }),
+  );
+
+  it(
+    "renders the columns step with 'several accounts' in place of one account's name",
+    withDatabase(async ({ seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: encode(CSV) });
+
+      const page = await columnsLoader(
+        args(get(`/upload/${draft.id}/columns`), { draftId: draft.id }),
+      );
+      if (page instanceof Response) throw new Error(`Expected Columns, got ${page.status}.`);
+      expect(page.draft.accountName).toBeNull();
+
+      const markup = renderRoute(Columns, `/upload/${draft.id}/columns`, page);
+      expect(markup).toContain("several accounts");
+    }),
+  );
+
+  it(
+    "bounces a draft carrying a single-account mapping back to columns, as though it had none",
+    withDatabase(async (ctx) => {
+      const instrument = await ctx.seedInstrument({
+        symbol: "VTI",
+        name: "Vanguard Total Stock",
+      });
+      await ctx.seedInstrumentAlias({ instrument, rawString: "VTI" });
+      // Planted: rememberMapping refuses a mapping of the other kind, so only a hand edit leaves
+      // one. Fully resolved, so parseDraft would say `step: null` were the draft single-account.
+      const draft = await ctx.seedUploadDraft({
+        account: null,
+        bytes: encode(CSV),
+        mapping: MAPPING,
+      });
+
+      expect(
+        await redirectTo(() =>
+          reviewLoader(args(get(`/upload/${draft.id}/review`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
     }),
   );
 });
@@ -1120,6 +1192,396 @@ describe("a review re-posted after its statement landed", () => {
         ),
       );
       expect(forged.data.accountId).toBeNull();
+    }),
+  );
+});
+
+// Spec 0023 "Routing": every step after columns reads the router's groups, re-run on each read,
+// so where a multi-account draft resumes, and what blocks it, follows from the accounts as they are.
+describe("a multi-account draft routed by account number", () => {
+  const spreadsheet = () =>
+    readFileSync(
+      fileURLToPath(new URL("../fixtures/statements/multi-account.csv", import.meta.url)),
+    );
+
+  /** Columns as the screen posts them for multi-account.csv. */
+  function mapColumns(draftId: string) {
+    return redirectTo(() =>
+      columnsAction(
+        args(
+          post(`/upload/${draftId}/columns`, {
+            headerRow: "0",
+            instrument: "Holding",
+            name: "Description",
+            quantity: "Quantity",
+            costBasis: "Cost Basis",
+            asOf: "As Of",
+            accountNumber: "Account Number",
+            costBasisIs: "per_share",
+          }),
+          { draftId },
+        ),
+      ),
+    );
+  }
+
+  /** The three open accounts the file names, each recording its number, in ascending id. */
+  async function seedAccounts(ctx: Pick<TestContext, "seedAccount">) {
+    return [
+      await ctx.seedAccount({ name: "Individual brokerage", externalAccountNumber: "Z12-345678" }),
+      await ctx.seedAccount({ name: "Roth IRA", kind: "ira", externalAccountNumber: "Z98-765432" }),
+      await ctx.seedAccount({
+        name: "Home mortgage",
+        kind: "liability",
+        externalAccountNumber: "0045501234",
+      }),
+    ] as const;
+  }
+
+  async function resolveEveryString(
+    ctx: Pick<TestContext, "seedInstrument" | "seedInstrumentAlias">,
+  ) {
+    const resolve = async (rawString: string) => {
+      const instrument = await ctx.seedInstrument({ name: rawString });
+      await ctx.seedInstrumentAlias({ instrument, rawString });
+      return instrument;
+    };
+    return {
+      vti: await resolve("VTI"),
+      aapl: await resolve("AAPL"),
+      fxaix: await resolve("FXAIX"),
+      loan: await resolve("Home mortgage"),
+    };
+  }
+
+  it(
+    "resumes at instruments while a string is new, asking once per string with its units summed across accounts, and carries each account's group",
+    withDatabase(async (ctx) => {
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/instruments`);
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/instruments`);
+
+      const page = await instrumentsLoader(
+        args(get(`/upload/${draft.id}/instruments`), { draftId: draft.id }),
+      );
+      if (page instanceof Response) throw new Error(`Expected Instruments, got ${page.status}.`);
+      // VTI is 120 in one account and 40.5 in another: one question, all 160.5 units.
+      expect(page.screen.unresolved.map((item) => [item.raw, item.quantity])).toEqual([
+        ["VTI", "160.50000000"],
+        ["AAPL", "50.000"],
+        ["FXAIX", "84.512"],
+        ["Home mortgage", "312450.00"],
+      ]);
+      expect(renderRoute(Instruments, `/upload/${draft.id}/instruments`, page)).toContain(
+        "Home mortgage",
+      );
+
+      const parsed = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
+      if (parsed.step !== "instruments") throw new Error(`Expected instruments, got ${parsed.step}.`);
+      expect(
+        parsed.routed?.map((group) => [
+          group.accountId,
+          group.asOfDate,
+          group.positions.map((position) => position.instrument),
+        ]),
+      ).toEqual([
+        [individual.id, "2026-07-31", ["VTI", "AAPL"]],
+        [roth.id, "2026-06-30", ["VTI", "FXAIX"]],
+        [mortgage.id, "2026-07-15", ["Home mortgage"]],
+      ]);
+    }),
+  );
+
+  it(
+    "sends a fully resolved file on to review, which draws a section per account, while a single-account draft carries no groups",
+    withDatabase(async (ctx) => {
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/review`);
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/review`);
+
+      const page = await reviewPage(draft.id);
+      expect(page.diff.accounts?.map((section) => section.accountId)).toEqual([
+        individual.id,
+        roth.id,
+        mortgage.id,
+      ]);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page);
+      expect(markup).toContain("What this file changes");
+      expect(markup).toContain("3 ACCOUNTS");
+      for (const account of [individual, roth, mortgage]) {
+        expect(markup).toContain(account.name);
+        expect(markup).toContain(`name="baselineSetId-${account.id}"`);
+      }
+      expect(markup).toContain("The file dates this statement");
+      expect(markup).toContain("Record these statements");
+
+      const multi = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
+      expect(multi.step).toBeNull();
+      expect(multi.step === null ? multi.routed?.length : undefined).toBe(3);
+
+      // VTI is aliased above, so this single-account draft resolves too.
+      const { draftId } = await stageDraft(ctx, { resolved: false });
+      const single = await parseDraft(await requireDraft(draftId, ctx.db), ctx.db);
+      expect(single).toMatchObject({ step: null, routed: null });
+    }),
+  );
+
+  it(
+    "draws an account the file leaves unchanged as its unchanged count alone, with no empty table",
+    withDatabase(async (ctx) => {
+      const [, roth] = await seedAccounts(ctx);
+      const { vti, fxaix } = await resolveEveryString(ctx);
+      await ctx.seedPositionSet({
+        account: roth,
+        asOf: "2026-05-31",
+        holdings: [
+          { instrument: vti, quantity: "40.5", costBasisPerShare: "231.40" },
+          { instrument: fxaix, quantity: "84.512", costBasisPerShare: "151.33" },
+        ],
+      });
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, await reviewPage(draft.id));
+      const rothSection =
+        markup.split(`aria-labelledby="account-${roth.id}"`)[1]?.split("</section>")[0] ?? "";
+
+      // Named by its heading, owner and all: two accounts can share a name.
+      expect(rothSection).toContain(`<h3 class="panel-title" id="account-${roth.id}">`);
+
+      expect(rothSection).toContain("0 ADDED · 0 UPDATED · 0 REMOVED");
+      expect(rothSection).toContain(
+        '<span class="u-data">2</span> rows are unchanged and are not listed.',
+      );
+      expect(rothSection).not.toContain("<table");
+      // The other two accounts' first statements still list what they add.
+      expect(markup).toContain("<table");
+    }),
+  );
+
+  it(
+    "names a number skipped at the accounts step in review's intro, and nothing once it is given to an account",
+    withDatabase(async (ctx) => {
+      await ctx.seedAccount({ name: "Individual brokerage", externalAccountNumber: "Z12-345678" });
+      await ctx.seedAccount({ name: "Roth IRA", kind: "ira", externalAccountNumber: "Z98-765432" });
+      const mortgage = await ctx.seedAccount({ name: "Home mortgage", kind: "liability" });
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/accounts`);
+      const answer = (accountId: string) =>
+        answerAccountNumbers(
+          draft.id,
+          { "number-0": "0045501234", "accountId-0": accountId },
+          ctx.db,
+        );
+
+      await answer(SKIP_NUMBER);
+      const skipped = await reviewPage(draft.id);
+      expect(skipped.diff.skippedNumbers).toEqual(["0045501234"]);
+      expect(renderRoute(Review, `/upload/${draft.id}/review`, skipped)).toContain(
+        'The rows of account number <span class="u-data">0045501234</span> were skipped at the ' +
+          "accounts step, so they are not recorded.",
+      );
+
+      await answer(mortgage.id);
+      const given = await reviewPage(draft.id);
+      expect(given.diff.skippedNumbers).toEqual([]);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, given);
+      expect(markup).toContain("3 ACCOUNTS");
+      expect(markup).not.toContain("were skipped at the accounts step");
+    }),
+  );
+
+  it(
+    "blocks review with the router's refusal once an account the file names closes after mapping, naming it on review and on columns",
+    withDatabase(async (ctx) => {
+      const [, , mortgage] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/review`);
+
+      await closeAccount(mortgage.id, { confirmClose: "true" }, ctx.db);
+      const refusal = "is recorded on Home mortgage, which is closed";
+
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+
+      const page = await reviewOutcome(draft.id);
+      if (page.diff !== null) throw new Error("A draft naming a closed account rendered a diff.");
+      expect(page.blocked.accountId).toBeNull();
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page);
+      expect(markup).toContain("This statement cannot be reviewed yet");
+      expect(markup).toContain(refusal);
+      expect(markup).toContain("several accounts");
+      expect(markup).toContain("a column was chosen wrongly");
+      expect(markup).not.toContain("instrument is missing from the source row");
+      expect(markup).toContain('href="/upload"');
+
+      const columns = await columnsLoader(
+        args(get(`/upload/${draft.id}/columns`), { draftId: draft.id }),
+      );
+      expect(columns.savedProblems).toEqual([expect.stringContaining(refusal)]);
+      expect(columns.savedProblemFields).toEqual(["accountNumber"]);
+    }),
+  );
+
+  /** The review form's fields as the page posts them. */
+  function reviewForm(diff: UploadDiff): Record<string, string> {
+    const fields: Record<string, string> = {
+      accountId: "",
+      reviewedAsOf: diff.asOfInput,
+      reviewRevision: diff.reviewRevision ?? "",
+    };
+    for (const section of diff.accounts ?? []) {
+      fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
+      fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
+    }
+    return fields;
+  }
+
+  it(
+    "records a reviewed file from the review form and lands on the done page, one line per account",
+    withDatabase(async (ctx) => {
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const landing = await redirectTo(() =>
+        reviewAction(
+          args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+        ),
+      );
+
+      const sets = await Promise.all(
+        [individual, roth, mortgage].map(
+          async (account) => (await lastRecorded(account.id, ctx.db))?.id,
+        ),
+      );
+      expect(landing).toBe(`/upload/done?sets=${sets.join(",")}`);
+
+      const done = await doneLoader(args(get(landing)));
+      expect(done.statements.map((statement) => statement.accountId)).toEqual([
+        individual.id,
+        roth.id,
+        mortgage.id,
+      ]);
+      const markup = renderRoute(Done, landing, done);
+      expect(markup).toContain(`href="/accounts/${roth.id}?uploaded=${sets[1]}"`);
+      expect(markup).toContain("Roth IRA");
+    }),
+  );
+
+  it(
+    "re-renders a refused commit with every account's section and the refusal naming its account",
+    withDatabase(async (ctx) => {
+      const [, roth] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const refused = await reviewAction(
+        args(
+          post(`/upload/${draft.id}/review`, {
+            ...reviewForm(page.diff),
+            [`baselineSetId-${roth.id}`]: "999999",
+          }),
+          { draftId: draft.id },
+        ),
+      );
+      if (refused instanceof Response) throw new Error(`Expected a refusal, got ${refused.status}.`);
+
+      expect(refused.formError).toMatch(/^Roth IRA: This statement was measured against figures/);
+      expect(refused.diff.accounts).toHaveLength(3);
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
+        actionData: refused,
+      });
+      expect(markup).toContain("Roth IRA: This statement was measured against figures");
+      expect(markup).toContain("Home mortgage");
+    }),
+  );
+
+  it(
+    "re-renders a commit refused over figures recorded since review, naming the account they landed on",
+    withDatabase(async (ctx) => {
+      const [, , mortgage] = await seedAccounts(ctx);
+      const { loan } = await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+      expect(renderRoute(Review, `/upload/${draft.id}/review`, page)).toContain(
+        `name="appendWatermark-${mortgage.id}"`,
+      );
+
+      // After the file's 2026-07-15, so no baseline moves: only the account's history does.
+      await ctx.seedPositionSet({
+        account: mortgage,
+        asOf: "2026-08-01",
+        source: "manual",
+        holdings: [{ instrument: loan, quantity: "300000" }],
+      });
+
+      const refused = await reviewAction(
+        args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+      );
+      if (refused instanceof Response) throw new Error(`Expected a refusal, got ${refused.status}.`);
+
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page, {
+        actionData: refused,
+      });
+      expect(markup).toContain("Figures were recorded on Home mortgage after this review.");
+    }),
+  );
+
+  it(
+    "sends a commit whose file lost a string after review back to instruments, marked stale",
+    withDatabase(async (ctx) => {
+      await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      await mapColumns(draft.id);
+      const page = await reviewPage(draft.id);
+
+      const fxaix = await ctx.db
+        .selectFrom("instrument_alias")
+        .select("instrument_id")
+        .where("raw_string", "=", "FXAIX")
+        .executeTakeFirstOrThrow();
+      await changeAlias(
+        {
+          intent: "forget",
+          rawString: "FXAIX",
+          fromInstrumentId: fxaix.instrument_id,
+          confirm: "true",
+        },
+        ctx.db,
+      );
+
+      expect(
+        await redirectTo(() =>
+          reviewAction(
+            args(post(`/upload/${draft.id}/review`, reviewForm(page.diff)), { draftId: draft.id }),
+          ),
+        ),
+      ).toBe(`/upload/${draft.id}/instruments?stale=true`);
     }),
   );
 });

@@ -95,9 +95,10 @@ concluding a grep found a violation):
   take an `OwnerFilter` first, required and never defaulted, so a new screen cannot read holdings
   without saying whose (ADR-0008); the account-scoped ones are already narrower and take none.
 - `app/lib/accounts.server.ts`'s `withAccountLock` is the only door onto an account's history:
-  `revisePosition`, `setBalance`, `commitUpload` and `closeAccount` run inside it, and so must any
-  new writer of `position_set`, or two writers can each restate the account without the other's
-  edit (#283, ARCHITECTURE.md §7.2).
+  `revisePosition`, `setBalance`, `recordUpload` (`commitUpload` for one account, nested through
+  `withAccountLocks` for several) and `closeAccount` run inside it, and so must any new writer of
+  `position_set`, or two writers can each restate the account without the other's edit (#283,
+  ARCHITECTURE.md §7.2).
 
 **History is append-only.** Uploads, balance sets, and position corrections each write a new
 `position_set`; nothing edits or deletes one, because `holding_valued_at` reads them for every date
@@ -107,7 +108,9 @@ an instrument that lost the race for its string, an alias the household forgets 
 family member removes (`removePasskey`, `app/lib/lock.server.ts`), plus rows that are scaffolding
 rather than history: `upload_draft` rows (swept at 24h, consumed at commit) with their
 `upload_draft_answer` answers (promoted into `instrument_alias` by the commit, cascaded away with the
-draft otherwise, ADR-0013) and `unlock_grant` rows (swept once past their idle window, superseded when the browser
+draft otherwise, ADR-0013) and `upload_draft_account_answer` answers (promoted into
+`account.external_account_number` by the commit, cascaded away with the draft otherwise, ADR-0015),
+plus `unlock_grant` rows (swept once past their idle window, superseded when the browser
 holding one verifies another assertion, deleted outright by the explicit "Lock now" control,
 `app/routes/lock-now.ts`, and cascaded away with the passkey that minted them). Accounts are *closed* (`closed_at`), never removed.
 

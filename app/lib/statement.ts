@@ -39,6 +39,9 @@ export type StatementMapping = {
   // A loan statement lists what's owed as positive; this negates rather than guessing from sign.
   owedAsPositive: boolean;
   combineDuplicateRows: boolean;
+  // Multi-account scope (spec 0023): grouped per account number; sign and as-of left to the
+  // router. Absent = single-account, as in every mapping saved before it.
+  multiAccount?: boolean;
 };
 
 // Shared schema for both jsonb columns storing this shape (upload_draft.mapping,
@@ -58,6 +61,7 @@ export const statementMapping: z.ZodType<StatementMapping> = z.object({
   costBasisIs: z.enum(["per_share", "total"]),
   owedAsPositive: z.boolean(),
   combineDuplicateRows: z.boolean(),
+  multiAccount: z.boolean().optional(),
 });
 
 export type ParsedPosition = {
@@ -74,6 +78,7 @@ export type ParsedPosition = {
 };
 
 export type CombinedRows = {
+  accountNumber?: string; // multi-account mode only
   instrument: string;
   rowCount: number;
   quantity: string;
@@ -84,6 +89,22 @@ export type CombinedRows = {
 export type SkippedRow = {
   row: number;
   instrument: string;
+  accountNumber?: string; // multi-account mode, when the row states one: its account's own to list
+};
+
+// Multi-account mode: a row that would be a position but names no account. Kept out of
+// positions; the router refuses the file listing these (spec 0023 decision 13).
+export type UnnumberedRow = {
+  row: number;
+  instrument: string;
+};
+
+// Multi-account mode: the as-of cell as written, unvalidated. Left to the router, which knows
+// which numbers are skipped and the account a disagreement names (spec 0023 decision 8).
+export type AsOfSighting = {
+  row: number;
+  accountNumber: string;
+  value: string;
 };
 
 // row is zero-based (null for a mapping fault); message speaks in one-based lines.
@@ -94,14 +115,30 @@ export type ParseProblem = {
   code?: "blank-instrument";
 };
 
-export type ParsedStatement = {
+type StatementBody = {
   positions: ParsedPosition[];
   combined: CombinedRows[];
   skipped: SkippedRow[];
-  asOfDate: string | null;
   asOfMapped: boolean; // false when the mapping names no as-of column
   problems: ParseProblem[]; // empty means usable; anything here refuses the commit
 };
+
+// The router's input (statement-routing.server.ts): sign, dates and blank numbers still unsettled.
+export type MultiAccountStatement = StatementBody & {
+  multiAccount: true;
+  asOfDate: null;
+  asOfSightings: AsOfSighting[];
+  unnumbered: UnnumberedRow[];
+};
+
+export type ParsedStatement =
+  | (StatementBody & {
+      multiAccount?: never;
+      asOfDate: string | null;
+      asOfSightings?: never;
+      unnumbered?: never;
+    })
+  | MultiAccountStatement;
 
 function isZero(value: string): boolean {
   return /^0+(\.0+)?$/.test(value);
@@ -160,12 +197,70 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   };
 }
 
+// Zero keeps no sign: "-0.00" would read as a debt of nothing written as though it were something.
+// The numerator (basis*quantity) flips with the quantity, or a later fold (uploads.server.ts)
+// would report a liability's cost basis inverted.
+export function negateOwed<Position extends Pick<FoldableLot, "quantity" | "weightedBasisUnits">>(
+  position: Position,
+): Position {
+  const { quantity, weightedBasisUnits } = position;
+  if (isZero(quantity)) return position;
+  return {
+    ...position,
+    quantity: quantity.startsWith("-") ? quantity.slice(1) : `-${quantity}`,
+    ...(weightedBasisUnits === undefined || weightedBasisUnits === null
+      ? {}
+      : { weightedBasisUnits: -weightedBasisUnits }),
+  };
+}
+
 // ISO kept as written; US shapes (MM/DD/YYYY) rewritten to it. Only the spelling moves —
 // "13/40/2026" becomes "2026-13-40" and is refused as not on the calendar downstream.
 function isoAsOf(value: string): string {
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
   if (us === null) return value;
   return `${us[3]}-${(us[1] ?? "").padStart(2, "0")}-${(us[2] ?? "").padStart(2, "0")}`;
+}
+
+// First sighting speaks; every other must agree once normalised by isoAsOf. Two disagreeing
+// dates refuse naming both — a statement is a photograph of one day. `account` names whose rows
+// these are in a multi-account file (spec 0023 decision 8).
+export function resolveAsOf(
+  sightings: ReadonlyArray<{ row: number; value: string }>,
+  column: string | null,
+  account?: string,
+): { asOfDate: string | null; problem: ParseProblem | null } {
+  const first = sightings[0];
+  if (first === undefined) return { asOfDate: null, problem: null };
+  const whose = account === undefined ? "" : ` for ${account}`;
+
+  const differing = sightings.find(
+    (sighting) => isoAsOf(sighting.value) !== isoAsOf(first.value),
+  );
+  if (differing !== undefined) {
+    return {
+      asOfDate: null,
+      problem: {
+        row: differing.row,
+        column,
+        message:
+          `The file carries two as-of dates${whose} — "${first.value}" on line ` +
+          `${first.row + 1} and "${differing.value}" on line ${differing.row + 1} — ` +
+          "and a statement is a photograph of one day.",
+      },
+    };
+  }
+
+  const parsed = recordedDate(`The as-of date${whose}`).safeParse(isoAsOf(first.value));
+  if (parsed.success) return { asOfDate: parsed.data, problem: null };
+  return {
+    asOfDate: null,
+    problem: {
+      row: first.row,
+      column,
+      message: parsed.error.issues[0]?.message ?? `The as-of date${whose} could not be read.`,
+    },
+  };
 }
 
 type RowRecord = {
@@ -190,15 +285,12 @@ export function parseStatement(
   const problems: ParseProblem[] = [];
   const { columns } = mapping;
   const asOfMapped = typeof columns.asOf === "string" && columns.asOf !== "";
+  const multiAccount = mapping.multiAccount === true;
 
-  const refused = (): ParsedStatement => ({
-    positions: [],
-    combined: [],
-    skipped: [],
-    asOfDate: null,
-    asOfMapped,
-    problems,
-  });
+  const refused = (): ParsedStatement => {
+    const body = { positions: [], combined: [], skipped: [], asOfDate: null, asOfMapped, problems };
+    return multiAccount ? { ...body, multiAccount, asOfSightings: [], unnumbered: [] } : body;
+  };
 
   if (!columns.instrument) {
     problems.push({
@@ -212,6 +304,15 @@ export function parseStatement(
       row: null,
       column: null,
       message: "The mapping names no quantity column, and a position is nothing without one.",
+    });
+  }
+  if (multiAccount && !columns.accountNumber) {
+    problems.push({
+      row: null,
+      column: null,
+      message:
+        "The mapping names no account number column, and a file of several accounts " +
+        "routes every row by one.",
     });
   }
 
@@ -256,6 +357,8 @@ export function parseStatement(
   const records: RowRecord[] = [];
   const skipped: SkippedRow[] = [];
   const asOfSightings: Array<{ row: number; value: string }> = [];
+  const accountAsOfSightings: AsOfSighting[] = [];
+  const unnumbered: UnnumberedRow[] = [];
 
   const optionalCell = (cells: ReadonlyArray<string>, index: number | null): string | null => {
     const value = index === null ? "" : (cells[index] ?? "").trim();
@@ -302,7 +405,10 @@ export function parseStatement(
     const quantity = normaliseFigure(quantityCell);
 
     if (quantity.kind === "absent") {
-      skipped.push({ row, instrument });
+      const accountNumber = multiAccount ? optionalCell(cells, accountNumberIndex) : null;
+      skipped.push(
+        accountNumber === null ? { row, instrument } : { row, instrument, accountNumber },
+      );
       continue;
     }
     if (quantity.kind === "unparseable") {
@@ -387,120 +493,119 @@ export function parseStatement(
       }
     }
 
-    if (asOfIndex !== null) {
-      const asOfCell = (cells[asOfIndex] ?? "").trim();
-      if (asOfCell !== "") asOfSightings.push({ row, value: asOfCell });
+    // Number trimmed only, never case- or zero-folded (spec 0023 decision 15).
+    const accountNumber = optionalCell(cells, accountNumberIndex);
+    const asOf = optionalCell(cells, asOfIndex);
+
+    if (multiAccount) {
+      if (accountNumber === null) {
+        unnumbered.push({ row, instrument });
+        continue;
+      }
+      if (asOf !== null) accountAsOfSightings.push({ row, accountNumber, value: asOf });
+    } else if (asOf !== null) {
+      asOfSightings.push({ row, value: asOf });
     }
 
     records.push({
       row,
       instrument,
       name: optionalCell(cells, nameIndex),
-      accountNumber: optionalCell(cells, accountNumberIndex),
+      accountNumber,
       quantity: quantity.value,
       costBasisPerShare,
     });
   }
 
   // Grouped by raw string before alias resolution — combining now would guess what step 04 decides.
+  // Multi-account: by (number, string), so one instrument in two accounts stays two positions.
   const groups = new Map<string, RowRecord[]>();
   for (const record of records) {
-    const group = groups.get(record.instrument);
-    if (group === undefined) groups.set(record.instrument, [record]);
+    const key = multiAccount
+      ? JSON.stringify([record.accountNumber, record.instrument])
+      : record.instrument;
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [record]);
     else group.push(record);
   }
 
-  // Zero keeps no sign: "-0.00" would read as a debt of nothing written as though it were something.
-  const signed = (quantity: string): string => {
-    if (!mapping.owedAsPositive || isZero(quantity)) return quantity;
-    return quantity.startsWith("-") ? quantity.slice(1) : `-${quantity}`;
-  };
+  // Multi-account: sign is the router's, by the kind of the account each row lands in (decision 6).
+  const signed = (position: ParsedPosition): ParsedPosition =>
+    mapping.owedAsPositive && !multiAccount ? negateOwed(position) : position;
 
   const positions: ParsedPosition[] = [];
   const combined: CombinedRows[] = [];
 
-  for (const [instrument, group] of groups) {
+  for (const group of groups.values()) {
     const first = group[0];
     if (first === undefined) continue;
+    const { instrument } = first;
 
     if (group.length === 1) {
-      positions.push({
-        row: first.row,
-        instrument,
-        name: first.name,
-        accountNumber: first.accountNumber,
-        quantity: signed(first.quantity),
-        costBasisPerShare: first.costBasisPerShare,
-      });
+      positions.push(
+        signed({
+          row: first.row,
+          instrument,
+          name: first.name,
+          accountNumber: first.accountNumber,
+          quantity: first.quantity,
+          costBasisPerShare: first.costBasisPerShare,
+        }),
+      );
       continue;
     }
 
     if (!mapping.combineDuplicateRows) {
+      const where = multiAccount ? ` for account number "${first.accountNumber}"` : "";
       problems.push({
         row: group[1]?.row ?? first.row,
         column: columns.instrument,
         message:
-          `"${instrument.trim()}" appears on ${group.length} lines, and with combining ` +
+          `"${instrument.trim()}" appears on ${group.length} lines${where}, and with combining ` +
           "turned off a statement cannot hold the same instrument twice.",
       });
       continue;
     }
 
     const fold = foldLots(group);
-    const quantity = signed(fold.quantity);
-
-    // signed may flip the sign after weighting; the numerator (basis*quantity) must flip
-    // too, or the spelling fold would report a liability's cost basis inverted.
-    const negated = quantity !== fold.quantity;
-    const weightedBasisUnits =
-      fold.weightedBasisUnits === null
-        ? null
-        : negated
-          ? -fold.weightedBasisUnits
-          : fold.weightedBasisUnits;
-
-    positions.push({
+    const position = signed({
       row: first.row,
       instrument,
       name: first.name,
       accountNumber: first.accountNumber,
-      quantity,
+      quantity: fold.quantity,
       costBasisPerShare: fold.costBasisPerShare,
-      weightedBasisUnits,
+      weightedBasisUnits: fold.weightedBasisUnits,
     });
-    combined.push({ instrument, rowCount: group.length, quantity });
+
+    positions.push(position);
+    combined.push({
+      // Single mode reads the number too (the one-account guard), and leaves it off.
+      ...(multiAccount && first.accountNumber !== null
+        ? { accountNumber: first.accountNumber }
+        : {}),
+      instrument,
+      rowCount: group.length,
+      quantity: position.quantity,
+    });
   }
 
-  // First as-of sighting speaks for the file; every other must agree once normalised by
-  // isoAsOf. Two disagreeing dates refuse naming both — a statement is a photograph of one day.
-  let asOfDate: string | null = null;
-  const firstSighting = asOfSightings[0];
-  if (firstSighting !== undefined) {
-    const differing = asOfSightings.find(
-      (sighting) => isoAsOf(sighting.value) !== isoAsOf(firstSighting.value),
-    );
-    if (differing !== undefined) {
-      problems.push({
-        row: differing.row,
-        column: columns.asOf ?? null,
-        message:
-          `The file carries two as-of dates — "${firstSighting.value}" on line ` +
-          `${firstSighting.row + 1} and "${differing.value}" on line ${differing.row + 1} — ` +
-          "and a statement is a photograph of one day.",
-      });
-    } else {
-      const parsed = recordedDate("The as-of date").safeParse(isoAsOf(firstSighting.value));
-      if (parsed.success) {
-        asOfDate = parsed.data;
-      } else {
-        problems.push({
-          row: firstSighting.row,
-          column: columns.asOf ?? null,
-          message: parsed.error.issues[0]?.message ?? "The as-of date could not be read.",
-        });
-      }
-    }
+  if (multiAccount) {
+    return {
+      positions,
+      combined,
+      skipped,
+      asOfDate: null,
+      asOfMapped,
+      problems,
+      multiAccount,
+      asOfSightings: accountAsOfSightings,
+      unnumbered,
+    };
   }
+
+  const { asOfDate, problem } = resolveAsOf(asOfSightings, columns.asOf ?? null);
+  if (problem !== null) problems.push(problem);
 
   return { positions, combined, skipped, asOfDate, asOfMapped, problems };
 }

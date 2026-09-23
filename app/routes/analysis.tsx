@@ -10,12 +10,11 @@ import {
 } from "~/components/owner-filter-control";
 import {
   allocationBy,
-  formatRate,
   unrealizedByAssetType,
   type GainRow,
   type GainGroups,
 } from "~/lib/allocation";
-import { isNegative } from "~/lib/format";
+import { formatRate, isNegative } from "~/lib/format";
 import { groupingBy } from "~/lib/holdings-view";
 import { ALL_OWNERS, isFiltered } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";

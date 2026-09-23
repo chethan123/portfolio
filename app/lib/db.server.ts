@@ -2,6 +2,7 @@
 // parsers) so money/quantities/ids cross the boundary as strings — never
 // Number()/parseFloat/JSON round-trip; arithmetic in SQL or a decimal lib.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
 
 import { Kysely, PostgresDialect, sql } from "kysely";
 import type pg from "pg";
@@ -80,6 +81,31 @@ export function inOneSnapshot<T>(
         .setIsolationLevel("repeatable read")
         .setAccessMode("read only")
         .execute(body);
+}
+
+/** Savepoint so a caught violation does not leave the caller's transaction aborted. No-op outside one. */
+export async function guardedAgainstConstraintViolation<T>(
+  db: Kysely<Database>,
+  body: () => Promise<T>,
+): Promise<T> {
+  if (!db.isTransaction) return body();
+
+  const savepoint = `guard_${randomBytes(4).toString("hex")}`;
+  await sql`savepoint ${sql.id(savepoint)}`.execute(db);
+  try {
+    const result = await body();
+    await sql`release savepoint ${sql.id(savepoint)}`.execute(db);
+    return result;
+  } catch (error) {
+    await sql`rollback to savepoint ${sql.id(savepoint)}`.execute(db);
+    throw error;
+  }
+}
+
+export function uniqueViolationConstraint(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === "23505" && typeof constraint === "string" ? constraint : undefined;
 }
 
 // What /healthz reports.

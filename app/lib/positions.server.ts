@@ -165,7 +165,7 @@ async function revisePositionUnderLock(
   if (account.isClosed) {
     throw ValidationError.form(
       `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this position is still real.",
+        "If this position is still real, record it into the open account that continues it.",
     );
   }
 

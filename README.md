@@ -5,6 +5,7 @@ balances, and see holdings, allocation, estimated gains, and projected income.
 
 - [User guide](docs/guide/README.md): using the app.
 - [Operating guide](docs/operating.md): installation, backups, and upgrades.
+- [Restoring from a dump](docs/restoring-a-dump.md): the recovery procedure, and the drill.
 - [Architecture](ARCHITECTURE.md): code and data flows.
 - [Design](DESIGN.md): domain rules, decisions, and limitations.
 
@@ -129,9 +130,12 @@ supersedes the earlier one in valuations. [Balance guide](docs/guide/account-det
   <img alt="The review screen: what the statement changes, grouped into added, updated and removed, with a removed position listed in full with its quantity and last known value" src="docs/screenshots/upload-review-light.png">
 </picture>
 
-Choose an account and CSV, map columns, resolve new instruments, then review the changes.
-A statement replaces the account's complete set of holdings for its date. Missing positions
-are treated as sold. Every removal is listed before commit.
+Choose an account and CSV — or **Several accounts (the file has an account-number column)**, which
+routes every row by its own number, asks about any number nothing records on a step of its own, and
+lands on a page listing every account it recorded — then map columns, resolve new instruments, and
+review the changes. A statement replaces its account's complete set of holdings for its date; a
+several-accounts file leaves any account it does not name untouched. Missing positions are treated
+as sold. Every removal is listed before commit.
 
 Positions and the name-to-instrument aliases are written only at commit. Drafts, column mappings,
 instruments and classifications may be saved earlier. An upload abandoned before the last step
@@ -289,7 +293,9 @@ To build from this checkout:
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-Back up before upgrading. See [Upgrading](docs/operating.md#upgrading).
+Back up before upgrading. See [Upgrading](docs/operating.md#upgrading). The dump service writes a
+verified archive nightly into `./volumes/dumps/`; copying those off the host is yours, and
+[Restoring from a dump](docs/restoring-a-dump.md) is how one comes back.
 
 ### Who gets in, and where that is decided
 
