@@ -10,6 +10,34 @@ longer only a guard. [ADR-0013](../adr/0013-a-first-sighting-answer-is-the-draft
 is the pattern the account-number answer copies. `CONTEXT.md` has the amended **Account number**
 entry.
 
+> **Built with these differences.** This spec is marked implemented (`docs/specs/README.md`), and on
+> review of #383 six things below read differently from what landed. Corrected in place here, one
+> block, rather than by rewriting the sections they touch (`docs/specs/README.md`'s banner
+> convention):
+>
+> - **Decision 13** (below, and repeated under "The parser, in multi-account mode"): ~~"A row with a
+>   blank account number refuses the file"~~ is too wide. `statement.ts` skips a row whose quantity
+>   cell is an absence marker (a totals or footer line) before the blank-number check ever runs
+>   (`statement.ts:407-413`, `:500-503`), so that row is silently dropped like any other absent-quantity
+>   row, not refused. **A row that would be a position and names no account refuses the file.**
+> - **Schema:** ~~"One migration"~~ — three, each its own transaction:
+>   `0015_account_open_number_unique.sql`, `0016_multi_account_draft_and_mapping.sql`,
+>   `0017_upload_draft_account_answer.sql`.
+> - **Routing:** ~~"A pure function beside `statement.ts`"~~ — `app/lib/statement-routing.server.ts`.
+>   A `.server.ts` module, not a sibling of `statement.ts` in the sense that matters here: it imports
+>   `listSentence` from `input.server.ts` for its refusal messages, so it crosses the `.server`
+>   bundle boundary `statement.ts` never does (ARCHITECTURE.md §4.3).
+> - **Review binding:** the per-account field list leaves out `appendWatermark-<accountId>`, which
+>   the commit relies on to detect a write since review (`review.tsx:719-723` emits it,
+>   `uploads.server.ts` reads it back at commit). Add it to the list below.
+> - **The commit:** "`commitUpload` branches on the draft's account" is backwards — `recordUpload`
+>   does that branching; `commitUpload` itself refuses a multi-account draft outright
+>   (`uploads.server.ts:1618-1622`).
+> - **The done page:** a set superseded since review is not left out — `uploadReceipt` shows it, with
+>   its filed-behind note, the same receipt contract spec 0005 §5 set. Only an id naming no upload
+>   set at all is left out. And the cap: at most the first 50 ids in `?sets=` (`MAX_RECORDED_SETS`)
+>   are read; the rest are ignored.
+
 ## Problem Statement
 
 Every upload starts by picking one open account (`app/routes/upload.tsx`), and `upload_draft.account_id`

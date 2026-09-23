@@ -11,8 +11,9 @@ Starting an upload clears unfinished drafts more than 24 hours old. Committing r
 immediately. A draft can also become unavailable if its account closes.
 
 Open the account to check whether the statement landed. If it did not, start another upload;
-saved mappings and instrument names remain. For a closed account, the message suggests reopening
-it from Settings, but that control does not exist yet. See [closed-account recovery](people-and-accounts.md#correcting-or-retiring-an-account).
+saved mappings and instrument names remain. A closed account's history does not change, so a draft
+that finds its account closed underneath it expires the same way — there is no reopening it. See
+[closed-account recovery](people-and-accounts.md#correcting-or-retiring-an-account).
 
 ## A securities account will not let you type a balance
 
@@ -118,6 +119,30 @@ A statement is rejected outright, rather than partly imported, when it cannot be
 
 Nothing is ever partly recorded. A refused file leaves the account exactly as it was, which is why
 it is safe to try again.
+
+## Several accounts
+
+Choosing **Several accounts (the file has an account-number column)** on `/upload` adds an Accounts
+step, and with it a few refusals of its own:
+
+- **A row that would be a position, and names no account.** The message lists the line numbers and
+  instruments. A totals or footer row with nothing in the quantity column is not one of these — it
+  is dropped quietly, the same as on a single-account upload — because only a row the app would
+  otherwise record needs to say which account it belongs to.
+- **A number recorded only on a closed account.** The message names the account and says the number
+  can be cleared on it in Settings — a closed account's history never changes, so there is no
+  reopening it to accept the file instead.
+- **A number already recorded on another open account.** Settings refuses giving a number to a
+  second account, and a single-account upload whose account-number column is mapped is refused the
+  same way, both naming the account that already holds it. If both of your own accounts genuinely
+  share one institution number, choose **Not in this file** for the account-number column and
+  upload again.
+- **An answer gone stale.** If the account you chose for an unknown number has recorded a number of
+  its own since you answered, the upload sends you back to the accounts step to choose again.
+- **Every number skipped.** Telling every unknown number to skip its rows means the upload would
+  record nothing, so it is refused rather than doing that silently.
+- **One account given two numbers.** An account offered for an unknown number can be chosen for only
+  one of them per upload; choosing it twice is refused.
 
 ---
 

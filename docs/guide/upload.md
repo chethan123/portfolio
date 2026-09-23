@@ -43,7 +43,7 @@ You do not have to tidy a file up first.
 Pick which account the statement describes, then the file. **Only open accounts are offered.** A
 closed account's history does not change, so a statement cannot land in one.
 
-The account you pick is the account the statement lands in. Nothing in the file selects it.
+When you pick an account, nothing in the file overrides it.
 
 **Or choose Several accounts (the file has an account-number column)**, for one export covering more
 than one account — a spreadsheet you keep yourself, or a brokerage's all-accounts download. Every

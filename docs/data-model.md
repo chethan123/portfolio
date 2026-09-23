@@ -49,6 +49,8 @@ erDiagram
     account ||--o{ upload_draft : "stages (CASCADE)"
     upload_draft ||--o{ upload_draft_answer : "answers (CASCADE)"
     instrument ||--o{ upload_draft_answer : "answered as (CASCADE)"
+    upload_draft ||--o{ upload_draft_account_answer : "answers (CASCADE)"
+    account ||--o{ upload_draft_account_answer : "answered as (CASCADE)"
     position_set ||--o{ holding : "contains (CASCADE)"
     instrument ||--o{ holding : "held as (RESTRICT)"
     classification ||--o{ instrument : "labels (RESTRICT)"
@@ -94,6 +96,11 @@ erDiagram
         bigint draft_id PK
         text raw_string PK
         bigint instrument_id FK
+    }
+    upload_draft_account_answer {
+        bigint draft_id PK
+        text account_number PK
+        bigint account_id FK "nullable"
     }
     position_set {
         bigint id PK
@@ -144,7 +151,7 @@ erDiagram
     }
     upload_draft {
         bigint id PK
-        bigint account_id FK
+        bigint account_id FK "nullable"
         text filename
         bytea raw_file
         date as_of_date "nullable"

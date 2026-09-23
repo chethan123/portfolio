@@ -638,6 +638,8 @@ erDiagram
     ACCOUNT ||--o{ UPLOAD_DRAFT : "stages"
     UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ANSWER : "answers"
     INSTRUMENT ||--o{ UPLOAD_DRAFT_ANSWER : "answered as"
+    UPLOAD_DRAFT ||--o{ UPLOAD_DRAFT_ACCOUNT_ANSWER : "answers (spec 0023)"
+    ACCOUNT ||--o{ UPLOAD_DRAFT_ACCOUNT_ANSWER : "answered as"
     POSITION_SET ||--o{ HOLDING : "photographs"
     INSTRUMENT ||--o{ HOLDING : "is held as"
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
@@ -728,7 +730,7 @@ erDiagram
     }
     UPLOAD_DRAFT {
         bigint id PK
-        bigint account_id FK "on delete cascade"
+        bigint account_id FK "nullable — null is a multi-account draft (spec 0023); on delete cascade"
         text filename
         bytea raw_file "not null — a draft is a file"
         date as_of_date "nullable — reserved"
@@ -740,6 +742,11 @@ erDiagram
         bigint draft_id PK "composite with raw_string; on delete cascade"
         text raw_string PK "collate C — byte-exact, as instrument_alias"
         bigint instrument_id FK "on delete cascade"
+    }
+    UPLOAD_DRAFT_ACCOUNT_ANSWER {
+        bigint draft_id PK "composite with account_number; on delete cascade"
+        text account_number PK "collate C — byte-exact once trimmed"
+        bigint account_id FK "nullable — null is a skip (spec 0023 decision 2); on delete cascade"
     }
     PASSKEY {
         text credential_id PK "exactly as the library returns it, never re-encoded"
@@ -787,12 +794,14 @@ split is exact and each side is a decision:
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 | `upload_draft_answer.draft_id` → `upload_draft` | `CASCADE` | An answer is the draft's own. A draft abandoned, swept or committed takes its answers with it; the commit has promoted the ones it needed first (issue #291). |
 | `upload_draft_answer.instrument_id` → `instrument` | `CASCADE` | As `instrument_alias`: an answer naming a gone instrument says nothing. |
+| `upload_draft_account_answer.draft_id` → `upload_draft` | `CASCADE` | An account-number answer is the draft's own too (spec 0023, ADR-0015): a draft abandoned, swept or committed takes it with it, the commit having promoted the ones it needed first. |
+| `upload_draft_account_answer.account_id` → `account` | `CASCADE` | An answer naming a gone account says nothing; unlike `upload_draft.account_id` it is nullable already (a null answer is a skip), so this cascade only ever removes rows, never orphans one. |
 | `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it, which is how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, the application deletes a referenced row only where that row
 is scaffolding or was never held: an `upload_draft`, at commit and at the sweep, taking its
-`upload_draft_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
+`upload_draft_answer` and `upload_draft_account_answer` rows with it; a person who owns no accounts (`people.server.ts`'s
 `removePerson`); a just-created, never-held instrument that lost the race for its string
 (`instrument-resolution.server.ts`'s `resolveAll`). There is no account delete and no position-set
 delete anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql`
@@ -1020,6 +1029,12 @@ flowchart TD
     class D,DA,A store
 ```
 
+This pipeline is the single-account path; a multi-account draft (`account_id` null, spec 0023) adds
+an accounts step between columns and instruments, routes rows by `statement-routing.server.ts`
+instead of the account chosen up front, and R4 is `recordUpload`, which nests one
+`withAccountLock` per routed account rather than the one lock shown here, redirecting to
+`/upload/done` instead of one account's page.
+
 **Nothing passes between steps in memory.** Each screen re-reads the draft's bytes, re-parses them
 through the saved mapping, and re-resolves against vocabulary and the draft's own answers.
 `resolveAll` is not a stage that hands its output to the commit. It has one caller, the instruments
@@ -1092,6 +1107,11 @@ stateDiagram-v2
     Review --> Expired
     Expired --> [*]: one page, two renderings
 ```
+
+This state machine, like the pipeline above it, draws the single-account path (and a null-account
+draft adds its own accounts step between Columns and Instruments, spec 0023): several accounts
+commit through `recordUpload`, not `commitUpload()` shown at Review → Committed, and land on
+`/upload/done` rather than the redirect shown at Committed → `[*]`.
 
 **Where the draft got to is a property of the row, not a status column.** `mapping` is null until the
 columns step passes; with one, the file's own strings decide between instruments and review.
@@ -2470,7 +2490,8 @@ also export pure helpers for testing.
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
 | `price-freshness.tsx` | How old this page's figures are, and the control that changes it, one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
 | `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
-| `upload-steps.tsx` | The upload flow's step strip. Four entries always, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
+| `upload-steps.tsx` | The upload flow's step strip. Four entries, five for a file of several accounts, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
+| `upload-receipt.tsx` | The account page's `?uploaded=` receipt and each line of `/upload/done`, told one way: added/updated/removed counts and the as-of date on a current statement, or the filed-behind sentence (spec 0005 §5) on one a later statement has superseded |
 
 ### `migrations/`
 
