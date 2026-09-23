@@ -22,7 +22,9 @@ trustworthy, and the reversal depends on all three:
   like a first sighting. It can be given only to an open account that records no number yet, or its
   rows can be skipped. The answer is the draft's until the upload is recorded (the same rule as
   ADR-0013), and then the account keeps the number. A recorded number is never overwritten by an
-  upload. A renumbered account is corrected in Settings, deliberately.
+  upload, and it outranks an answer: an answer whose account has recorded a number since is
+  refused at commit as stale, not applied. A renumbered account is corrected in Settings,
+  deliberately.
 - **Matching is exact, surrounding whitespace aside.** No case folding and no stripping of dashes or
   leading zeros. A spreadsheet that ate a leading zero produces an unknown number, which the reader
   sees in the picker, rather than a guessed match they never see.
@@ -39,8 +41,11 @@ trustworthy, and the reversal depends on all three:
   row is a position recorded as sold.
 - **A number recorded only on a closed account refuses the file.** It names the account and says to
   clear the number in Settings (`updateAccount` still edits a closed account).
-- **All or nothing.** One transaction across every account. The review screen and its confirmations
-  are per account, because each confirmation is a sentence about one account's baseline.
+- **All or nothing.** One transaction across every account, locking each in ascending id order.
+  The review screen and its confirmations are per account, because each confirmation is a sentence
+  about one account's baseline.
+- **Stored numbers are trimmed on every write,** so the unique index and the router agree on what
+  "the same number" is.
 
 ## Considered options
 
