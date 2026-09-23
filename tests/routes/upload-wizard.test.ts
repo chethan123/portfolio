@@ -2,11 +2,16 @@
 // no client state — "how far did this draft get" must read entirely off the row (parseDraft), which has no test of its
 // own; the matrix below pins it. Breaking this strands a reader rather than writing a wrong number. The one write-shaped
 // risk is the re-POST after commit: 404, never a second recording, never a forged account id in the link back.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { z } from "zod";
 
-import Columns, { loader as columnsLoader } from "../../app/routes/upload/columns.tsx";
+import Columns, {
+  action as columnsAction,
+  loader as columnsLoader,
+} from "../../app/routes/upload/columns.tsx";
 import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
 import Instruments, {
   loader as instrumentsLoader,
@@ -15,9 +20,15 @@ import Review, {
   action as reviewAction,
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
+import { closeAccount } from "~/lib/accounts.server";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
-import { STALE_REVIEW_MESSAGE, rememberMapping, requireDraft } from "~/lib/uploads.server";
+import {
+  STALE_REVIEW_MESSAGE,
+  parseDraft,
+  rememberMapping,
+  requireDraft,
+} from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -203,8 +214,7 @@ describe("a draft's bare address", () => {
   );
 });
 
-// The multi-account draft (spec 0023) — schema, type-ripple and mapping-scope only here; the
-// accounts step and per-account routing that would let one reach a diffable review are later tasks.
+// The multi-account draft (spec 0023, "Loading a draft with no account").
 describe("a draft with no account", () => {
   it(
     "sends a freshly created multi-account draft's bare address to columns, same as a single-account one",
@@ -236,7 +246,7 @@ describe("a draft with no account", () => {
   );
 
   it(
-    "bounces a mapped, fully resolved draft's review back to columns: routing rows to accounts isn't built yet",
+    "bounces a mapped, fully resolved draft's review back to columns, with no one account's baseline to diff",
     withDatabase(async (ctx) => {
       const instrument = await ctx.seedInstrument({
         symbol: "VTI",
@@ -1175,6 +1185,168 @@ describe("a review re-posted after its statement landed", () => {
         ),
       );
       expect(forged.data.accountId).toBeNull();
+    }),
+  );
+});
+
+// Spec 0023 "Routing": every step after columns reads the router's groups, re-run on each read,
+// so where a multi-account draft resumes, and what blocks it, follows from the accounts as they are.
+describe("a multi-account draft routed by account number", () => {
+  const spreadsheet = () =>
+    readFileSync(
+      fileURLToPath(new URL("../fixtures/statements/multi-account.csv", import.meta.url)),
+    );
+
+  /** Columns as the screen posts them for multi-account.csv. */
+  function mapColumns(draftId: string) {
+    return redirectTo(() =>
+      columnsAction(
+        args(
+          post(`/upload/${draftId}/columns`, {
+            headerRow: "0",
+            instrument: "Holding",
+            name: "Description",
+            quantity: "Quantity",
+            costBasis: "Cost Basis",
+            asOf: "As Of",
+            accountNumber: "Account Number",
+            costBasisIs: "per_share",
+          }),
+          { draftId },
+        ),
+      ),
+    );
+  }
+
+  /** The three open accounts the file names, each recording its number, in ascending id. */
+  async function seedAccounts(ctx: Pick<TestContext, "seedAccount">) {
+    return [
+      await ctx.seedAccount({ name: "Individual brokerage", externalAccountNumber: "Z12-345678" }),
+      await ctx.seedAccount({ name: "Roth IRA", kind: "ira", externalAccountNumber: "Z98-765432" }),
+      await ctx.seedAccount({
+        name: "Home mortgage",
+        kind: "liability",
+        externalAccountNumber: "0045501234",
+      }),
+    ] as const;
+  }
+
+  async function resolveEveryString(
+    ctx: Pick<TestContext, "seedInstrument" | "seedInstrumentAlias">,
+  ) {
+    for (const rawString of ["VTI", "AAPL", "FXAIX", "Home mortgage"]) {
+      const instrument = await ctx.seedInstrument({ name: rawString });
+      await ctx.seedInstrumentAlias({ instrument, rawString });
+    }
+  }
+
+  it(
+    "resumes at instruments while a string is new, asking once per string with its units summed across accounts, and carries each account's group",
+    withDatabase(async (ctx) => {
+      const [individual, roth, mortgage] = await seedAccounts(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/instruments`);
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/instruments`);
+
+      const page = await instrumentsLoader(
+        args(get(`/upload/${draft.id}/instruments`), { draftId: draft.id }),
+      );
+      if (page instanceof Response) throw new Error(`Expected Instruments, got ${page.status}.`);
+      // VTI is 120 in one account and 40.5 in another: one question, all 160.5 units.
+      expect(page.screen.unresolved.map((item) => [item.raw, item.quantity])).toEqual([
+        ["VTI", "160.50000000"],
+        ["AAPL", "50.000"],
+        ["FXAIX", "84.512"],
+        ["Home mortgage", "312450.00"],
+      ]);
+      expect(renderRoute(Instruments, `/upload/${draft.id}/instruments`, page)).toContain(
+        "Home mortgage",
+      );
+
+      const parsed = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
+      if (parsed.step !== "instruments") throw new Error(`Expected instruments, got ${parsed.step}.`);
+      expect(
+        parsed.routed?.map((group) => [
+          group.accountId,
+          group.asOfDate,
+          group.positions.map((position) => position.instrument),
+        ]),
+      ).toEqual([
+        [individual.id, "2026-07-31", ["VTI", "AAPL"]],
+        [roth.id, "2026-06-30", ["VTI", "FXAIX"]],
+        [mortgage.id, "2026-07-15", ["Home mortgage"]],
+      ]);
+    }),
+  );
+
+  it(
+    "sends a fully resolved file on to review, which bounces it to columns unblocked, while a single-account draft carries no groups",
+    withDatabase(async (ctx) => {
+      await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/review`);
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/review`);
+      expect(
+        await redirectTo(() =>
+          reviewLoader(args(get(`/upload/${draft.id}/review`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+
+      const multi = await parseDraft(await requireDraft(draft.id, ctx.db), ctx.db);
+      expect(multi.step).toBeNull();
+      expect(multi.step === null ? multi.routed?.length : undefined).toBe(3);
+
+      // VTI is aliased above, so this single-account draft resolves too.
+      const { draftId } = await stageDraft(ctx, { resolved: false });
+      const single = await parseDraft(await requireDraft(draftId, ctx.db), ctx.db);
+      expect(single).toMatchObject({ step: null, routed: null });
+    }),
+  );
+
+  it(
+    "blocks review with the router's refusal once an account the file names closes after mapping, naming it on review and on columns",
+    withDatabase(async (ctx) => {
+      const [, , mortgage] = await seedAccounts(ctx);
+      await resolveEveryString(ctx);
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: spreadsheet() });
+      expect(await mapColumns(draft.id)).toBe(`/upload/${draft.id}/review`);
+
+      await closeAccount(mortgage.id, { confirmClose: "true" }, ctx.db);
+      const refusal = "is recorded on Home mortgage, which is closed";
+
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+
+      const page = await reviewOutcome(draft.id);
+      if (page.diff !== null) throw new Error("A draft naming a closed account rendered a diff.");
+      expect(page.blocked.accountId).toBeNull();
+      const markup = renderRoute(Review, `/upload/${draft.id}/review`, page);
+      expect(markup).toContain("This statement cannot be reviewed yet");
+      expect(markup).toContain(refusal);
+      expect(markup).toContain("several accounts");
+      expect(markup).toContain("a column was chosen wrongly");
+      expect(markup).not.toContain("instrument is missing from the source row");
+      expect(markup).toContain('href="/upload"');
+
+      const columns = await columnsLoader(
+        args(get(`/upload/${draft.id}/columns`), { draftId: draft.id }),
+      );
+      expect(columns.savedProblems).toEqual([expect.stringContaining(refusal)]);
+      expect(columns.savedProblemFields).toEqual(["accountNumber"]);
     }),
   );
 });

@@ -1,6 +1,7 @@
 // Routes each row of a multi-account file to the open account its number names (spec 0023,
 // ADR-0015). Pure. The only matcher: every step after columns reads these groups and nothing
-// re-matches, so a wrong route here records one account's holdings as another's.
+// re-matches, so a wrong route here records one account's holdings as another's. Takes a clean
+// parse only: a parse with problems never reaches it, so every problem here is a routing one.
 import { isOwed } from "./account-options.ts";
 import { compareIds } from "./database-id.ts";
 import { listSentence } from "./input.server.ts";
@@ -13,15 +14,11 @@ import {
   type StatementMapping,
 } from "./statement.ts";
 
-import type { AccountKind } from "./valuation.server.ts";
+import type { Account } from "./accounts.server.ts";
 
-export type RoutableAccount = {
-  id: string;
-  name: string;
-  externalAccountNumber: string | null;
-};
+export type RoutableAccount = Pick<Account, "id" | "name" | "externalAccountNumber">;
 
-export type OpenAccount = RoutableAccount & { kind: AccountKind };
+export type OpenAccount = Pick<Account, "id" | "name" | "externalAccountNumber" | "kind">;
 
 export type RoutingAccounts = {
   open: ReadonlyArray<OpenAccount>;
@@ -159,7 +156,7 @@ export function routeStatement(
     } else if (
       answeredNumbers.some((other) => other.accountId === accountId && other.number !== number)
     ) {
-      // Decision 12; upload_draft_account_answer's unique index refuses it first.
+      // Decision 12; the answer table's unique index (a later migration) refuses it first.
       stale = `${account.name}, and gave it another account number too`;
     } else {
       routes.push({ number, account, answered: true });
@@ -182,14 +179,13 @@ export function routeStatement(
     // Decision 6: sign by the kind of the account the rows land in.
     const flips = mapping.owedAsPositive && isOwed(account.kind);
 
-    // Decision 8: resolved per account, so a skipped number's dates refuse nothing.
-    const { asOfDate, problem } = parsed.asOfMapped
-      ? resolveAsOf(
-          parsed.asOfSightings.filter((sighting) => sighting.accountNumber === number),
-          mapping.columns.asOf ?? null,
-          account.name,
-        )
-      : { asOfDate: null, problem: null };
+    // Decision 8: resolved per account, so a skipped number's dates refuse nothing. Unmapped: no
+    // sightings, so null.
+    const { asOfDate, problem } = resolveAsOf(
+      parsed.asOfSightings.filter((sighting) => sighting.accountNumber === number),
+      mapping.columns.asOf ?? null,
+      account.name,
+    );
     if (problem !== null) {
       const { row, message } = problem;
       problems.push({ kind: "as-of", accountNumber: number, row, column: problem.column, message });

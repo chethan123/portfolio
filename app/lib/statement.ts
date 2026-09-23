@@ -122,7 +122,7 @@ type StatementBody = {
   problems: ParseProblem[]; // empty means usable; anything here refuses the commit
 };
 
-// The router's input (statement-routing.ts): sign, dates and blank numbers still unsettled.
+// The router's input (statement-routing.server.ts): sign, dates and blank numbers still unsettled.
 export type MultiAccountStatement = StatementBody & {
   multiAccount: true;
   asOfDate: null;

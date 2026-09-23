@@ -253,11 +253,19 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {problem.message}
             </p>
           ))}
-          <p>
-            Go back to change the column mapping if the instrument is in another column. If the
-            instrument is missing from the source row, edit the CSV outside Portfolio and upload
-            the corrected file. This draft keeps the original file.
-          </p>
+          {blocked.problems.some((problem) => problem.code === "blank-instrument") ? (
+            <p>
+              Go back to change the column mapping if the instrument is in another column. If the
+              instrument is missing from the source row, edit the CSV outside Portfolio and upload
+              the corrected file. This draft keeps the original file.
+            </p>
+          ) : (
+            <p>
+              Go back to change the column mapping if a column was chosen wrongly. A fault in the
+              file itself needs the CSV edited outside Portfolio and the corrected file uploaded.
+              This draft keeps the original file.
+            </p>
+          )}
         </div>
 
         <div className="panel-form">
@@ -455,9 +463,8 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </div>
 
       <Form method="post">
-        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). Never actually
-            null here — assembleDiff refuses a multi-account draft before a diff exists — but the
-            type mirrors UploadDraft's (spec 0023), so this input needs a wire form for it too. */}
+        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). "" is null's
+            wire form, never reached: assembleDiff refuses a multi-account draft. */}
         <input type="hidden" name="accountId" value={diff.accountId ?? ""} />
         {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
             missing baseline round-trips as the empty string on every side of the comparison. */}

@@ -1,5 +1,6 @@
 // Saved column mappings — a brokerage's export format remembered once, applied to later files
-// (DESIGN.md §5.3, spec 0004 step 03). Keyed by (institution, header fingerprint): order-sensitive
+// (DESIGN.md §5.3, spec 0004 step 03). Keyed by (institution, header fingerprint), or fingerprint
+// alone in the multi-account scope (spec 0023): order-sensitive
 // (reordered export = re-map) but case/padding-insensitive. Also owns the columns form contract
 // (parseMappingForm) so the route stays a thin translator.
 import { createHash } from "node:crypto";
@@ -28,8 +29,7 @@ export function headerFingerprint(cells: readonly string[]): string {
 }
 
 // Null for a malformed stored row too (via statementMapping) — reads as "map it again", never a 500.
-// institution null is the multi-account scope (spec 0023 decision 4) — "= null" never matches, so
-// the lookup switches to "is null" rather than reusing the "=" branch with a null bound in.
+// institution null: the multi-account scope (spec 0023 decision 4); "is", since "= null" never matches.
 export async function findMapping(
   institution: string | null,
   fingerprint: string,
@@ -48,9 +48,8 @@ export async function findMapping(
   return parsed.success ? parsed.data : null;
 }
 
-// Upsert on whichever of the two partial indexes (0016) the scope conflicts on: "on conflict on
-// constraint" can't name a partial index, so this infers it from the columns plus the same
-// predicate the index was built with — Kysely's documented shape for a partial unique index.
+// Infers whichever of 0016's partial indexes the scope conflicts on, predicate included: "on
+// conflict on constraint" can't name a partial index.
 export async function upsertMapping(
   institution: string | null,
   fingerprint: string,
@@ -83,6 +82,9 @@ const COLUMN_FIELDS = [
   { field: "accountNumber", label: "Account number", required: false },
 ] as const;
 
+// Spec 0023 decision 4: a multi-account mapping routes every row by its account number.
+export type MappingFormScope = { multiAccount: boolean };
+
 type ColumnField = (typeof COLUMN_FIELDS)[number]["field"];
 
 // Absent field, placeholder and deliberate absence all read as "no column chosen".
@@ -90,7 +92,7 @@ const chosenColumn = (value: string | undefined): string | null =>
   value === undefined || value === "" || value === NOT_IN_FILE ? null : value;
 
 // One superRefine so a submission with three faults reports three messages, not one per round trip.
-const mappingForm = (header: ReadonlyArray<string>) =>
+const mappingForm = (header: ReadonlyArray<string>, { multiAccount }: MappingFormScope) =>
   z
     .object({
       instrument: z.string().optional(),
@@ -112,7 +114,13 @@ const mappingForm = (header: ReadonlyArray<string>) =>
         const value = chosenColumn(form[field]);
 
         if (value === null) {
-          if (required) {
+          if (multiAccount && field === "accountNumber") {
+            refuse(
+              field,
+              "Choose the column that holds the account number — a file of several accounts " +
+                "routes every row by one.",
+            );
+          } else if (required) {
             refuse(
               field,
               `Choose the column that holds the ${label.toLowerCase()} — ` +
@@ -155,6 +163,7 @@ export function parseMappingForm(
   fields: Record<string, string>,
   rows: ReadonlyArray<ReadonlyArray<string>>,
   delimiter: Delimiter,
+  scope: MappingFormScope = { multiAccount: false },
 ): StatementMapping {
   // Hidden field: a bad header row is a forged/stale post, not a control to hang a message under.
   const headerRow = /^\d+$/.test(fields.headerRow ?? "") ? Number(fields.headerRow) : null;
@@ -166,7 +175,7 @@ export function parseMappingForm(
     );
   }
 
-  const input = parseInput(mappingForm(header), fields);
+  const input = parseInput(mappingForm(header, scope), fields);
 
   const column = (field: ColumnField): string | null => chosenColumn(input[field]);
 
@@ -188,5 +197,7 @@ export function parseMappingForm(
     // No screen control — only a hand-authored mapping disables this, and parseStatement
     // still refuses duplicates for that mapping.
     combineDuplicateRows: true,
+    // Absent, never false, when single: as every mapping stored before the flag.
+    ...(scope.multiAccount ? { multiAccount: true } : {}),
   };
 }

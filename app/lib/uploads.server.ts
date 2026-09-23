@@ -12,9 +12,11 @@ import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
+import { isOwed } from "./account-options.ts";
 import {
   accountInput,
   getAccount,
+  listAccounts,
   refusingDuplicateNumber,
   withAccountLock,
   type Account,
@@ -31,10 +33,17 @@ import { aliasesFor, unresolvedStrings } from "./instrument-resolution.server.ts
 import { MONEY_SCALE, QUANTITY_SCALE, divide, render, toUnits } from "./money.ts";
 import { fitsTheMoneyColumn } from "./positions.server.ts";
 import { foldLots, parseStatement, statementMapping } from "./statement.ts";
+import {
+  routeStatement,
+  type RoutedAccount,
+  type RoutedStatement,
+  type RoutingProblem,
+} from "./statement-routing.server.ts";
 import { accountHoldings, accountHoldingsAt } from "./valuation.server.ts";
 
 import type { AssetClass, IsoDate } from "./valuation.server.ts";
 import type {
+  MultiAccountStatement,
   ParseProblem,
   ParsedPosition,
   ParsedStatement,
@@ -56,9 +65,7 @@ export const STALE_REVIEW_MESSAGE =
 
 export type UploadDraft = {
   id: string;
-  // Null is the multi-account draft itself (spec 0023) — a property of the row, not a status
-  // column, following 0004's "how far did this draft get" reasoning. accountName/ownerName are
-  // null exactly when this is, since both come off the same left-joined account.
+  // Null: the multi-account draft (spec 0023 "Schema"). accountName/ownerName null with it.
   accountId: string | null;
   accountName: string | null;
   ownerName: string | null;
@@ -73,10 +80,7 @@ export type UploadDraft = {
 };
 
 export type DraftInput = {
-  // Null is the multi-account choice (spec 0023). Not yet reachable through the /upload form —
-  // parseUploadForm still requires a real account — but createDraft accepts it so the domain, and
-  // tests, can make one ahead of the form gaining the choice.
-  accountId: string | null;
+  accountId: string | null; // null: multi-account (spec 0023)
   filename: string;
   bytes: Uint8Array;
 };
@@ -237,14 +241,12 @@ async function findDraft(
 }
 
 // Ahead of the lock, deciding only which account to take it on; the draft is read again under it.
-// Null covers both a gone/malformed id and a live multi-account draft — until the router and its
-// per-account commit land (spec 0023's "The commit"), neither can take a lock here, so the caller
-// doesn't need to tell them apart.
+// Undefined: no such draft. Null: a multi-account one.
 async function draftAccountId(
   draftId: string,
   db: Kysely<Database>,
-): Promise<string | null> {
-  if (!/^\d+$/.test(draftId)) return null;
+): Promise<string | null | undefined> {
+  if (!/^\d+$/.test(draftId)) return undefined;
 
   const row = await db
     .selectFrom("upload_draft")
@@ -252,7 +254,7 @@ async function draftAccountId(
     .where("id", "=", draftId)
     .executeTakeFirst();
 
-  return row?.account_id ?? null;
+  return row === undefined ? undefined : row.account_id;
 }
 
 async function lockDraft(draftId: string, db: Kysely<Database>): Promise<void> {
@@ -272,11 +274,65 @@ export async function requireDraft(
   const row = await findDraft(draftId, db);
 
   // Expired, not forbidden: a closed account's history can't change, so this upload can never land.
-  // A multi-account draft joins no account, so accountClosedAt reads null too — this never fires
-  // for one; "closed account means expired" is a single-account rule.
+  // Single-account only: a multi-account draft joins no account, so this never fires for one.
   if (row === undefined || row.accountClosedAt !== null) throw new NotFoundError(EXPIRED);
 
   return row;
+}
+
+// The columns step's scope: where the draft's mapping is remembered (null: the multi-account
+// scope, spec 0023 decision 4), and the owed box's default (decision 6: no one kind across several).
+export type MappingScope = {
+  multiAccount: boolean;
+  institution: string | null;
+  owedAsPositive: boolean;
+};
+
+export async function mappingScope(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<MappingScope> {
+  if (draft.accountId === null) {
+    return { multiAccount: true, institution: null, owedAsPositive: false };
+  }
+  const account = await getAccount(draft.accountId, db);
+  return {
+    multiAccount: false,
+    institution: account.institution,
+    owedAsPositive: isOwed(account.kind),
+  };
+}
+
+// A columns-step refusal: the parse's, or a multi-account file's router's (kind set).
+export type DraftProblem = ParseProblem & { kind?: RoutingProblem["kind"] };
+
+// Every account, open and closed. The draft records no answers, so an unanswered number refuses
+// here, with Settings its fix.
+async function routeDraft(
+  parsed: MultiAccountStatement,
+  mapping: StatementMapping,
+  db: Kysely<Database>,
+): Promise<RoutedStatement> {
+  const accounts = await listAccounts(db);
+  const routed = routeStatement(parsed, mapping, {
+    open: accounts.filter((account) => !account.isClosed),
+    closed: accounts.filter((account) => account.isClosed),
+    answers: new Map(),
+  });
+
+  return {
+    ...routed,
+    problems: routed.problems.map((problem) =>
+      problem.kind === "unanswered"
+        ? {
+            ...problem,
+            message:
+              `No open account records account number "${problem.accountNumber}". Record it ` +
+              "on its account in Settings, then save this mapping again.",
+          }
+        : problem,
+    ),
+  };
 }
 
 // had_first_sightings is written here, where the answer exists: vocabulary misses, plus the
@@ -287,7 +343,7 @@ export async function rememberMapping(
   draftId: string,
   mapping: StatementMapping,
   db: Kysely<Database> = getDb(),
-): Promise<{ problems: ParseProblem[] } | { nextStep: "instruments" | "review" }> {
+): Promise<{ problems: DraftProblem[] } | { nextStep: "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
 
   const { rows } = readCsv(draft.bytes, mapping.delimiter);
@@ -296,8 +352,13 @@ export async function rememberMapping(
   // Problems mean the columns step didn't genuinely pass, so nothing is written.
   if (parsed.problems.length > 0) return { problems: parsed.problems };
 
-  // No positions and nothing skipped = empty instrument column on every row (all-skipped differs).
-  if (parsed.positions.length === 0 && parsed.skipped.length === 0) {
+  // No positions, nothing skipped and nothing unnumbered = empty instrument column on every row
+  // (all-skipped differs; so do rows naming no account, the router's refusal below).
+  if (
+    parsed.positions.length === 0 &&
+    parsed.skipped.length === 0 &&
+    (parsed.unnumbered ?? []).length === 0
+  ) {
     throw new ValidationError({
       instrument:
         `No row in this file has anything under "${mapping.columns.instrument}", ` +
@@ -305,6 +366,12 @@ export async function rememberMapping(
     });
   }
 
+  if (parsed.multiAccount === true) {
+    const { problems } = await routeDraft(parsed, mapping, db);
+    if (problems.length > 0) return { problems };
+  }
+
+  // Every string in the file, a multi-account one's across all its accounts (spec 0023).
   const strings = parsed.positions.map((position) => position.instrument);
   const unresolved = await unresolvedStrings(strings, draft.id, db);
   const answered =
@@ -318,11 +385,7 @@ export async function rememberMapping(
           .executeTakeFirst();
   const hadFirstSightings = unresolved.length > 0 || answered !== undefined;
 
-  // Institution scope for a single-account draft; the multi-account scope (null, spec 0023
-  // decision 4) for one with none yet. The account-required column rule for that scope is the
-  // next task's — this is the lookup/save plumbing alone.
-  const institution =
-    draft.accountId === null ? null : (await getAccount(draft.accountId, db)).institution;
+  const { institution } = await mappingScope(draft, db);
   await inTransaction(db, async (trx) => {
     const updated = await trx
       .updateTable("upload_draft")
@@ -346,16 +409,23 @@ export async function rememberMapping(
   return { nextStep: unresolved.length > 0 ? "instruments" : "review" };
 }
 
-// step names the earliest step still owed; null = diffable and committable.
+// step names the earliest step still owed; null = diffable and committable. routed: a
+// multi-account draft's groups, ascending account id (spec 0023 "Routing"); null when single.
 export type DraftParse =
-  | { step: "columns"; problems: ParseProblem[] }
+  | { step: "columns"; problems: DraftProblem[] }
   | {
       step: "instruments";
       parsed: ParsedStatement;
       mapping: StatementMapping;
+      routed: RoutedAccount[] | null;
       unresolved: string[];
     }
-  | { step: null; parsed: ParsedStatement; mapping: StatementMapping };
+  | {
+      step: null;
+      parsed: ParsedStatement;
+      mapping: StatementMapping;
+      routed: RoutedAccount[] | null;
+    };
 
 export async function parseDraft(
   draft: UploadDraft,
@@ -363,6 +433,10 @@ export async function parseDraft(
 ): Promise<DraftParse> {
   const saved = statementMapping.safeParse(draft.mapping);
   if (!saved.success) return { step: "columns", problems: [] };
+  // A mapping saved for the other kind of draft is none for this one.
+  if ((saved.data.multiAccount === true) !== (draft.accountId === null)) {
+    return { step: "columns", problems: [] };
+  }
 
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
@@ -370,16 +444,24 @@ export async function parseDraft(
   // A saved mapping only lands after a clean parse, so problems mean it predates a rule — remap.
   if (parsed.problems.length > 0) return { step: "columns", problems: parsed.problems };
 
+  // Rerun on every read: an account closed or renumbered since the mapping was saved moves rows.
+  let routed: RoutedAccount[] | null = null;
+  if (parsed.multiAccount === true) {
+    const routing = await routeDraft(parsed, saved.data, db);
+    if (routing.problems.length > 0) return { step: "columns", problems: routing.problems };
+    routed = routing.accounts;
+  }
+
   const unresolved = await unresolvedStrings(
     parsed.positions.map((position) => position.instrument),
     draft.id,
     db,
   );
   if (unresolved.length > 0) {
-    return { step: "instruments", parsed, mapping: saved.data, unresolved };
+    return { step: "instruments", parsed, mapping: saved.data, routed, unresolved };
   }
 
-  return { step: null, parsed, mapping: saved.data };
+  return { step: null, parsed, mapping: saved.data, routed };
 }
 
 export type BlockedDraft = {
@@ -390,15 +472,18 @@ export type BlockedDraft = {
   ownerName: string | null;
   accountNumberTail: string | null;
   instrumentsSkipped: boolean;
-  problems: ParseProblem[];
+  problems: DraftProblem[];
 };
 
 function instrumentsStepSkipped(draft: UploadDraft): boolean {
   return draft.hadFirstSightings === false;
 }
 
-function blockedDraftFor(draft: UploadDraft, problems: ParseProblem[]): BlockedDraft | null {
-  const blocking = problems.filter((problem) => problem.code === "blank-instrument");
+// A blank instrument or a routing refusal: remapping may not fix either, so review explains it.
+function blockedDraftFor(draft: UploadDraft, problems: DraftProblem[]): BlockedDraft | null {
+  const blocking = problems.filter(
+    (problem) => problem.code === "blank-instrument" || problem.kind !== undefined,
+  );
   if (blocking.length === 0) return null;
 
   return {
@@ -460,10 +545,7 @@ export type DiffRemoved = DiffInstrument & {
 
 export type UploadDiff = {
   draftId: string;
-  // Nullable to mirror UploadDraft (spec 0023) — assembleDiff never actually returns one with a
-  // null account yet: a multi-account draft is bounced back to columns first (DraftNotReadyError),
-  // since routing its rows to several accounts is a later task.
-  accountId: string | null;
+  accountId: string | null; // as UploadDraft's; assembleDiff refuses a multi-account draft
   accountName: string | null;
   ownerName: string | null;
   accountNumberTail: string | null;
@@ -604,9 +686,7 @@ async function assembleDiff(
       result.step === "columns" ? blockedDraftFor(draft, result.problems) : null,
     );
   }
-  // Routing a multi-account draft's rows to their accounts (spec 0023's router) isn't built yet,
-  // so there is no baseline to read a diff against — bounce back to columns rather than reading a
-  // holding off no account. Reuses the same "not ready" shape parseDraft's own steps throw above.
+  // No one account's baseline to diff against; spec 0023 "Review binding" is per routed group.
   if (draft.accountId === null) {
     throw new DraftNotReadyError("columns", null);
   }
@@ -985,9 +1065,9 @@ export async function commitUpload(
   db: Kysely<Database> = getDb(),
 ): Promise<CommittedUpload> {
   const accountId = await draftAccountId(draftId, db);
-  // Also covers a live multi-account draft: routing rows to several accounts under nested locks
-  // (spec 0023's "The commit") isn't built yet, so neither it nor a gone draft can commit here.
-  if (accountId === null) throw new NotFoundError(EXPIRED);
+  if (accountId === undefined) throw new NotFoundError(EXPIRED);
+  // No one account to lock (spec 0023 "The commit"); refused as its review is.
+  if (accountId === null) throw new DraftNotReadyError("columns", null);
 
   return withAccountLock(accountId, db, (account, trx) =>
     commitUploadUnderLock(draftId, account, raw, trx),
@@ -1096,7 +1176,7 @@ async function commitUploadUnderLock(
     if (disagreeing !== undefined) {
       throw new RefusedUpload(
         `This file says it describes account "${disagreeing.accountNumber}", and ` +
-          `${draft.accountName} — owned by ${draft.ownerName} — is recorded as account ` +
+          `${account.name} — owned by ${account.ownerName} — is recorded as account ` +
           `"${account.externalAccountNumber}". A statement lands in the account it describes — check ` +
           "which account this export belongs to.",
         diff,
@@ -1117,7 +1197,7 @@ async function commitUploadUnderLock(
     );
   }
 
-  const reasons = reasonsToRefuse({ diff, rows }, raw);
+  const reasons = reasonsToRefuse({ diff, rows, accountName: account.name }, raw);
   if (reasons.length > 0) throw new RefusedUpload(reasons.join(" "), diff);
 
   // Promotion first, since the draft delete below cascades the answers away. Only the strings
@@ -1258,7 +1338,7 @@ async function commitUploadUnderLock(
 // Per account, once its diff is drawn (spec 0023, "The commit"). Hard refusals throw at the first;
 // missing confirmations come back, for the caller to refuse together with any other account's.
 function reasonsToRefuse(
-  { diff, rows }: Pick<AssembledDiff, "diff" | "rows">,
+  { diff, rows, accountName }: Pick<AssembledDiff, "diff" | "rows"> & { accountName: string },
   posted: Pick<CommitInput, "baselineSetId" | "confirmRemovals" | "confirmFiledBehind">,
 ): string[] {
   // Whether the baseline confirmation was posted against the figures the diff just classified.
@@ -1319,7 +1399,7 @@ function reasonsToRefuse(
     if (baselineMoved && !unconfirmedFiledBehind) {
       const measuredAgainst =
         diff.baselineAsOf !== null
-          ? `what ${diff.accountName} held on ${diff.baselineAsOf}`
+          ? `what ${accountName} held on ${diff.baselineAsOf}`
           : `an account with nothing recorded on or before this statement's date`;
       reasons.push(
         "This statement was measured against figures that are no longer current: it is now " +
@@ -1332,7 +1412,7 @@ function reasonsToRefuse(
       const { asOf: behindAsOf, currentAsOf } = diff.filedBehind;
       reasons.push(
         `This statement is dated ${behindAsOf}, behind the ${currentAsOf} figures ` +
-          `${diff.accountName} currently reports. Recording it changes this account's history ` +
+          `${accountName} currently reports. Recording it changes this account's history ` +
           `between ${behindAsOf} and the next statement recorded after it, and with it the net ` +
           "worth chart over those dates, but it does not change what the account holds now. " +
           "Nothing was recorded — confirm to file it behind.",

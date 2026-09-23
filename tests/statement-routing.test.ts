@@ -10,7 +10,7 @@ import {
   type OpenAccount,
   type RoutableAccount,
   type RoutedStatement,
-} from "~/lib/statement-routing";
+} from "~/lib/statement-routing.server";
 
 const fixture = (name: string): Uint8Array =>
   readFileSync(fileURLToPath(new URL(`./fixtures/statements/${name}`, import.meta.url)));

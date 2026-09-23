@@ -188,7 +188,7 @@ describe("findMapping and upsertMapping", () => {
 
 // The multi-account scope (spec 0023 decision 4): a mapping saved by header fingerprint alone,
 // separate from every institution's own scope for the same header (migration 0016's two partial
-// indexes). The account-required column rule for this scope is a later task.
+// indexes).
 describe("the multi-account mapping scope", () => {
   it(
     "saves and re-applies a mapping by fingerprint alone, under a null institution",

@@ -1,7 +1,5 @@
 import { Form, redirect } from "react-router";
 
-import { isOwed } from "~/lib/account-options";
-import { getAccount } from "~/lib/accounts.server";
 import {
   NOT_IN_FILE,
   findMapping,
@@ -15,9 +13,11 @@ import {
   ValidationError,
   formFields,
 } from "~/lib/input.server";
-import { parseStatement, statementMapping } from "~/lib/statement";
+import { statementMapping } from "~/lib/statement";
 import {
   STALE_REVIEW_MESSAGE,
+  mappingScope,
+  parseDraft,
   rememberMapping,
   requireDraft,
   type UploadDraft,
@@ -59,9 +59,7 @@ function readDraftFile(draft: UploadDraft) {
 export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
-    // Null for a multi-account draft (spec 0023) — the account-required column rule and the
-    // "owed" label for that scope are the next task's; this loader just has to render.
-    const account = draft.accountId === null ? null : await getAccount(draft.accountId);
+    const scope = await mappingScope(draft);
     const { savedMapping, rows } = readDraftFile(draft);
 
     // Precedence: explicit `header` param, then the saved mapping's row, then candidate detection.
@@ -77,20 +75,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     const headerCells = rows[headerRow] ?? [];
 
-    // Parsed here too, not only on POST — a bounce from review/instruments needs to explain itself on arrival.
-    const savedParse = savedMapping === null ? null : parseStatement(rows, savedMapping);
-    const savedProblems = savedParse === null ? [] : savedParse.problems;
+    // Parsed here too, not only on POST — a bounce from review/instruments needs to explain itself
+    // on arrival. Through parseDraft: a multi-account file's routing refusals are this step's too.
+    const savedParse = await parseDraft(draft);
+    const savedProblems = savedParse.step === "columns" ? savedParse.problems : [];
 
-    // Draft's own mapping wins over the remembered one — the lookup only runs when the draft has
-    // none. Institution scope for a single-account draft, the multi-account scope (null) for one
-    // with none yet (spec 0023 decision 4).
+    // Draft's own mapping wins over the remembered one — the lookup only runs when the draft has none.
     const remembered =
-      savedMapping ??
-      (await findMapping(
-        account === null ? null : account.institution,
-        headerFingerprint(headerCells),
-      ));
-    const fromInstitution = savedMapping === null && remembered !== null;
+      savedMapping ?? (await findMapping(scope.institution, headerFingerprint(headerCells)));
+    const fromEarlierUpload = savedMapping === null && remembered !== null;
 
     // A saved column the file no longer has leaves its control unselected and is named in the intro.
     const missingColumns: string[] = [];
@@ -104,8 +97,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         asOf: "",
         accountNumber: "",
         costBasisIs: "per_share",
-        // Decision 6: no single account kind to default from once a file can span several.
-        owedAsPositive: account !== null && isOwed(account.kind) ? "true" : "",
+        owedAsPositive: scope.owedAsPositive ? "true" : "",
       };
     } else {
       // Matched by trimmed cell, same as `parseStatement`.
@@ -169,13 +161,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         ownerName: draft.ownerName,
         accountNumberTail: draft.accountNumberTail,
       },
-      institution: account?.institution ?? null,
+      institution: scope.institution,
+      multiAccount: scope.multiAccount,
       headerRow,
       headerOptions,
       headerCells,
       preview,
       defaults,
-      fromInstitution,
+      fromEarlierUpload,
       missingColumns,
       savedProblems: savedProblems.map((problem) => problem.message),
       savedProblemFields:
@@ -224,7 +217,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     const draft = await requireDraft(params.draftId);
     const { rows, delimiter } = readDraftFile(draft);
 
-    const mapping = parseMappingForm(values, rows, delimiter);
+    const mapping = parseMappingForm(values, rows, delimiter, await mappingScope(draft));
 
     // Decides everything downstream: parses, remembers, and picks the next step — the same answer that lands on the draft.
     const outcome = await rememberMapping(draft.id, mapping);
@@ -262,12 +255,13 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   const {
     draft,
     institution,
+    multiAccount,
     headerRow,
     headerOptions,
     headerCells,
     preview,
     defaults,
-    fromInstitution,
+    fromEarlierUpload,
     missingColumns,
     savedProblems,
     savedProblemFields,
@@ -302,7 +296,9 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
         >
           <option value="">Choose…</option>
           {/* "unset" and "deliberately absent" are different answers — only the latter survives a save. */}
-          {optional ? <option value={notInFile}>Not in this file</option> : null}
+          {optional && !(multiAccount && field === "accountNumber") ? (
+            <option value={notInFile}>Not in this file</option>
+          ) : null}
           {headerCells
             .filter((cell) => cell.trim() !== "")
             .map((cell, index) => (
@@ -343,11 +339,16 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           </p>
         ) : null}
 
-        {fromInstitution ? (
+        {fromEarlierUpload ? (
           <p>
             These columns were mapped when a previous{" "}
-            {institution ?? draft.accountName ?? "file with this same header"} statement was
-            uploaded; the choices below are that mapping. Check them against the sample rows.
+            {/* || not ??: an account with no institution stores "" (accountInput). */}
+            {multiAccount ? (
+              "file with this header"
+            ) : (
+              <>{institution || draft.accountName} statement</>
+            )}{" "}
+            was uploaded; the choices below are that mapping. Check them against the sample rows.
           </p>
         ) : null}
 
@@ -460,7 +461,11 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
             value="true"
             defaultChecked={values.owedAsPositive === "true"}
           />
-          This file lists what is owed on {draft.accountName} as a positive number
+          {multiAccount ? (
+            "Balances owed are listed as positive"
+          ) : (
+            <>This file lists what is owed on {draft.accountName} as a positive number</>
+          )}
         </label>
 
         <button type="submit" className="button">

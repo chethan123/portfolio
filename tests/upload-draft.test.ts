@@ -7,7 +7,6 @@ import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import {
-  DraftNotReadyError,
   commitUpload,
   createDraft,
   diffForDraft,
@@ -168,8 +167,7 @@ describe("requireDraft", () => {
   );
 });
 
-// The multi-account draft (spec 0023, "Loading a draft with no account") — schema and type-ripple
-// only here; routing rows to accounts and committing them are later tasks.
+// The multi-account draft (spec 0023, "Loading a draft with no account").
 const SIMPLE: StatementMapping = {
   headerRow: 0,
   delimiter: ",",
@@ -211,7 +209,7 @@ describe("a draft with no account", () => {
   );
 
   it(
-    "cannot be diffed once its columns are mapped: routing rows to accounts isn't built yet, so it bounces back to columns rather than reading a baseline off no account",
+    "cannot be diffed once its columns are mapped, bouncing back to columns rather than reading a baseline off no account",
     withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
@@ -220,22 +218,28 @@ describe("a draft with no account", () => {
       // Fully resolved — parseDraft would say `step: null` if this were a single-account draft.
       await expect(rememberMapping(draft.id, SIMPLE, db)).resolves.toEqual({ nextStep: "review" });
 
-      const refusal = await diffForDraft(draft.id, db).catch((error: unknown) => error);
-      expect(refusal).toBeInstanceOf(DraftNotReadyError);
-      expect((refusal as DraftNotReadyError).step).toBe("columns");
-      expect((refusal as DraftNotReadyError).blocked).toBeNull();
+      await expect(diffForDraft(draft.id, db)).rejects.toMatchObject({
+        name: "DraftNotReadyError",
+        step: "columns",
+        blocked: null,
+      });
     }),
   );
 
   it(
-    "refuses to commit: routing and locking several accounts under one commit isn't built yet",
+    "refuses to commit as its review refuses, with no one account to lock, while a gone draft stays a 404",
     withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
       const draft = await seedUploadDraft({ account: null, bytes: CSV });
       await rememberMapping(draft.id, SIMPLE, db);
 
-      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(NotFoundError);
+      await expect(commitUpload(draft.id, {}, db)).rejects.toMatchObject({
+        name: "DraftNotReadyError",
+        step: "columns",
+        blocked: null,
+      });
+      await expect(commitUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
     }),
   );
 });
