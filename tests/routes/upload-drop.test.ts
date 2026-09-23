@@ -56,6 +56,28 @@ describe("the drop screen's loader", () => {
       ]);
     }),
   );
+
+  it(
+    "offers the achievable next step when every account is closed",
+    withDatabase(async ({ seedAccount }) => {
+      await seedAccount({ name: "Old Brokerage", closedAt: "2026-01-01" });
+
+      const markup = await screenAt("/upload");
+      const text = markup
+        .replace(/<[^>]+>/g, "")
+        .replaceAll("<!-- -->", "")
+        .replaceAll("&#x27;", "'")
+        .replaceAll("&amp;", "&");
+
+      expect(text).toContain("Every account is closed.");
+      expect(text).toContain(
+        "A statement lands in an open account, and a closed account's history does not change. " +
+          "Add an account under Settings → Accounts to record future statements.",
+      );
+      expect(markup).toContain('<a href="/settings/accounts"');
+      expect(markup).not.toContain("Reopen");
+    }),
+  );
 });
 
 describe("the drop screen's ?account= prefill", () => {

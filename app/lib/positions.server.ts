@@ -15,7 +15,7 @@ import {
   perShareAmount,
   signedQuantity,
 } from "./input.server.ts";
-import { withAccountLock, type Account } from "./accounts.server.ts";
+import { closedAccountRefusal, withAccountLock, type Account } from "./accounts.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, toUnits } from "./money.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
@@ -163,10 +163,7 @@ async function revisePositionUnderLock(
 
   // Before field validation: a closed account isn't fixable by correcting the form.
   if (account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this position is still real.",
-    );
+    throw ValidationError.form(closedAccountRefusal(account.name));
   }
 
   const before = await currentPosition(accountId, instrumentId, db);

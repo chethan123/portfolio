@@ -103,12 +103,16 @@ describe("createDraft", () => {
   it(
     "refuses a closed account in the words setBalance uses, staging nothing",
     withDatabase(async ({ db, seedAccount }) => {
-      const account = await seedAccount({ kind: "brokerage", closedAt: "2026-01-01" });
+      const account = await seedAccount({ kind: "brokerage", name: "Old Brokerage" });
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const refusal = await refusalOf(() =>
         createDraft({ accountId: account.id, filename: "late.csv", bytes: CSV }, db),
       );
-      expect(refusal.fieldErrors.form).toMatch(/closed account's history does not change/);
+      expect(refusal.fieldErrors.form).toBe(
+        "Old Brokerage is closed, and a closed account's history does not change. " +
+          "If this account is still active, add it again under Settings → Accounts for future records.",
+      );
 
       const drafts = await db.selectFrom("upload_draft").select("id").execute();
       expect(drafts).toHaveLength(0);

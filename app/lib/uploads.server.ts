@@ -12,7 +12,12 @@ import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
-import { getAccount, withAccountLock, type Account } from "./accounts.server.ts";
+import {
+  closedAccountRefusal,
+  getAccount,
+  withAccountLock,
+  type Account,
+} from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
@@ -151,10 +156,7 @@ export async function createDraft(
   const account = await getAccount(accountId, db);
 
   if (account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this statement is still real.",
-    );
+    throw ValidationError.form(closedAccountRefusal(account.name));
   }
 
   await db
@@ -972,10 +974,7 @@ async function commitUploadUnderLock(
 
   // First: a closed account isn't fixable by a ticked box or typed date.
   if (account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this statement is still real.",
-    );
+    throw ValidationError.form(closedAccountRefusal(account.name));
   }
 
   // Hidden field feeds the expired page's link only — a different account is stale/forged.

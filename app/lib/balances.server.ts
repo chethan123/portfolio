@@ -18,7 +18,7 @@ import {
   parseInput,
   recordedDate,
 } from "./input.server.ts";
-import { withAccountLock, type Account } from "./accounts.server.ts";
+import { closedAccountRefusal, withAccountLock, type Account } from "./accounts.server.ts";
 import { currentStatement } from "./current-statement.server.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
@@ -135,10 +135,7 @@ async function setBalanceUnderLock(
   }
 
   if (account.isClosed) {
-    throw ValidationError.form(
-      `${account.name} is closed, and a closed account's history does not change. ` +
-        "Reopen it from Settings if this balance is still real.",
-    );
+    throw ValidationError.form(closedAccountRefusal(account.name));
   }
 
   // Reads actual rows, not the label — kind alone can lie about what's held (SET-1).

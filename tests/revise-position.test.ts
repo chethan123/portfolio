@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { closeAccount } from "~/lib/accounts.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { accountTotal, currentHoldings, netWorth, netWorthAt } from "~/lib/valuation.server";
 
@@ -298,7 +299,6 @@ describe("revisePosition", () => {
       const account = await seedAccount({
         kind: "brokerage",
         name: "Old Fidelity",
-        closedAt: "2026-07-01",
       });
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedPositionSet({
@@ -306,11 +306,22 @@ describe("revisePosition", () => {
         asOf: "2026-06-30",
         holdings: [{ instrument: vti, quantity: "100.00000000" }],
       });
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const refusal = await refusalOf(() =>
         revisePosition(account.id, vti.id, { quantity: "120", costBasisPerShare: "" }, db),
       );
-      expect(refusal.fieldErrors.form).toMatch(/is closed/);
+      expect(refusal.fieldErrors.form).toBe(
+        "Old Fidelity is closed, and a closed account's history does not change. " +
+          "If this account is still active, add it again under Settings → Accounts for future records.",
+      );
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .execute(),
+      ).toHaveLength(1);
     }),
   );
 

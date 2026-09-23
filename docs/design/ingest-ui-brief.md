@@ -837,8 +837,8 @@ The page is its header, the step strip, and the shell's card above them.
 ### 7.2 Accounts exist, but every one is closed
 
 An `.empty-state`: dashed border, centred, headline **"Every account is closed."**, detail *"A
-statement lands in an open account, and a closed account's history does not change. Reopen or add
-one under Settings → Accounts."* This must **not** be the first-run prompt — the household is set
+statement lands in an open account, and a closed account's history does not change. Add an account
+under Settings → Accounts to record future statements."* This must **not** be the first-run prompt — the household is set
 up, and "start here" would be false — and must not be a bare refusal on the select, because there
 is no select to refuse on.
 
