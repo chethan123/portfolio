@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -11,6 +11,7 @@ import {
   MIGRATIONS_TABLE,
   appliedMigrations,
   applyPendingMigrations,
+  migrationsDirectory,
   migrationsOnDisk,
   pendingMigrations,
 } from "../server/migrations.ts";
@@ -424,6 +425,42 @@ describe("the schema's planner costs", () => {
 
     // whole array deliberately — a later overload fails here instead of picking an arbitrary row
     expect(result.rows).toEqual([{ procost: 1000 }]);
+  });
+});
+
+describe("the open-account number index", () => {
+  it("refuses to build over open accounts already sharing a number, naming the number and those accounts", async () => {
+    const migration = await readFile(
+      path.join(migrationsDirectory(), "0015_account_open_number_unique.sql"),
+      "utf8",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // DDL is transactional: the rollback below puts the index back.
+      await client.query("drop index account_open_number_unique");
+      const { rows } = await client.query<{ id: string }>(`
+        with owner as (insert into person (name) values ('Alex Rivera') returning id)
+        insert into account
+          (name, institution, kind, owner_id, tax_treatment, external_account_number, closed_at)
+        select seeded.name, 'Schwab', 'brokerage', owner.id, 'taxable', '8391-2245', seeded.closed_at
+        from owner, (values
+          ('Schwab One', null::timestamptz),
+          ('Schwab Two', null),
+          ('Schwab Old', now())
+        ) as seeded (name, closed_at)
+        returning id
+      `);
+      const [one, two] = rows;
+
+      // Ends at the period: the closed account shares the number and is no duplicate.
+      await expect(client.query(migration)).rejects.toThrow(
+        `: "8391-2245" on Schwab One (id ${one?.id}), Schwab Two (id ${two?.id}). `,
+      );
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
   });
 });
 

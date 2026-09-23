@@ -14,7 +14,13 @@ import {
   taxTreatmentValues,
 } from "./account-options.ts";
 import { currentStatement } from "./current-statement.server.ts";
-import { getDb, inTransaction, type Database } from "./db.server.ts";
+import {
+  getDb,
+  guardedAgainstConstraintViolation,
+  inTransaction,
+  uniqueViolationConstraint,
+  type Database,
+} from "./db.server.ts";
 import {
   NotFoundError,
   ValidationError,
@@ -162,6 +168,40 @@ export async function withAccountLock<T>(
   return inTransaction(db, locked);
 }
 
+// At most one open account per number (ADR-0015). The index decides, not a read first: Settings
+// takes no lock and a commit locks only its own account, so two writers could each pass a read.
+// Holder read after the violation, only to name it; may be gone again by then.
+export async function refusingDuplicateNumber<T>(
+  number: string | null,
+  db: Kysely<Database>,
+  write: () => Promise<T>,
+  refuse: (who: string) => Error,
+): Promise<T> {
+  try {
+    return await guardedAgainstConstraintViolation(db, write);
+  } catch (cause) {
+    if (number === null || uniqueViolationConstraint(cause) !== "account_open_number_unique") {
+      throw cause;
+    }
+    const holder = await selectAccounts(db)
+      .where("account.external_account_number", "=", number)
+      .where("account.closed_at", "is", null)
+      .executeTakeFirst();
+    throw refuse(
+      holder === undefined
+        ? "another open account"
+        : `${holder.name}, owned by ${holder.owner_name}`,
+    );
+  }
+}
+
+const duplicateNumber = (who: string) =>
+  new ValidationError({
+    externalAccountNumber:
+      `This number is already recorded on ${who}. Only one open account can record a number, ` +
+      "since an upload can route rows by it. Clear it there first if it belongs here.",
+  });
+
 export async function createAccount(
   raw: unknown,
   db: Kysely<Database> = getDb(),
@@ -169,18 +209,24 @@ export async function createAccount(
   const input = parseInput(accountInput, raw);
   await requireOwner(input.ownerId, db);
 
-  const row = await db
-    .insertInto("account")
-    .values({
-      name: input.name,
-      institution: input.institution ?? "",
-      kind: input.kind,
-      owner_id: input.ownerId,
-      tax_treatment: input.taxTreatment,
-      external_account_number: input.externalAccountNumber,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
+  const row = await refusingDuplicateNumber(
+    input.externalAccountNumber,
+    db,
+    () =>
+      db
+        .insertInto("account")
+        .values({
+          name: input.name,
+          institution: input.institution ?? "",
+          kind: input.kind,
+          owner_id: input.ownerId,
+          tax_treatment: input.taxTreatment,
+          external_account_number: input.externalAccountNumber,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow(),
+    duplicateNumber,
+  );
 
   return getAccount(row.id, db);
 }
@@ -242,18 +288,24 @@ export async function updateAccount(
     }
   }
 
-  await db
-    .updateTable("account")
-    .set({
-      name: input.name,
-      institution: input.institution ?? "",
-      kind: input.kind,
-      owner_id: input.ownerId,
-      tax_treatment: input.taxTreatment,
-      external_account_number: input.externalAccountNumber,
-    })
-    .where("id", "=", existing.id)
-    .execute();
+  await refusingDuplicateNumber(
+    input.externalAccountNumber,
+    db,
+    () =>
+      db
+        .updateTable("account")
+        .set({
+          name: input.name,
+          institution: input.institution ?? "",
+          kind: input.kind,
+          owner_id: input.ownerId,
+          tax_treatment: input.taxTreatment,
+          external_account_number: input.externalAccountNumber,
+        })
+        .where("id", "=", existing.id)
+        .execute(),
+    duplicateNumber,
+  );
 
   return getAccount(existing.id, db);
 }

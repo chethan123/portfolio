@@ -12,7 +12,13 @@ import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
-import { getAccount, withAccountLock, type Account } from "./accounts.server.ts";
+import {
+  accountInput,
+  getAccount,
+  refusingDuplicateNumber,
+  withAccountLock,
+  type Account,
+} from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
@@ -1069,6 +1075,19 @@ async function commitUploadUnderLock(
     }
   }
 
+  // Settings' own field rule, trimmed and bounded, so a capture can't record what the form refuses.
+  // Parsed only for an account with none: a recorded number is never overwritten (below).
+  const captured = accountInput.shape.externalAccountNumber.safeParse(
+    account.externalAccountNumber === null ? fileAccountNumber : null,
+  );
+  if (!captured.success) {
+    throw new RefusedUpload(
+      `${captured.error.issues.map((issue) => issue.message).join(" ")} This file's is longer, ` +
+        "so nothing was recorded — check which column is mapped as the account number.",
+      diff,
+    );
+  }
+
   const reasons = reasonsToRefuse({ diff, rows }, raw);
   if (reasons.length > 0) throw new RefusedUpload(reasons.join(" "), diff);
 
@@ -1170,13 +1189,26 @@ async function commitUploadUnderLock(
 
   // Only where the column is still empty: never overwrite a hand-recorded number. The lock makes
   // a concurrent one impossible; the predicate stays as the write's own statement of the rule.
-  if (fileAccountNumber !== null && account.externalAccountNumber === null) {
-    await db
-      .updateTable("account")
-      .set({ external_account_number: fileAccountNumber })
-      .where("id", "=", draft.accountId)
-      .where("external_account_number", "is", null)
-      .execute();
+  const capturedNumber = captured.data;
+  if (capturedNumber !== null) {
+    await refusingDuplicateNumber(
+      capturedNumber,
+      db,
+      () =>
+        db
+          .updateTable("account")
+          .set({ external_account_number: capturedNumber })
+          .where("id", "=", draft.accountId)
+          .where("external_account_number", "is", null)
+          .execute(),
+      (who) =>
+        new RefusedUpload(
+          `This file says it describes account "${capturedNumber}", which is already recorded ` +
+            `on ${who}. A statement lands in the account it describes — check which account ` +
+            "this export belongs to.",
+          diff,
+        ),
+    );
   }
 
   return {

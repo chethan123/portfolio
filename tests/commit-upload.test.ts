@@ -11,6 +11,7 @@ import { changeAlias } from "~/lib/instrument-aliases.server";
 import { lastRecorded, setBalance } from "~/lib/balances.server";
 import {
   DraftNotReadyError,
+  RefusedUpload,
   StaleReviewError,
   commitUpload,
   diffForDraft,
@@ -1454,6 +1455,98 @@ describe("commitUpload", () => {
         .where("id", "=", account.id)
         .executeTakeFirstOrThrow();
       expect(stored.external_account_number).toBe("Z-999");
+    }),
+  );
+
+  it(
+    "stores a captured account number without its surrounding whitespace",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "PAD", name: "Padded Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "PAD" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nPAD,10,,  Z-999 \n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBe("Z-999");
+    }),
+  );
+
+  it(
+    "refuses to capture a number another open account records, naming that account",
+    withDatabase(async (ctx) => {
+      const { db, seedPerson, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const owner = await seedPerson({ name: "Alex Rivera" });
+      await seedAccount({ name: "Schwab", owner, externalAccountNumber: "8391-2245" });
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "DUP", name: "Duplicate Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "DUP" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nDUP,10,,8391-2245\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const refusal = await refusalOf(() =>
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal).toBeInstanceOf(RefusedUpload);
+      expect(refusal.fieldErrors.form).toMatch(
+        /"8391-2245", which is already recorded on Schwab, owned by Alex Rivera\./,
+      );
+
+      // Refused at the number's write, after the set's insert: taking that back is the commit
+      // transaction's rollback, and here that transaction is the test's.
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses a file account number longer than Settings accepts, rather than capturing it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "LNG", name: "Long Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "LNG" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        `Symbol,Quantity,Basis,Acct\nLNG,10,,${"9".repeat(65)}\n`,
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const refusal = await refusalOf(() =>
+        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal).toBeInstanceOf(RefusedUpload);
+      expect(refusal.fieldErrors.form).toMatch(/64 characters or fewer/);
+
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(0);
     }),
   );
 
