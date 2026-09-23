@@ -60,6 +60,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
     const account = await getAccount(draft.accountId);
+    const canListOwedAsPositive = isOwed(account.kind);
     const { savedMapping, rows } = readDraftFile(draft);
 
     // Precedence: explicit `header` param, then the saved mapping's row, then candidate detection.
@@ -96,7 +97,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         asOf: "",
         accountNumber: "",
         costBasisIs: "per_share",
-        owedAsPositive: isOwed(account.kind) ? "true" : "",
+        owedAsPositive: canListOwedAsPositive ? "true" : "",
       };
     } else {
       // Matched by trimmed cell, same as `parseStatement`.
@@ -122,7 +123,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         asOf: value(remembered.columns.asOf, true),
         accountNumber: value(remembered.columns.accountNumber, true),
         costBasisIs: remembered.costBasisIs,
-        owedAsPositive: remembered.owedAsPositive ? "true" : "",
+        owedAsPositive:
+          canListOwedAsPositive && remembered.owedAsPositive ? "true" : "",
       };
     }
 
@@ -161,6 +163,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         accountNumberTail: draft.accountNumberTail,
       },
       institution: account.institution,
+      canListOwedAsPositive,
       headerRow,
       headerOptions,
       headerCells,
@@ -253,6 +256,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   const {
     draft,
     institution,
+    canListOwedAsPositive,
     headerRow,
     headerOptions,
     headerCells,
@@ -436,16 +440,17 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           ) : null}
         </fieldset>
 
-        {/* Unticked keeps the file's own sign — how an overdraft records (DESIGN.md §14.8). */}
-        <label className="choice">
-          <input
-            type="checkbox"
-            name="owedAsPositive"
-            value="true"
-            defaultChecked={values.owedAsPositive === "true"}
-          />
-          This file lists what is owed on {draft.accountName} as a positive number
-        </label>
+        {canListOwedAsPositive ? (
+          <label className="choice">
+            <input
+              type="checkbox"
+              name="owedAsPositive"
+              value="true"
+              defaultChecked={values.owedAsPositive === "true"}
+            />
+            This file lists what is owed on {draft.accountName} as a positive number
+          </label>
+        ) : null}
 
         <button type="submit" className="button">
           Save mapping and continue

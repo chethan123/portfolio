@@ -12,6 +12,7 @@ import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
+import { isOwed } from "./account-options.ts";
 import { getAccount, withAccountLock, type Account } from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
@@ -68,6 +69,14 @@ export type DraftInput = {
   filename: string;
   bytes: Uint8Array;
 };
+
+// A hidden or forged form field must not turn an asset into debt. This is repeated when a
+// saved draft is parsed because an otherwise-empty account can change kind after mapping.
+function mappingForAccount(mapping: StatementMapping, account: Account): StatementMapping {
+  return isOwed(account.kind) || !mapping.owedAsPositive
+    ? mapping
+    : { ...mapping, owedAsPositive: false };
+}
 
 // Counted while streaming: chunked bodies carry no Content-Length; `request.formData()` buffers unbounded (#313).
 export async function readUploadForm(request: Request): Promise<FormData> {
@@ -270,9 +279,11 @@ export async function rememberMapping(
   db: Kysely<Database> = getDb(),
 ): Promise<{ problems: ParseProblem[] } | { nextStep: "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
+  const account = await getAccount(draft.accountId, db);
+  const effectiveMapping = mappingForAccount(mapping, account);
 
-  const { rows } = readCsv(draft.bytes, mapping.delimiter);
-  const parsed = parseStatement(rows, mapping);
+  const { rows } = readCsv(draft.bytes, effectiveMapping.delimiter);
+  const parsed = parseStatement(rows, effectiveMapping);
 
   // Problems mean the columns step didn't genuinely pass, so nothing is written.
   if (parsed.problems.length > 0) return { problems: parsed.problems };
@@ -299,12 +310,11 @@ export async function rememberMapping(
           .executeTakeFirst();
   const hadFirstSightings = unresolved.length > 0 || answered !== undefined;
 
-  const account = await getAccount(draft.accountId, db);
   await inTransaction(db, async (trx) => {
     const updated = await trx
       .updateTable("upload_draft")
       .set({
-        mapping: JSON.stringify(mapping),
+        mapping: JSON.stringify(effectiveMapping),
         had_first_sightings: hadFirstSightings,
       })
       .where("id", "=", draft.id)
@@ -314,8 +324,8 @@ export async function rememberMapping(
 
     await upsertMapping(
       account.institution,
-      headerFingerprint(rows[mapping.headerRow] ?? []),
-      mapping,
+      headerFingerprint(rows[effectiveMapping.headerRow] ?? []),
+      effectiveMapping,
       trx,
     );
   });
@@ -340,9 +350,11 @@ export async function parseDraft(
 ): Promise<DraftParse> {
   const saved = statementMapping.safeParse(draft.mapping);
   if (!saved.success) return { step: "columns", problems: [] };
+  const account = await getAccount(draft.accountId, db);
+  const effectiveMapping = mappingForAccount(saved.data, account);
 
-  const { rows } = readCsv(draft.bytes, saved.data.delimiter);
-  const parsed = parseStatement(rows, saved.data);
+  const { rows } = readCsv(draft.bytes, effectiveMapping.delimiter);
+  const parsed = parseStatement(rows, effectiveMapping);
 
   // A saved mapping only lands after a clean parse, so problems mean it predates a rule — remap.
   if (parsed.problems.length > 0) return { step: "columns", problems: parsed.problems };
@@ -353,10 +365,10 @@ export async function parseDraft(
     db,
   );
   if (unresolved.length > 0) {
-    return { step: "instruments", parsed, mapping: saved.data, unresolved };
+    return { step: "instruments", parsed, mapping: effectiveMapping, unresolved };
   }
 
-  return { step: null, parsed, mapping: saved.data };
+  return { step: null, parsed, mapping: effectiveMapping };
 }
 
 export type BlockedDraft = {
