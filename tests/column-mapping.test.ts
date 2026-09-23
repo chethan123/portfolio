@@ -186,6 +186,70 @@ describe("findMapping and upsertMapping", () => {
   );
 });
 
+// The multi-account scope (spec 0023 decision 4): a mapping saved by header fingerprint alone,
+// separate from every institution's own scope for the same header (migration 0016's two partial
+// indexes). The account-required column rule for this scope is a later task.
+describe("the multi-account mapping scope", () => {
+  it(
+    "saves and re-applies a mapping by fingerprint alone, under a null institution",
+    withDatabase(async ({ db }) => {
+      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
+
+      await upsertMapping(null, fingerprint, MAPPING, db);
+
+      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(MAPPING);
+    }),
+  );
+
+  it(
+    "is neither found by nor overwritten by an institution mapping with the same header, and vice versa",
+    withDatabase(async ({ db }) => {
+      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
+      const multi: StatementMapping = {
+        ...MAPPING,
+        columns: { ...MAPPING.columns, accountNumber: "Symbol" },
+      };
+
+      await upsertMapping("Fidelity", fingerprint, MAPPING, db);
+      await upsertMapping(null, fingerprint, multi, db);
+
+      await expect(findMapping("Fidelity", fingerprint, db)).resolves.toEqual(MAPPING);
+      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(multi);
+
+      const rows = await db
+        .selectFrom("column_mapping")
+        .select(["institution", "header_fingerprint"])
+        .where("header_fingerprint", "=", fingerprint)
+        .execute();
+      expect(rows).toHaveLength(2);
+    }),
+  );
+
+  it(
+    "replaces a corrected multi-account mapping in place rather than accumulating a second row",
+    withDatabase(async ({ db }) => {
+      const fingerprint = headerFingerprint(["Symbol", "Qty", "Quantity"]);
+      const corrected: StatementMapping = {
+        ...MAPPING,
+        columns: { ...MAPPING.columns, quantity: "Qty" },
+      };
+
+      await upsertMapping(null, fingerprint, MAPPING, db);
+      await upsertMapping(null, fingerprint, corrected, db);
+
+      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(corrected);
+
+      const rows = await db
+        .selectFrom("column_mapping")
+        .select("id")
+        .where("institution", "is", null)
+        .where("header_fingerprint", "=", fingerprint)
+        .execute();
+      expect(rows).toHaveLength(1);
+    }),
+  );
+});
+
 describe("rememberMapping", () => {
   /** A mapping over the two-column files these tests hand it. */
   const SIMPLE: StatementMapping = {
@@ -325,6 +389,22 @@ describe("rememberMapping", () => {
 
       const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
       await expect(findMapping("Fidelity", fingerprint, db)).resolves.toEqual(SIMPLE);
+    }),
+  );
+
+  it(
+    "remembers a multi-account draft's mapping under the multi-account scope, not any institution's",
+    withDatabase(async ({ db, seedUploadDraft }) => {
+      const draft = await seedUploadDraft({
+        account: null,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
+      });
+
+      await rememberMapping(draft.id, SIMPLE, db);
+
+      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
+      await expect(findMapping(null, fingerprint, db)).resolves.toEqual(SIMPLE);
+      await expect(findMapping("Test Institution", fingerprint, db)).resolves.toBeNull();
     }),
   );
 

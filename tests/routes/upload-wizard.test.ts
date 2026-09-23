@@ -203,6 +203,61 @@ describe("a draft's bare address", () => {
   );
 });
 
+// The multi-account draft (spec 0023) — schema, type-ripple and mapping-scope only here; the
+// accounts step and per-account routing that would let one reach a diffable review are later tasks.
+describe("a draft with no account", () => {
+  it(
+    "sends a freshly created multi-account draft's bare address to columns, same as a single-account one",
+    withDatabase(async ({ seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: encode(CSV) });
+
+      expect(
+        await redirectTo(() =>
+          resumeDraft(args(get(`/upload/${draft.id}`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+    }),
+  );
+
+  it(
+    "renders the columns step with 'several accounts' in place of one account's name",
+    withDatabase(async ({ seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: encode(CSV) });
+
+      const page = await columnsLoader(
+        args(get(`/upload/${draft.id}/columns`), { draftId: draft.id }),
+      );
+      if (page instanceof Response) throw new Error(`Expected Columns, got ${page.status}.`);
+      expect(page.draft.accountName).toBeNull();
+
+      const markup = renderRoute(Columns, `/upload/${draft.id}/columns`, page);
+      expect(markup).toContain("several accounts");
+    }),
+  );
+
+  it(
+    "bounces a mapped, fully resolved draft's review back to columns: routing rows to accounts isn't built yet",
+    withDatabase(async (ctx) => {
+      const instrument = await ctx.seedInstrument({
+        symbol: "VTI",
+        name: "Vanguard Total Stock",
+      });
+      await ctx.seedInstrumentAlias({ instrument, rawString: "VTI" });
+      const draft = await ctx.seedUploadDraft({ account: null, bytes: encode(CSV) });
+
+      // Fully resolved — parseDraft would say `step: null` if this were a single-account draft.
+      const outcome = await rememberMapping(draft.id, MAPPING, ctx.db);
+      expect(outcome).toEqual({ nextStep: "review" });
+
+      expect(
+        await redirectTo(() =>
+          reviewLoader(args(get(`/upload/${draft.id}/review`), { draftId: draft.id })),
+        ),
+      ).toBe(`/upload/${draft.id}/columns`);
+    }),
+  );
+});
+
 describe("a review over a draft that is not ready for one", () => {
   it(
     "sends an unready loader to columns and refuses an older review submit as stale",

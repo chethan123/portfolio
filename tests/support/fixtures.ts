@@ -18,7 +18,7 @@ export type SeededAccount = { id: string; name: string; ownerId: string };
 export type SeededClassification = { id: string; name: string; assetClass: AssetClass };
 export type SeededInstrument = { id: string; symbol: string | null; name: string };
 export type SeededPositionSet = { id: string; accountId: string; asOf: string };
-export type SeededUploadDraft = { id: string; accountId: string };
+export type SeededUploadDraft = { id: string; accountId: string | null };
 export type SeededPasskey = { credentialId: string; label: string };
 export type SeededUnlockGrant = { id: string; passkeyId: string };
 
@@ -77,7 +77,8 @@ export type Fixtures = {
 
   /** Bypasses createDraft: it refuses closed accounts and sweeps as a side effect, which would eat rows a sweep test just planted. */
   seedUploadDraft(options: {
-    account: SeededAccount;
+    /** null seeds a multi-account draft (spec 0023) — no account chosen yet. */
+    account: SeededAccount | null;
     filename?: string;
     bytes?: Uint8Array;
     /** Planted directly, as rememberMapping leaves it — for a draft that must be review-ready without that step's column_mapping row. */
@@ -341,7 +342,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     const row = await db
       .insertInto("upload_draft")
       .values({
-        account_id: account.id,
+        account_id: account === null ? null : account.id,
         filename,
         raw_file: Buffer.from(bytes),
         ...(mapping === undefined ? {} : { mapping: JSON.stringify(mapping) }),
@@ -351,7 +352,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .returning("id")
       .executeTakeFirstOrThrow();
 
-    return { id: row.id, accountId: account.id };
+    return { id: row.id, accountId: account === null ? null : account.id };
   };
 
   const seedQuote: Fixtures["seedQuote"] = async ({

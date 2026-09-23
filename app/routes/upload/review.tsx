@@ -233,9 +233,16 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
         <div className="panel-body form-intro">
           <p>
-            <strong>{blocked.filename}</strong> · {blocked.accountName}
-            {blocked.accountNumberTail ? ` ${blocked.accountNumberTail}` : ""} — owned by{" "}
-            {blocked.ownerName}
+            <strong>{blocked.filename}</strong> ·{" "}
+            {blocked.accountName !== null ? (
+              <>
+                {blocked.accountName}
+                {blocked.accountNumberTail ? ` ${blocked.accountNumberTail}` : ""} — owned by{" "}
+                {blocked.ownerName}
+              </>
+            ) : (
+              "several accounts"
+            )}
           </p>
           {blocked.problems.map((problem, index) => (
             <p
@@ -257,7 +264,11 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           <Link className="button" to={`/upload/${blocked.draftId}/columns`}>
             Back to columns
           </Link>
-          <Link className="button button--text" to={`/upload?account=${blocked.accountId}`}>
+          {/* No one account to prefill for a multi-account draft — plain /upload. */}
+          <Link
+            className="button button--text"
+            to={blocked.accountId !== null ? `/upload?account=${blocked.accountId}` : "/upload"}
+          >
             Upload corrected file
           </Link>
         </div>
@@ -297,9 +308,16 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
       <div className="panel-body form-intro">
         <p>
-          <strong>{diff.filename}</strong> · {diff.accountName}
-          {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
-          {diff.ownerName}
+          <strong>{diff.filename}</strong> ·{" "}
+          {diff.accountName !== null ? (
+            <>
+              {diff.accountName}
+              {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
+              {diff.ownerName}
+            </>
+          ) : (
+            "several accounts"
+          )}
         </p>
 
         {diff.firstStatement ? (
@@ -437,8 +455,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </div>
 
       <Form method="post">
-        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
-        <input type="hidden" name="accountId" value={diff.accountId} />
+        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). Never actually
+            null here — assembleDiff refuses a multi-account draft before a diff exists — but the
+            type mirrors UploadDraft's (spec 0023), so this input needs a wire form for it too. */}
+        <input type="hidden" name="accountId" value={diff.accountId ?? ""} />
         {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
             missing baseline round-trips as the empty string on every side of the comparison. */}
         <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />

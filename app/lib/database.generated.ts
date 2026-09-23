@@ -54,7 +54,7 @@ export interface Classification {
 export interface ColumnMapping {
   header_fingerprint: string;
   id: Generated<Int8>;
-  institution: string;
+  institution: string | null;
   mapping: Json;
 }
 
@@ -194,7 +194,7 @@ export interface UnlockGrant {
 }
 
 export interface UploadDraft {
-  account_id: Int8;
+  account_id: Int8 | null;
   as_of_date: string | null;
   created_at: Generated<Timestamp>;
   filename: string;

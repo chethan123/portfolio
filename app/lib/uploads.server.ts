@@ -56,9 +56,12 @@ export const STALE_REVIEW_MESSAGE =
 
 export type UploadDraft = {
   id: string;
-  accountId: string;
-  accountName: string;
-  ownerName: string;
+  // Null is the multi-account draft itself (spec 0023) — a property of the row, not a status
+  // column, following 0004's "how far did this draft get" reasoning. accountName/ownerName are
+  // null exactly when this is, since both come off the same left-joined account.
+  accountId: string | null;
+  accountName: string | null;
+  ownerName: string | null;
   accountNumberTail: string | null;
   filename: string;
   bytes: Uint8Array;
@@ -70,7 +73,10 @@ export type UploadDraft = {
 };
 
 export type DraftInput = {
-  accountId: string;
+  // Null is the multi-account choice (spec 0023). Not yet reachable through the /upload form —
+  // parseUploadForm still requires a real account — but createDraft accepts it so the domain, and
+  // tests, can make one ahead of the form gaining the choice.
+  accountId: string | null;
   filename: string;
   bytes: Uint8Array;
 };
@@ -153,10 +159,10 @@ export async function parseUploadForm(form: FormData): Promise<DraftInput> {
 export async function createDraft(
   { accountId, filename, bytes }: DraftInput,
   db: Kysely<Database> = getDb(),
-): Promise<{ id: string; accountId: string }> {
-  const account = await getAccount(accountId, db);
+): Promise<{ id: string; accountId: string | null }> {
+  const account = accountId === null ? null : await getAccount(accountId, db);
 
-  if (account.isClosed) {
+  if (account !== null && account.isClosed) {
     throw ValidationError.form(
       `${account.name} is closed, and a closed account's history does not change. ` +
         "Reopen it from Settings if this statement is still real.",
@@ -174,7 +180,7 @@ export async function createDraft(
     .returning("id")
     .executeTakeFirstOrThrow();
 
-  return { id: row.id, accountId: account.id };
+  return { id: row.id, accountId: account?.id ?? null };
 }
 
 // One account fact beyond the draft: closed underneath it, which requireDraft reads as expired.
@@ -184,6 +190,8 @@ type DraftRecord = UploadDraft & {
 };
 
 // Closed accounts stay in: requireDraft reads one as expired, commitUpload owes it a sentence.
+// Left join, not inner: a multi-account draft's account_id is null (spec 0023), and an inner join
+// would drop the row entirely, reading a live draft as expired.
 async function findDraft(
   draftId: string,
   db: Kysely<Database>,
@@ -193,8 +201,8 @@ async function findDraft(
 
   const row = await db
     .selectFrom("upload_draft")
-    .innerJoin("account", "account.id", "upload_draft.account_id")
-    .innerJoin("person", "person.id", "account.owner_id")
+    .leftJoin("account", "account.id", "upload_draft.account_id")
+    .leftJoin("person", "person.id", "account.owner_id")
     .select([
       "upload_draft.id",
       "upload_draft.account_id",
@@ -229,11 +237,14 @@ async function findDraft(
 }
 
 // Ahead of the lock, deciding only which account to take it on; the draft is read again under it.
+// Null covers both a gone/malformed id and a live multi-account draft — until the router and its
+// per-account commit land (spec 0023's "The commit"), neither can take a lock here, so the caller
+// doesn't need to tell them apart.
 async function draftAccountId(
   draftId: string,
   db: Kysely<Database>,
-): Promise<string | undefined> {
-  if (!/^\d+$/.test(draftId)) return undefined;
+): Promise<string | null> {
+  if (!/^\d+$/.test(draftId)) return null;
 
   const row = await db
     .selectFrom("upload_draft")
@@ -241,7 +252,7 @@ async function draftAccountId(
     .where("id", "=", draftId)
     .executeTakeFirst();
 
-  return row?.account_id;
+  return row?.account_id ?? null;
 }
 
 async function lockDraft(draftId: string, db: Kysely<Database>): Promise<void> {
@@ -261,6 +272,8 @@ export async function requireDraft(
   const row = await findDraft(draftId, db);
 
   // Expired, not forbidden: a closed account's history can't change, so this upload can never land.
+  // A multi-account draft joins no account, so accountClosedAt reads null too — this never fires
+  // for one; "closed account means expired" is a single-account rule.
   if (row === undefined || row.accountClosedAt !== null) throw new NotFoundError(EXPIRED);
 
   return row;
@@ -305,7 +318,11 @@ export async function rememberMapping(
           .executeTakeFirst();
   const hadFirstSightings = unresolved.length > 0 || answered !== undefined;
 
-  const account = await getAccount(draft.accountId, db);
+  // Institution scope for a single-account draft; the multi-account scope (null, spec 0023
+  // decision 4) for one with none yet. The account-required column rule for that scope is the
+  // next task's — this is the lookup/save plumbing alone.
+  const institution =
+    draft.accountId === null ? null : (await getAccount(draft.accountId, db)).institution;
   await inTransaction(db, async (trx) => {
     const updated = await trx
       .updateTable("upload_draft")
@@ -319,7 +336,7 @@ export async function rememberMapping(
     if (updated === undefined) throw new NotFoundError(EXPIRED);
 
     await upsertMapping(
-      account.institution,
+      institution,
       headerFingerprint(rows[mapping.headerRow] ?? []),
       mapping,
       trx,
@@ -368,9 +385,9 @@ export async function parseDraft(
 export type BlockedDraft = {
   draftId: string;
   filename: string;
-  accountId: string;
-  accountName: string;
-  ownerName: string;
+  accountId: string | null;
+  accountName: string | null;
+  ownerName: string | null;
   accountNumberTail: string | null;
   instrumentsSkipped: boolean;
   problems: ParseProblem[];
@@ -443,9 +460,12 @@ export type DiffRemoved = DiffInstrument & {
 
 export type UploadDiff = {
   draftId: string;
-  accountId: string;
-  accountName: string;
-  ownerName: string;
+  // Nullable to mirror UploadDraft (spec 0023) — assembleDiff never actually returns one with a
+  // null account yet: a multi-account draft is bounced back to columns first (DraftNotReadyError),
+  // since routing its rows to several accounts is a later task.
+  accountId: string | null;
+  accountName: string | null;
+  ownerName: string | null;
   accountNumberTail: string | null;
   filename: string;
   added: DiffAdded[];
@@ -584,6 +604,13 @@ async function assembleDiff(
       result.step === "columns" ? blockedDraftFor(draft, result.problems) : null,
     );
   }
+  // Routing a multi-account draft's rows to their accounts (spec 0023's router) isn't built yet,
+  // so there is no baseline to read a diff against — bounce back to columns rather than reading a
+  // holding off no account. Reuses the same "not ready" shape parseDraft's own steps throw above.
+  if (draft.accountId === null) {
+    throw new DraftNotReadyError("columns", null);
+  }
+  const accountId = draft.accountId;
   const { parsed } = result;
 
   // Resolved once, ahead of its baseline and every guard. Review keeps a bad typed value visible
@@ -666,16 +693,16 @@ async function assembleDiff(
   // needs no second query later.
   const [latestRecorded, baselineRecord] =
     asOfResolved === null
-      ? await lastRecorded(draft.accountId, db).then((latest) => [latest, latest] as const)
+      ? await lastRecorded(accountId, db).then((latest) => [latest, latest] as const)
       : await Promise.all([
-          lastRecorded(draft.accountId, db),
-          lastRecorded(draft.accountId, db, asOfResolved),
+          lastRecorded(accountId, db),
+          lastRecorded(accountId, db, asOfResolved),
         ]);
 
   const current =
     asOfResolved === null
-      ? await accountHoldings(draft.accountId, db)
-      : await accountHoldingsAt(draft.accountId, asOfResolved, db);
+      ? await accountHoldings(accountId, db)
+      : await accountHoldingsAt(accountId, asOfResolved, db);
   const currentById = new Map(current.map((holding) => [holding.instrumentId, holding]));
 
   // `ids` must cover the baseline's own instruments too, or a removed row (below) has no fact row
@@ -824,7 +851,7 @@ async function assembleDiff(
     const history = await db
       .selectFrom("position_set")
       .select(({ fn }) => fn.max("id").as("appendWatermark"))
-      .where("account_id", "=", draft.accountId)
+      .where("account_id", "=", accountId)
       .executeTakeFirstOrThrow();
     const appendWatermark: string | null = history.appendWatermark;
 
@@ -835,7 +862,7 @@ async function assembleDiff(
     revision.update(
       JSON.stringify({
         draftId: draft.id,
-        accountId: draft.accountId,
+        accountId,
         filename: draft.filename,
         mapping: result.mapping,
         resolved: [...aliases]
@@ -874,7 +901,7 @@ async function assembleDiff(
   return {
     diff: {
       draftId: draft.id,
-      accountId: draft.accountId,
+      accountId,
       accountName: draft.accountName,
       ownerName: draft.ownerName,
       accountNumberTail: draft.accountNumberTail,
@@ -958,7 +985,9 @@ export async function commitUpload(
   db: Kysely<Database> = getDb(),
 ): Promise<CommittedUpload> {
   const accountId = await draftAccountId(draftId, db);
-  if (accountId === undefined) throw new NotFoundError(EXPIRED);
+  // Also covers a live multi-account draft: routing rows to several accounts under nested locks
+  // (spec 0023's "The commit") isn't built yet, so neither it nor a gone draft can commit here.
+  if (accountId === null) throw new NotFoundError(EXPIRED);
 
   return withAccountLock(accountId, db, (account, trx) =>
     commitUploadUnderLock(draftId, account, raw, trx),
@@ -985,7 +1014,7 @@ async function commitUploadUnderLock(
   }
 
   // Hidden field feeds the expired page's link only — a different account is stale/forged.
-  if (raw.accountId !== undefined && raw.accountId !== draft.accountId) {
+  if (raw.accountId !== undefined && raw.accountId !== account.id) {
     throw ValidationError.form(
       "This form was posted for a different account than the one this upload is recording " +
         "a statement against. Reload the review and check what it is about to record.",
@@ -1163,7 +1192,7 @@ async function commitUploadUnderLock(
   const set = await db
     .insertInto("position_set")
     .values({
-      account_id: draft.accountId,
+      account_id: account.id,
       as_of_date: asOf,
       source: "upload",
       source_filename: draft.filename,
@@ -1198,7 +1227,7 @@ async function commitUploadUnderLock(
         db
           .updateTable("account")
           .set({ external_account_number: capturedNumber })
-          .where("id", "=", draft.accountId)
+          .where("id", "=", account.id)
           .where("external_account_number", "is", null)
           .execute(),
       (who) =>
@@ -1213,8 +1242,8 @@ async function commitUploadUnderLock(
 
   return {
     setId: set.id,
-    accountId: draft.accountId,
-    accountName: draft.accountName,
+    accountId: account.id,
+    accountName: account.name,
     filename: draft.filename,
     asOf,
     counts: {

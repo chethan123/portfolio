@@ -6,9 +6,18 @@ import { sql } from "kysely";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
-import { createDraft, requireDraft } from "~/lib/uploads.server";
+import {
+  DraftNotReadyError,
+  commitUpload,
+  createDraft,
+  diffForDraft,
+  rememberMapping,
+  requireDraft,
+} from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+
+import type { StatementMapping } from "~/lib/statement";
 
 afterAll(closeTestDatabase);
 
@@ -155,6 +164,78 @@ describe("requireDraft", () => {
       // "abc" reaching Postgres would fail as a malformed bigint — a 500 wearing a bookmark
       await expect(requireDraft("abc", db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft("", db)).rejects.toThrow(NotFoundError);
+    }),
+  );
+});
+
+// The multi-account draft (spec 0023, "Loading a draft with no account") — schema and type-ripple
+// only here; routing rows to accounts and committing them are later tasks.
+const SIMPLE: StatementMapping = {
+  headerRow: 0,
+  delimiter: ",",
+  columns: { instrument: "Symbol", quantity: "Quantity" },
+  costBasisIs: "per_share",
+  owedAsPositive: false,
+  combineDuplicateRows: true,
+};
+
+describe("a draft with no account", () => {
+  it(
+    "is created through the domain with a null account id, and requireDraft finds it unexpired with null account fields",
+    withDatabase(async ({ db }) => {
+      const draft = await createDraft({ accountId: null, filename: "multi.csv", bytes: CSV }, db);
+      expect(draft.accountId).toBeNull();
+
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({
+        id: draft.id,
+        accountId: null,
+        accountName: null,
+        ownerName: null,
+        accountNumberTail: null,
+      });
+    }),
+  );
+
+  it(
+    "is found by seedUploadDraft's account: null too, with the same null fields",
+    withDatabase(async ({ db, seedUploadDraft }) => {
+      const draft = await seedUploadDraft({ account: null, bytes: CSV });
+      expect(draft.accountId).toBeNull();
+
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({
+        accountId: null,
+        accountName: null,
+        ownerName: null,
+      });
+    }),
+  );
+
+  it(
+    "cannot be diffed once its columns are mapped: routing rows to accounts isn't built yet, so it bounces back to columns rather than reading a baseline off no account",
+    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const draft = await seedUploadDraft({ account: null, bytes: CSV });
+
+      // Fully resolved — parseDraft would say `step: null` if this were a single-account draft.
+      await expect(rememberMapping(draft.id, SIMPLE, db)).resolves.toEqual({ nextStep: "review" });
+
+      const refusal = await diffForDraft(draft.id, db).catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(DraftNotReadyError);
+      expect((refusal as DraftNotReadyError).step).toBe("columns");
+      expect((refusal as DraftNotReadyError).blocked).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses to commit: routing and locking several accounts under one commit isn't built yet",
+    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      const draft = await seedUploadDraft({ account: null, bytes: CSV });
+      await rememberMapping(draft.id, SIMPLE, db);
+
+      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(NotFoundError);
     }),
   );
 });

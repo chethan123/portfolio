@@ -28,15 +28,17 @@ export function headerFingerprint(cells: readonly string[]): string {
 }
 
 // Null for a malformed stored row too (via statementMapping) — reads as "map it again", never a 500.
+// institution null is the multi-account scope (spec 0023 decision 4) — "= null" never matches, so
+// the lookup switches to "is null" rather than reusing the "=" branch with a null bound in.
 export async function findMapping(
-  institution: string,
+  institution: string | null,
   fingerprint: string,
   db: Kysely<Database> = getDb(),
 ): Promise<StatementMapping | null> {
   const row = await db
     .selectFrom("column_mapping")
     .select("mapping")
-    .where("institution", "=", institution)
+    .where("institution", institution === null ? "is" : "=", institution)
     .where("header_fingerprint", "=", fingerprint)
     .executeTakeFirst();
 
@@ -46,9 +48,11 @@ export async function findMapping(
   return parsed.success ? parsed.data : null;
 }
 
-// Upsert on column_mapping_one_per_fingerprint: a corrected mapping replaces the wrong one.
+// Upsert on whichever of the two partial indexes (0016) the scope conflicts on: "on conflict on
+// constraint" can't name a partial index, so this infers it from the columns plus the same
+// predicate the index was built with — Kysely's documented shape for a partial unique index.
 export async function upsertMapping(
-  institution: string,
+  institution: string | null,
   fingerprint: string,
   mapping: StatementMapping,
   db: Kysely<Database> = getDb(),
@@ -59,7 +63,12 @@ export async function upsertMapping(
     .insertInto("column_mapping")
     .values({ institution, header_fingerprint: fingerprint, mapping: value })
     .onConflict((conflict) =>
-      conflict.constraint("column_mapping_one_per_fingerprint").doUpdateSet({ mapping: value }),
+      (institution === null
+        ? conflict.columns(["header_fingerprint"]).where("institution", "is", null)
+        : conflict
+            .columns(["institution", "header_fingerprint"])
+            .where("institution", "is not", null)
+      ).doUpdateSet({ mapping: value }),
     )
     .execute();
 }

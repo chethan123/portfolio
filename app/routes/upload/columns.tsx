@@ -59,7 +59,9 @@ function readDraftFile(draft: UploadDraft) {
 export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
-    const account = await getAccount(draft.accountId);
+    // Null for a multi-account draft (spec 0023) — the account-required column rule and the
+    // "owed" label for that scope are the next task's; this loader just has to render.
+    const account = draft.accountId === null ? null : await getAccount(draft.accountId);
     const { savedMapping, rows } = readDraftFile(draft);
 
     // Precedence: explicit `header` param, then the saved mapping's row, then candidate detection.
@@ -79,9 +81,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const savedParse = savedMapping === null ? null : parseStatement(rows, savedMapping);
     const savedProblems = savedParse === null ? [] : savedParse.problems;
 
-    // Draft's own mapping wins over the institution's remembered one — the lookup only runs when the draft has none.
+    // Draft's own mapping wins over the remembered one — the lookup only runs when the draft has
+    // none. Institution scope for a single-account draft, the multi-account scope (null) for one
+    // with none yet (spec 0023 decision 4).
     const remembered =
-      savedMapping ?? (await findMapping(account.institution, headerFingerprint(headerCells)));
+      savedMapping ??
+      (await findMapping(
+        account === null ? null : account.institution,
+        headerFingerprint(headerCells),
+      ));
     const fromInstitution = savedMapping === null && remembered !== null;
 
     // A saved column the file no longer has leaves its control unselected and is named in the intro.
@@ -96,7 +104,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         asOf: "",
         accountNumber: "",
         costBasisIs: "per_share",
-        owedAsPositive: isOwed(account.kind) ? "true" : "",
+        // Decision 6: no single account kind to default from once a file can span several.
+        owedAsPositive: account !== null && isOwed(account.kind) ? "true" : "",
       };
     } else {
       // Matched by trimmed cell, same as `parseStatement`.
@@ -160,7 +169,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         ownerName: draft.ownerName,
         accountNumberTail: draft.accountNumberTail,
       },
-      institution: account.institution,
+      institution: account?.institution ?? null,
       headerRow,
       headerOptions,
       headerCells,
@@ -316,9 +325,16 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
       <div className="panel-body form-intro">
         {/* Owner and number tail included — a bare name fails a house with two same-named accounts (brief §4.1). */}
         <p>
-          <strong>{draft.filename}</strong> · {draft.accountName}
-          {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
-          {draft.ownerName}
+          <strong>{draft.filename}</strong> ·{" "}
+          {draft.accountName !== null ? (
+            <>
+              {draft.accountName}
+              {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
+              {draft.ownerName}
+            </>
+          ) : (
+            "several accounts"
+          )}
         </p>
 
         {staleReviewMessage ? (
@@ -329,9 +345,9 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
 
         {fromInstitution ? (
           <p>
-            These columns were mapped when a previous {institution || draft.accountName}{" "}
-            statement was uploaded; the choices below are that mapping. Check them against the
-            sample rows.
+            These columns were mapped when a previous{" "}
+            {institution ?? draft.accountName ?? "file with this same header"} statement was
+            uploaded; the choices below are that mapping. Check them against the sample rows.
           </p>
         ) : null}
 
