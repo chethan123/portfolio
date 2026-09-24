@@ -447,6 +447,10 @@ Review stopped here.
 - §7 The staging helper's signature is `reviewAndRecord(draftId, db, { asOf, extra })`, the shape
   the multi-account file's helper already had. `onlyRecorded(recorded)` joins `onlySection` for a
   chosen-account commit's one set.
+- §7 item 2, after the PR's Codex review: two drafts that differ in bytes or filename also differ
+  in `draftId`, so those two cases proved nothing alone. Each now restates one draft's bytes or
+  filename through a new fixture builder, `restateDraft`, since no app path writes either. Only
+  the `draftId` case keeps two drafts.
 - Acceptance: the surviving dateless `Error` drops "multi-account" from its text ("A commit reached
   a dateless account."). Both kinds can reach it now, and it is an unreachable internal error, not a
   refusal.

@@ -20,6 +20,7 @@ import {
 } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { restateDraft } from "./support/fixtures.ts";
 import { onlySection, posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
@@ -466,28 +467,7 @@ describe("every field the review revision binds", () => {
     }),
   );
 
-  describe("fields no write changes on a draft: two drafts identical but for one", () => {
-    async function crossPosted(
-      ctx: TestContext,
-      a: { bytes: string; filename: string },
-      b: { bytes: string; filename: string },
-    ) {
-      const account = await ctx.seedAccount();
-      await seedAliased(ctx, "FUND");
-      const draftA = await stage(ctx, account, encode(a.bytes), CHOSEN, a.filename);
-      const draftB = await stage(ctx, account, encode(b.bytes), CHOSEN, b.filename);
-      const reviewA = await reviewForDraft(draftA, DATE, ctx.db);
-      const reviewB = await reviewForDraft(draftB, DATE, ctx.db);
-      // The figures agree, so only the named field separates the two revisions.
-      expect(onlySection(reviewB).added).toEqual(onlySection(reviewA).added);
-
-      const refusal = await expectStale(ctx.db, draftB, posted(reviewA, { asOf: DATE }), [
-        account.id,
-      ]);
-      expect(refusal.fieldErrors.form).toBe(GENERIC);
-      expect(await setsOf(ctx.db, account)).toEqual([]);
-    }
-
+  describe("fields no write changes on a draft", () => {
     async function setsOf(db: TestContext["db"], account: SeededAccount) {
       return db.selectFrom("position_set").select("id").where("account_id", "=", account.id).execute();
     }
@@ -496,27 +476,58 @@ describe("every field the review revision binds", () => {
 
     it(
       "refuses one draft's review posted to another holding the same file, name and account",
-      withDatabase((ctx) =>
-        crossPosted(ctx, { bytes: CSV, filename: FILENAME }, { bytes: CSV, filename: FILENAME }),
-      ),
+      withDatabase(async (ctx) => {
+        const account = await ctx.seedAccount();
+        await seedAliased(ctx, "FUND");
+        const draftA = await stage(ctx, account, encode(CSV), CHOSEN, FILENAME);
+        const draftB = await stage(ctx, account, encode(CSV), CHOSEN, FILENAME);
+        const reviewA = await reviewForDraft(draftA, DATE, ctx.db);
+        const reviewB = await reviewForDraft(draftB, DATE, ctx.db);
+        // The figures agree, so only the draft id separates the two revisions.
+        expect(onlySection(reviewB).added).toEqual(onlySection(reviewA).added);
+
+        const refusal = await expectStale(ctx.db, draftB, posted(reviewA, { asOf: DATE }), [
+          account.id,
+        ]);
+        expect(refusal.fieldErrors.form).toBe(GENERIC);
+        expect(await setsOf(ctx.db, account)).toEqual([]);
+      }),
     );
 
     it(
-      "refuses one draft's review posted to another whose bytes differ but parse to the same rows",
-      withDatabase((ctx) =>
-        crossPosted(
-          ctx,
-          { bytes: CSV, filename: FILENAME },
-          { bytes: CSV.replaceAll("\n", "\r\n"), filename: FILENAME },
-        ),
-      ),
+      "refuses a commit as stale after the draft's bytes are restated, even to a CRLF variant that parses to the same rows",
+      withDatabase(async (ctx) => {
+        const account = await ctx.seedAccount();
+        await seedAliased(ctx, "FUND");
+        const draftId = await stage(ctx, account, encode(CSV), CHOSEN, FILENAME);
+        const review = await reviewForDraft(draftId, DATE, ctx.db);
+
+        await restateDraft(ctx.db, draftId, { bytes: encode(CSV.replaceAll("\n", "\r\n")) });
+
+        const refusal = await expectStale(ctx.db, draftId, posted(review, { asOf: DATE }), [
+          account.id,
+        ]);
+        expect(refusal.fieldErrors.form).toBe(GENERIC);
+        expect(await setsOf(ctx.db, account)).toEqual([]);
+      }),
     );
 
     it(
-      "refuses one draft's review posted to another holding the same file under another name",
-      withDatabase((ctx) =>
-        crossPosted(ctx, { bytes: CSV, filename: FILENAME }, { bytes: CSV, filename: "Other.csv" }),
-      ),
+      "refuses a commit as stale after the draft's filename is restated",
+      withDatabase(async (ctx) => {
+        const account = await ctx.seedAccount();
+        await seedAliased(ctx, "FUND");
+        const draftId = await stage(ctx, account, encode(CSV), CHOSEN, FILENAME);
+        const review = await reviewForDraft(draftId, DATE, ctx.db);
+
+        await restateDraft(ctx.db, draftId, { filename: "Other.csv" });
+
+        const refusal = await expectStale(ctx.db, draftId, posted(review, { asOf: DATE }), [
+          account.id,
+        ]);
+        expect(refusal.fieldErrors.form).toBe(GENERIC);
+        expect(await setsOf(ctx.db, account)).toEqual([]);
+      }),
     );
   });
 });
