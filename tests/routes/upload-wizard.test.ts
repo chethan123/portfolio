@@ -38,7 +38,7 @@ import {
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { onlySection } from "../support/review.ts";
-import { args, get, post, redirectTo } from "../support/routes.ts";
+import { args, get, post, redirectTo, responseOf } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 import type { SeededAccount, SeededInstrument } from "../support/fixtures.ts";
@@ -464,6 +464,58 @@ describe("a review submitted after another tab changes the mapping", () => {
       expect(markup).toContain('role="alert"');
       expect(await lastRecorded(accountId, ctx.db)).toBeNull();
       await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+});
+
+// A current-build stale revision stays in-page: "refuses the stale revision, keeps the draft and
+// history, and renders an actionable alert" above.
+describe("a review posted by a page from an earlier build", () => {
+  /** The v4 page's form: unsuffixed keys, a v4 revision, a typed date for an undated file. */
+  const earlierForm = (accountId: string) => ({
+    asOf: AS_OF,
+    accountId,
+    baselineSetId: "",
+    reviewRevision: "v4.x",
+    reviewedAsOf: AS_OF,
+  });
+
+  it(
+    "reloads the whole document onto a stale review at the typed date and records nothing",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
+
+      const response = await responseOf(() =>
+        reviewAction(args(post(`/upload/${draftId}/review`, earlierForm(accountId)), { draftId })),
+      );
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("Location")).toBe(
+        `/upload/${draftId}/review?stale=true&asOf=${AS_OF}`,
+      );
+      expect(response.headers.get("X-Remix-Reload-Document")).toBe("true");
+      expect(await lastRecorded(accountId, ctx.db)).toBeNull();
+      await expect(requireDraft(draftId, ctx.db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
+    "reloads a date change onto the review at that date without calling it stale",
+    withDatabase(async (ctx) => {
+      const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
+
+      const response = await responseOf(() =>
+        reviewAction(
+          args(
+            post(`/upload/${draftId}/review`, { ...earlierForm(accountId), intent: "review-date" }),
+            { draftId },
+          ),
+        ),
+      );
+
+      expect(response.headers.get("Location")).toBe(`/upload/${draftId}/review?asOf=${AS_OF}`);
+      expect(response.headers.get("X-Remix-Reload-Document")).toBe("true");
+      expect(await lastRecorded(accountId, ctx.db)).toBeNull();
     }),
   );
 });

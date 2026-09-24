@@ -1,4 +1,4 @@
-import { Form, Link, data, redirect } from "react-router";
+import { Form, Link, data, redirect, redirectDocument } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
@@ -17,6 +17,7 @@ import {
   STALE_REVIEW_MESSAGE,
   StaleReviewError,
   draftAccountId,
+  drawnByEarlierBuild,
   recordUpload,
   reviewForDraft,
 } from "~/lib/uploads.server";
@@ -100,6 +101,16 @@ function withoutTicks(values: Record<string, string>): Record<string, string> {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+
+  if (drawnByEarlierBuild(values)) {
+    const query = [
+      ...(values.intent === "review-date" ? [] : ["stale=true"]),
+      ...(values.asOf ? [`asOf=${encodeURIComponent(values.asOf)}`] : []),
+    ];
+    const search = query.length > 0 ? `?${query.join("&")}` : "";
+    // The open page is the earlier build's component; only a document load replaces it.
+    throw redirectDocument(`/upload/${params.draftId}/review${search}`);
+  }
 
   try {
     if (values.intent === "review-date") {

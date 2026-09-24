@@ -1397,6 +1397,8 @@ function statementGroups(
   return parse.routed;
 }
 
+const REVIEW_REVISION = "v5";
+
 // Section order is routed order, the lock and insert order, so it is bound too.
 function reviewRevisionOf(
   draft: UploadDraft,
@@ -1405,7 +1407,7 @@ function reviewRevisionOf(
   bound: ReadonlyArray<unknown>,
 ): string {
   const revision = createHash("sha256");
-  revision.update("portfolio-upload-review-v5\0");
+  revision.update(`portfolio-upload-review-${REVIEW_REVISION}\0`);
   revision.update(Buffer.from(draft.bytes));
   revision.update("\0");
   revision.update(
@@ -1417,7 +1419,7 @@ function reviewRevisionOf(
       sections: bound,
     }),
   );
-  return `v5.${revision.digest("base64url")}`;
+  return `${REVIEW_REVISION}.${revision.digest("base64url")}`;
 }
 
 // One section per group, each diffed against its own baseline at its own date (spec 0023
@@ -1557,6 +1559,11 @@ export type CommitInput = {
   // as "" (#181), which is why the comparison treats the two the same.
   [perSection: `${Confirmation | "appendWatermark"}-${string}`]: string | undefined;
 };
+
+// Another build's recipe drew it: that build's page cannot read this build's diff (spec 0024).
+export function drawnByEarlierBuild(raw: Pick<CommitInput, "reviewRevision">): boolean {
+  return raw.reviewRevision !== undefined && !raw.reviewRevision.startsWith(`${REVIEW_REVISION}.`);
+}
 
 export type CommittedUpload = {
   setId: string;
