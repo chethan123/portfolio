@@ -23,7 +23,7 @@ comparison date: when the range starts before anything at all was recorded, as t
 while nothing — no statement, no hand-typed point — is older than a year; when you have narrowed to
 an owner and the range reaches back past that owner's first statement, since the hand-typed history
 is the household's and has no owner; and on 1D on the day of your first upload, where your positions
-begin on the session itself and the day before it holds nothing to value.
+begin on the session itself and no hand-typed point is in force on the day before.
 
 The note is about your own history, not about the market. A closing price for that day may well be
 stored — the app fills in earlier closes for what you hold — and the chip will still measure from
