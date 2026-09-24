@@ -13,21 +13,22 @@ import {
   DraftNotReadyError,
   RefusedUpload,
   StaleReviewError,
-  commitUpload,
   diffForDraft,
+  recordUpload,
   rememberMapping,
   reviewForDraft,
   requireDraft,
   uploadReceipt,
 } from "~/lib/uploads.server";
+import { sectionKey } from "~/lib/review-form";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import { accountHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
+import { onlyRecorded, onlySection, posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
-import type { CommitInput } from "~/lib/uploads.server";
 import type { TestContext } from "./support/database.ts";
 import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
@@ -93,26 +94,6 @@ async function stage(
   return draft.id;
 }
 
-async function reviewAndCommit(
-  draftId: string,
-  raw: Omit<CommitInput, "reviewRevision">,
-  db: TestContext["db"],
-) {
-  const review = await reviewForDraft(draftId, raw.asOf ?? null, db);
-  if (review.reviewRevision === null) {
-    throw new Error("A valid review did not produce its revision.");
-  }
-  return commitUpload(
-    draftId,
-    {
-      ...raw,
-      baselineSetId: raw.baselineSetId ?? review.baselineSetId ?? "",
-      reviewRevision: review.reviewRevision,
-    },
-    db,
-  );
-}
-
 describe("diffForDraft", () => {
   it(
     "classifies added, updated, unchanged and removed against the current statement",
@@ -169,26 +150,27 @@ describe("diffForDraft", () => {
       );
 
       const diff = await diffForDraft(draftId, db);
+      const section = onlySection(diff);
 
-      expect(diff.firstStatement).toBe(false);
-      expect(diff.currentCount).toBe(5);
-      expect(diff.unchangedCount).toBe(1);
-      expect(diff.majorityRemoved).toBe(false);
-      expect(diff.removesEverything).toBe(false);
+      expect(section.firstStatement).toBe(false);
+      expect(section.currentCount).toBe(5);
+      expect(section.unchangedCount).toBe(1);
+      expect(section.majorityRemoved).toBe(false);
+      expect(section.removesEverything).toBe(false);
       expect(diff.asOf).toEqual({ source: "asked", date: null });
 
-      expect(diff.added).toHaveLength(1);
-      expect(diff.added[0]).toMatchObject({
+      expect(section.added).toHaveLength(1);
+      expect(section.added[0]).toMatchObject({
         name: "Vanguard Total International",
         symbol: "VXUS",
         quantity: "120",
         costBasisPerShare: "58.20",
         value: null,
       });
-      expect(diff.added[0]?.note).toMatch(/never priced/);
+      expect(section.added[0]?.note).toMatch(/never priced/);
 
-      const updated = new Map(diff.updated.map((row) => [row.symbol, row]));
-      expect(diff.updated).toHaveLength(3);
+      const updated = new Map(section.updated.map((row) => [row.symbol, row]));
+      expect(section.updated).toHaveLength(3);
 
       expect(updated.get("VTI")).toMatchObject({
         quantityBefore: "145.23400000",
@@ -214,8 +196,8 @@ describe("diffForDraft", () => {
         costBasisAfter: "11.94",
       });
 
-      expect(diff.removed).toHaveLength(1);
-      expect(diff.removed[0]).toMatchObject({
+      expect(section.removed).toHaveLength(1);
+      expect(section.removed[0]).toMatchObject({
         name: "Apple Inc.",
         symbol: "AAPL",
         quantity: "50.00000000",
@@ -240,16 +222,17 @@ describe("diffForDraft", () => {
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nSWTSX,10,\n");
       const diff = await diffForDraft(draftId, db);
+      const section = onlySection(diff);
 
-      expect(diff.updated).toHaveLength(1);
-      expect(diff.updated[0]).toMatchObject({
+      expect(section.updated).toHaveLength(1);
+      expect(section.updated[0]).toMatchObject({
         quantityChanged: false,
         basisChanged: true,
         basisDisappeared: true,
         costBasisBefore: "52.4100",
         costBasisAfter: null,
       });
-      expect(diff.updated[0]?.note).toMatch(/cost basis no longer reported/);
+      expect(section.updated[0]?.note).toMatch(/cost basis no longer reported/);
     }),
   );
 
@@ -265,13 +248,14 @@ describe("diffForDraft", () => {
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nA1,100,\nB2,50,\n");
       const diff = await diffForDraft(draftId, db);
+      const section = onlySection(diff);
 
-      expect(diff.firstStatement).toBe(true);
-      expect(diff.added).toHaveLength(2);
-      expect(diff.updated).toHaveLength(0);
-      expect(diff.removed).toHaveLength(0);
-      expect(diff.unchangedCount).toBe(0);
-      expect(diff.majorityRemoved).toBe(false);
+      expect(section.firstStatement).toBe(true);
+      expect(section.added).toHaveLength(2);
+      expect(section.updated).toHaveLength(0);
+      expect(section.removed).toHaveLength(0);
+      expect(section.unchangedCount).toBe(0);
+      expect(section.majorityRemoved).toBe(false);
     }),
   );
 
@@ -294,14 +278,15 @@ describe("diffForDraft", () => {
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nKPT,5,\n");
       const diff = await diffForDraft(draftId, db);
+      const section = onlySection(diff);
 
-      expect(diff.removed).toHaveLength(1);
-      expect(diff.removed[0]).toMatchObject({
+      expect(section.removed).toHaveLength(1);
+      expect(section.removed[0]).toMatchObject({
         name: "Collective Trust",
         quantity: "12.00000000",
         value: null,
       });
-      expect(diff.removed[0]?.note).toMatch(/never priced/);
+      expect(section.removed[0]?.note).toMatch(/never priced/);
     }),
   );
 
@@ -333,16 +318,16 @@ describe("diffForDraft", () => {
       });
 
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nAA,1,\n");
-      const majorityDiff = await diffForDraft(majority, db);
-      expect(majorityDiff.removed).toHaveLength(2);
-      expect(majorityDiff.majorityRemoved).toBe(true);
-      expect(majorityDiff.removesEverything).toBe(false);
+      const majoritySection = onlySection(await diffForDraft(majority, db));
+      expect(majoritySection.removed).toHaveLength(2);
+      expect(majoritySection.majorityRemoved).toBe(true);
+      expect(majoritySection.removesEverything).toBe(false);
 
       const everything = await stage(ctx, account, "Symbol,Quantity,Basis\nDD,9,\n");
-      const everythingDiff = await diffForDraft(everything, db);
-      expect(everythingDiff.removed).toHaveLength(3);
-      expect(everythingDiff.majorityRemoved).toBe(true);
-      expect(everythingDiff.removesEverything).toBe(true);
+      const everythingSection = onlySection(await diffForDraft(everything, db));
+      expect(everythingSection.removed).toHaveLength(3);
+      expect(everythingSection.majorityRemoved).toBe(true);
+      expect(everythingSection.removesEverything).toBe(true);
     }),
   );
 
@@ -369,9 +354,10 @@ describe("diffForDraft", () => {
       );
 
       const diff = await diffForDraft(draftId, db);
-      expect(diff.added).toHaveLength(2);
+      const section = onlySection(diff);
+      expect(section.added).toHaveLength(2);
 
-      const byName = new Map(diff.added.map((row) => [row.name, row]));
+      const byName = new Map(section.added.map((row) => [row.name, row]));
       expect(byName.get("Cash Reserves")).toMatchObject({
         quantity: "150.00000000",
         costBasisPerShare: "2.0000",
@@ -446,7 +432,7 @@ describe("diffForDraft", () => {
   );
 });
 
-describe("commitUpload", () => {
+describe("recordUpload", () => {
   it(
     "refuses a Settings alias repoint made after Review and preserves the draft and history",
     withDatabase(async (ctx) => {
@@ -481,17 +467,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        commitUpload(
-          draftId,
-          {
-            accountId: account.id,
-            asOf: "2026-06-30",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-            reviewedAsOf: reviewed.asOfInput,
-          },
-          db,
-        ),
+        recordUpload(draftId, posted(reviewed, { asOf: "2026-06-30" }), db),
       );
       expect(refusal).toBeInstanceOf(StaleReviewError);
       if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
@@ -512,21 +488,11 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "DATE" });
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nDATE,3,\n");
       const reviewed = await reviewForDraft(draftId, null, db);
-      expect(reviewed.baselineSetId).toBeNull();
+      expect(onlySection(reviewed).baselineSetId).toBeNull();
       expect(reviewed.asOfInput).not.toBe("2026-06-30");
 
       const refusal = await refusalOf(() =>
-        commitUpload(
-          draftId,
-          {
-            accountId: account.id,
-            asOf: "2026-06-30",
-            baselineSetId: "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-            reviewedAsOf: reviewed.asOfInput,
-          },
-          db,
-        ),
+        recordUpload(draftId, posted(reviewed, { asOf: "2026-06-30" }), db),
       );
       expect(refusal).toBeInstanceOf(StaleReviewError);
       if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a changed-date review.");
@@ -535,21 +501,15 @@ describe("commitUpload", () => {
           "Nothing was recorded — check it and record again.",
       );
       expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
-      expect(refusal.diff.baselineSetId).toBeNull();
+      expect(onlySection(refusal.diff).baselineSetId).toBeNull();
       expect(await lastRecorded(account.id, db)).toBeNull();
       await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
 
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         draftId,
-        {
-          accountId: account.id,
-          asOf: "2026-06-30",
-          baselineSetId: "",
-          reviewRevision: refusal.diff.reviewRevision ?? "",
-          reviewedAsOf: refusal.diff.asOfInput,
-        },
+        posted(refusal.diff, { asOf: "2026-06-30" }),
         db,
-      );
+      ));
       expect(written.asOf).toBe("2026-06-30");
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
     }),
@@ -574,20 +534,16 @@ describe("commitUpload", () => {
       });
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nCROSS,3,\n");
       const reviewed = await reviewForDraft(draftId, null, db);
-      expect(reviewed.baselineSetId).toBe(current.id);
+      expect(onlySection(reviewed).baselineSetId).toBe(current.id);
 
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
-          {
-            accountId: account.id,
+          posted(reviewed, {
             asOf: "2026-06-30",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-            reviewedAsOf: reviewed.asOfInput,
-            confirmFiledBehind: "true",
-            confirmRemovals: "true",
-          },
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
+            [sectionKey("confirmRemovals", account.id)]: "true",
+          }),
           db,
         ),
       );
@@ -595,8 +551,8 @@ describe("commitUpload", () => {
       if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a date redraw.");
       expect(refusal.fieldErrors.form).toContain("different statement date");
       expect(refusal.fieldErrors.form).not.toContain("statement or its account changed");
-      expect(refusal.diff.baselineSetId).toBe(earlier.id);
-      expect(refusal.diff.filedBehind).toEqual({
+      expect(onlySection(refusal.diff).baselineSetId).toBe(earlier.id);
+      expect(onlySection(refusal.diff).filedBehind).toEqual({
         asOf: "2026-06-30",
         currentAsOf: "2026-07-31",
       });
@@ -611,18 +567,14 @@ describe("commitUpload", () => {
           .execute(),
       ).toHaveLength(0);
 
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         draftId,
-        {
-          accountId: account.id,
+        posted(refusal.diff, {
           asOf: "2026-06-30",
-          baselineSetId: refusal.diff.baselineSetId ?? "",
-          reviewRevision: refusal.diff.reviewRevision ?? "",
-          reviewedAsOf: refusal.diff.asOfInput,
-          confirmFiledBehind: "true",
-        },
+          [sectionKey("confirmFiledBehind", account.id)]: "true",
+        }),
         db,
-      );
+      ));
       expect(written.asOf).toBe("2026-06-30");
       expect((await lastRecorded(account.id, db))?.id).toBe(current.id);
       await expect(requireDraft(draftId, db)).rejects.toThrow(NotFoundError);
@@ -652,7 +604,7 @@ describe("commitUpload", () => {
         "Symbol,Quantity,Basis\nCROSSMAP,3,40\n",
       );
       const reviewed = await reviewForDraft(draftId, null, db);
-      expect(reviewed.baselineSetId).toBe(current.id);
+      expect(onlySection(reviewed).baselineSetId).toBe(current.id);
 
       const changed = await rememberMapping(
         draftId,
@@ -665,17 +617,13 @@ describe("commitUpload", () => {
       expect(changed).toEqual({ nextStep: "review" });
 
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
-          {
-            accountId: account.id,
+          posted(reviewed, {
             asOf: "2026-06-30",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-            reviewedAsOf: reviewed.asOfInput,
-            confirmFiledBehind: "true",
-            confirmRemovals: "true",
-          },
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
+            [sectionKey("confirmRemovals", account.id)]: "true",
+          }),
           db,
         ),
       );
@@ -683,9 +631,10 @@ describe("commitUpload", () => {
       if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
       expect(refusal.fieldErrors.form).toContain("statement or its account changed");
       expect(refusal.fieldErrors.form).not.toContain("different statement date");
-      expect(refusal.diff.baselineSetId).toBe(earlier.id);
-      expect(refusal.diff.added).toHaveLength(0);
-      expect(refusal.diff.updated[0]?.quantityAfter).toBe("40");
+      const section = onlySection(refusal.diff);
+      expect(section.baselineSetId).toBe(earlier.id);
+      expect(section.added).toHaveLength(0);
+      expect(section.updated[0]?.quantityAfter).toBe("40");
       expect(await lastRecorded(account.id, db)).toMatchObject({ id: current.id });
       await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
       expect(
@@ -718,8 +667,8 @@ describe("commitUpload", () => {
       });
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nINTERVAL,8,\n");
       const reviewed = await reviewForDraft(draftId, "2026-06-30", db);
-      expect(reviewed.baselineSetId).toBe(march.id);
-      expect(reviewed.filedBehind?.currentAsOf).toBe("2026-09-01");
+      expect(onlySection(reviewed).baselineSetId).toBe(march.id);
+      expect(onlySection(reviewed).filedBehind?.currentAsOf).toBe("2026-09-01");
 
       const july = await seedPositionSet({
         account,
@@ -728,16 +677,12 @@ describe("commitUpload", () => {
       });
 
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
-          {
-            accountId: account.id,
+          posted(reviewed, {
             asOf: "2026-08-31",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-            reviewedAsOf: reviewed.asOfInput,
-            confirmFiledBehind: "true",
-          },
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
+          }),
           db,
         ),
       );
@@ -745,12 +690,13 @@ describe("commitUpload", () => {
       if (!(refusal instanceof StaleReviewError)) throw new Error("Expected a stale review.");
       expect(refusal.fieldErrors.form).toContain("statement or its account changed");
       expect(refusal.fieldErrors.form).not.toContain("different statement date");
-      expect(refusal.diff.baselineSetId).toBe(july.id);
-      expect(refusal.diff.updated[0]).toMatchObject({
+      const section = onlySection(refusal.diff);
+      expect(section.baselineSetId).toBe(july.id);
+      expect(section.updated[0]).toMatchObject({
         quantityBefore: "7.00000000",
         quantityAfter: "8",
       });
-      expect(refusal.diff.filedBehind).toEqual({
+      expect(section.filedBehind).toEqual({
         asOf: "2026-08-31",
         currentAsOf: "2026-09-01",
       });
@@ -776,7 +722,7 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "BOTH" });
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nBOTH,3,40\n");
       const reviewed = await reviewForDraft(draftId, null, db);
-      expect(reviewed.added[0]?.quantity).toBe("3");
+      expect(onlySection(reviewed).added[0]?.quantity).toBe("3");
       expect(reviewed.asOfInput).not.toBe("2026-06-30");
 
       const changed = await rememberMapping(
@@ -797,12 +743,12 @@ describe("commitUpload", () => {
       ] as const;
       for (const evidence of reviewedDateEvidence) {
         const refusal = await refusalOf(() =>
-          commitUpload(
+          recordUpload(
             draftId,
             {
               accountId: account.id,
               asOf: "2026-06-30",
-              baselineSetId: "",
+              [sectionKey("baselineSetId", account.id)]: "",
               reviewRevision: reviewed.reviewRevision ?? "",
               ...(evidence.value === undefined ? {} : { reviewedAsOf: evidence.value }),
             },
@@ -823,7 +769,7 @@ describe("commitUpload", () => {
           source: "asked",
           date: "2026-06-30",
         });
-        expect(refusal.diff.added[0]?.quantity, evidence.label).toBe("40");
+        expect(onlySection(refusal.diff).added[0]?.quantity, evidence.label).toBe("40");
       }
 
       expect(await lastRecorded(account.id, db)).toBeNull();
@@ -848,16 +794,7 @@ describe("commitUpload", () => {
         .execute();
 
       await expect(
-        commitUpload(
-          draftId,
-          {
-            accountId: account.id,
-            asOf: "2026-06-30",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-          },
-          db,
-        ),
+        recordUpload(draftId, posted(reviewed, { asOf: "2026-06-30" }), db),
       ).rejects.toThrow(StaleReviewError);
       expect(await lastRecorded(account.id, db)).toBeNull();
       await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
@@ -877,16 +814,7 @@ describe("commitUpload", () => {
 
       await seedQuote({ instrument: fund, price: "11.00" });
 
-      const written = await commitUpload(
-        draftId,
-        {
-          accountId: account.id,
-          asOf: "2026-06-30",
-          baselineSetId: reviewed.baselineSetId ?? "",
-          reviewRevision: reviewed.reviewRevision ?? "",
-        },
-        db,
-      );
+      const written = onlyRecorded(await recordUpload(draftId, posted(reviewed, { asOf: "2026-06-30" }), db));
       expect(written.counts).toEqual({ added: 1, updated: 0, unchanged: 0, removed: 0 });
     }),
   );
@@ -939,9 +867,9 @@ describe("commitUpload", () => {
 
       let refusal: DraftNotReadyError | undefined;
       try {
-        await commitUpload(
+        await recordUpload(
           draft.id,
-          { accountId: account.id, confirmRemovals: "true" },
+          { accountId: account.id, [sectionKey("confirmRemovals", account.id)]: "true" },
           db,
         );
       } catch (error) {
@@ -983,16 +911,11 @@ describe("commitUpload", () => {
       );
       const corrected = await reviewForDraft(correctedDraftId, null, db);
 
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         correctedDraftId,
-        {
-          accountId: account.id,
-          baselineSetId: corrected.baselineSetId ?? "",
-          confirmRemovals: "true",
-          reviewRevision: corrected.reviewRevision ?? "",
-        },
+        posted(corrected, { [sectionKey("confirmRemovals", account.id)]: "true" }),
         db,
-      );
+      ));
       expect(written.counts).toEqual({ added: 0, updated: 0, unchanged: 2, removed: 1 });
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
       expect(await requireDraft(draft.id, db)).toMatchObject({ id: draft.id });
@@ -1024,11 +947,9 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, baselineSetId: prior.id },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        extra: { accountId: account.id, [sectionKey("baselineSetId", account.id)]: prior.id },
+      }));
 
       expect(written.accountId).toBe(account.id);
       expect(written.asOf).toBe("2026-06-30");
@@ -1073,7 +994,7 @@ describe("commitUpload", () => {
       expect((await netWorth(ALL_OWNERS, db)).coverage).toEqual({ known: 1, total: 2 });
 
       await expect(
-        reviewAndCommit(draftId, { accountId: account.id }, db),
+        reviewAndRecord(draftId, db, { extra: { accountId: account.id } }),
       ).rejects.toThrow(NotFoundError);
     }),
   );
@@ -1094,18 +1015,18 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nZRO,0,\n");
 
       const diff = await diffForDraft(draftId, db);
-      expect(diff.updated).toHaveLength(1);
-      expect(diff.updated[0]).toMatchObject({
+      const section = onlySection(diff);
+      expect(section.updated).toHaveLength(1);
+      expect(section.updated[0]).toMatchObject({
         quantityBefore: "12.00000000",
         quantityAfter: "0",
       });
-      expect(diff.removed).toHaveLength(0);
+      expect(section.removed).toHaveLength(0);
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: diff.baselineSetId ?? "" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
       const holdings = await db
         .selectFrom("holding")
         .select("quantity")
@@ -1165,7 +1086,7 @@ describe("commitUpload", () => {
         .execute(db);
 
       await expect(
-        reviewAndCommit(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draft.id, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       ).rejects.toThrow(/commit-upload-boom/);
 
       const sets = await db
@@ -1234,7 +1155,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/Big Fund/);
       expect(refusal.fieldErrors.form).toMatch(/larger figure than this application can hold/);
@@ -1261,7 +1182,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPRC,1000000000,\n");
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/Priced Fund/);
       expect(refusal.fieldErrors.form).toMatch(/current price/);
@@ -1289,7 +1210,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/"4407-9913"/);
       expect(refusal.fieldErrors.form).toMatch(
@@ -1315,7 +1236,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPNY,100000000000,\n");
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/Penny Income Trust/);
       expect(refusal.fieldErrors.form).toMatch(/dividend rate/);
@@ -1353,7 +1274,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/Z-999/);
       expect(refusal.fieldErrors.form).toMatch(/X-111/);
@@ -1385,7 +1306,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/A-111/);
       expect(refusal.fieldErrors.form).toMatch(/B-222/);
@@ -1423,11 +1344,10 @@ describe("commitUpload", () => {
         { columns: { accountNumber: "Acct" } },
       );
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
       expect(written.counts.added).toBe(2);
     }),
   );
@@ -1447,7 +1367,7 @@ describe("commitUpload", () => {
         { columns: { accountNumber: "Acct" } },
       );
 
-      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      await reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } });
 
       const stored = await db
         .selectFrom("account")
@@ -1476,7 +1396,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toContain(
         'A file holding several accounts uploads as "Several accounts", which routes each row ' +
@@ -1500,7 +1420,7 @@ describe("commitUpload", () => {
         { columns: { accountNumber: "Acct" } },
       );
 
-      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      await reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } });
 
       const stored = await db
         .selectFrom("account")
@@ -1537,7 +1457,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal).toBeInstanceOf(RefusedUpload);
       expect(refusal.fieldErrors.form).toMatch(
@@ -1574,7 +1494,7 @@ describe("commitUpload", () => {
       );
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal).toBeInstanceOf(RefusedUpload);
       expect(refusal.fieldErrors.form).toMatch(/64 characters or fewer/);
@@ -1600,7 +1520,7 @@ describe("commitUpload", () => {
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const refusal = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+        recordUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/closed account's history does not change/);
 
@@ -1639,10 +1559,9 @@ describe("commitUpload", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nMA,1,\n");
-      const baselineSetId = (await diffForDraft(draftId, db)).baselineSetId ?? "";
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30", baselineSetId }, db),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes 2 of the 3 positions this account holds/,
@@ -1655,11 +1574,13 @@ describe("commitUpload", () => {
         .execute();
       expect(sets).toHaveLength(1);
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId, confirmRemovals: "true" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: {
+          accountId: account.id,
+          [sectionKey("confirmRemovals", account.id)]: "true",
+        },
+      }));
       expect(written.counts.removed).toBe(2);
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
     }),
@@ -1684,21 +1605,16 @@ describe("commitUpload", () => {
 
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
       const refusal = await refusalOf(() =>
-        reviewAndCommit(
-          majority,
-          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
-          db,
-        ),
+        reviewAndRecord(majority, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes 3 of the 4 positions/);
 
       const half = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\nHF2,1,\n");
-      expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
-      const written = await reviewAndCommit(
-        half,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
-        db,
-      );
+      expect(onlySection(await diffForDraft(half, db)).majorityRemoved).toBe(false);
+      const written = onlyRecorded(await reviewAndRecord(half, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
       expect(written.counts.removed).toBe(2);
     }),
   );
@@ -1730,11 +1646,7 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNW,5,\n");
 
       const refusal = await refusalOf(() =>
-        reviewAndCommit(
-          draftId,
-          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
-          db,
-        ),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(
         /removes every position this account holds — all 2\./,
@@ -1757,11 +1669,10 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2020-01-01" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2020-01-01",
+        extra: { accountId: account.id },
+      }));
       expect(written.asOf).toBe("2026-06-30");
 
       const set = await db
@@ -1783,21 +1694,20 @@ describe("commitUpload", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nUND,10,\n");
 
       const missing = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id }, db),
+        recordUpload(draftId, { accountId: account.id }, db),
       );
       expect(missing.fieldErrors.asOf).toMatch(/required/);
 
       // recordedDate's rule: a far-future date would pin the account for a century.
       const future = await refusalOf(() =>
-        commitUpload(draftId, { accountId: account.id, asOf: "2126-01-01" }, db),
+        recordUpload(draftId, { accountId: account.id, asOf: "2126-01-01" }, db),
       );
       expect(future.fieldErrors.asOf).toMatch(/future/);
 
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
       expect(written.asOf).toBe("2026-06-30");
     }),
   );
@@ -1817,11 +1727,10 @@ describe("commitUpload", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nTIE,12,\n");
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: first.id },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
 
       expect(written.setId).not.toBe(first.id);
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
@@ -1864,11 +1773,10 @@ describe("uploadReceipt", () => {
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nRA,12,\nRB,3,\n");
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
 
       // Holding count is the set's own rows, not a URL claim (brief §6.5).
       const receiptFor = (acct: string, setId: string) =>
@@ -1907,11 +1815,10 @@ describe("uploadReceipt", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "FS" });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFS,14,\n");
-      const written = await reviewAndCommit(
-        draftId,
-        { accountId: account.id, asOf: "2026-06-30" },
-        db,
-      );
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
 
       const receiptFor = (acct: string, setId: string) =>
         lastRecorded(acct, db).then((latest) => uploadReceipt(acct, setId, latest, db));
@@ -1952,7 +1859,7 @@ describe("uploadReceipt", () => {
 });
 
 // Issue #291: a draft's first-sighting answers become vocabulary with the commit, never before.
-describe("commitUpload — the draft's answers", () => {
+describe("recordUpload — the draft's answers", () => {
   const noProbe = { probe: async () => new Map() };
 
   it(
@@ -1969,7 +1876,10 @@ describe("commitUpload — the draft's answers", () => {
         noProbe,
         db,
       );
-      const written = await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
 
       expect(
         await db
@@ -2011,7 +1921,7 @@ describe("commitUpload — the draft's answers", () => {
         noProbe,
         db,
       );
-      await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      await reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } });
 
       const vocabulary = await db
         .selectFrom("instrument_alias")
@@ -2040,7 +1950,10 @@ describe("commitUpload — the draft's answers", () => {
       // Another upload recorded the same string first.
       await seedInstrumentAlias({ instrument: vti, rawString: "QAALIAS" });
 
-      const written = await reviewAndCommit(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+      const written = onlyRecorded(await reviewAndRecord(draftId, db, {
+        asOf: "2026-06-30",
+        extra: { accountId: account.id },
+      }));
 
       expect(
         await db
@@ -2086,11 +1999,7 @@ describe("commitUpload — the draft's answers", () => {
 
       // Removes both current positions: refused until the removals are confirmed.
       const refusal = await refusalOf(() =>
-        reviewAndCommit(
-          draftId,
-          { accountId: account.id, asOf: "2026-06-30", baselineSetId: prior.id },
-          db,
-        ),
+        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes every position/);
 
@@ -2157,7 +2066,7 @@ async function commitWhileVocabularyMoves(move: string): Promise<ValidationError
       .execute(db);
 
     const refusal = await refusalOf(() =>
-      reviewAndCommit(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
+      reviewAndRecord(draft.id, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
     );
 
     const sets = await db
@@ -2205,7 +2114,7 @@ async function commitWhileVocabularyMoves(move: string): Promise<ValidationError
   }
 }
 
-describe("commitUpload — vocabulary moving under the review", () => {
+describe("recordUpload — vocabulary moving under the review", () => {
   it("refuses when another upload recorded the string as something else, promotion too", async () => {
     const refusal = await commitWhileVocabularyMoves(
       "update instrument_alias set instrument_id = BND where raw_string = 'MARKER'",

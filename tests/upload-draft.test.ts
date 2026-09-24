@@ -7,7 +7,6 @@ import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import {
-  commitUpload,
   createDraft,
   diffForDraft,
   recordUpload,
@@ -223,15 +222,15 @@ describe("a draft with no account", () => {
       await expect(rememberMapping(draft.id, SEVERAL, db)).resolves.toEqual({ nextStep: "review" });
 
       const diff = await diffForDraft(draft.id, db);
-      expect(diff).toMatchObject({ accountId: null, accountName: null, added: [] });
-      expect(diff.accounts?.map((section) => [section.accountId, section.added.length])).toEqual([
+      expect(diff).toMatchObject({ accountId: null });
+      expect(diff.accounts.map((section) => [section.accountId, section.added.length])).toEqual([
         [account.id, 1],
       ]);
     }),
   );
 
   it(
-    "is recorded through recordUpload, never commitUpload's one account, while a gone draft stays a 404 for both",
+    "leaves a several-account draft in place until recordUpload, which answers a gone draft with a 404",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
       await seedAccount({ externalAccountNumber: "A-1" });
       const vti = await seedInstrument({ symbol: "VTI" });
@@ -239,9 +238,7 @@ describe("a draft with no account", () => {
       const draft = await seedUploadDraft({ account: null, bytes: NUMBERED });
       await rememberMapping(draft.id, SEVERAL, db);
 
-      await expect(commitUpload(draft.id, {}, db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
-      await expect(commitUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
       await expect(recordUpload("999999", {}, db)).rejects.toThrow(NotFoundError);
     }),
   );

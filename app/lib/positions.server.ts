@@ -123,7 +123,7 @@ const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
 // quantity x perShare overflowing numeric(20,4) makes the view's cast raise on every future read
 // (not just a refused form) — can't be prevented by bounding the fields alone, since either can
 // be in-column while only the product overflows. Checks the product itself, exact in bigint,
-// rounded the way the cast rounds. Called at every write: revisePosition and commitUpload.
+// rounded the way the cast rounds. Called at every write: revisePosition and recordUpload.
 export function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
   if (perShare === null) return true;
 

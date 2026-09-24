@@ -8,6 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 process.env.DATABASE_URL ??=
   process.env.TEST_DATABASE_URL ?? "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
 
+import { sectionKey } from "~/lib/review-form";
+
 import { action as upload } from "../../app/routes/upload.tsx";
 import { action as saveColumns } from "../../app/routes/upload/columns.tsx";
 import { action as resolveInstruments } from "../../app/routes/upload/instruments.tsx";
@@ -20,6 +22,7 @@ import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post, postFile, redirectTo, responseOf } from "../support/routes.ts";
+import { onlySection } from "../support/review.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -150,13 +153,15 @@ describe("a first statement, from the drop screen to the account page", () => {
 
       const review = await reviewPage(draftId);
       if (review.diff === null) throw new Error("The valid statement was blocked.");
-      expect(review.diff.added.map((row) => row.symbol).sort()).toEqual(["FZROX", "VTI"]);
+      const reviewSection = onlySection(review.diff);
+      expect(reviewSection.added.map((row) => row.symbol).sort()).toEqual(["FZROX", "VTI"]);
       // No date column in this export, so the screen must ask for one.
       expect(review.diff.asOf.source).not.toBe("file");
-      expect(review.diff.removed).toEqual([]);
+      expect(reviewSection.removed).toEqual([]);
       expect(await accountHasAnySet(ctx, account.id)).toBe(false);
 
       const datedReview = await reviewPage(draftId, "?asOf=2026-01-31");
+      const datedSection = onlySection(datedReview.diff);
 
       const landing = await redirectTo(() =>
         commit(
@@ -164,7 +169,7 @@ describe("a first statement, from the drop screen to the account page", () => {
             post(`/upload/${draftId}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
-              baselineSetId: datedReview.diff.baselineSetId ?? "",
+              [sectionKey("baselineSetId", account.id)]: datedSection.baselineSetId ?? "",
               reviewRevision: datedReview.diff.reviewRevision ?? "",
             }),
             { draftId },
@@ -228,13 +233,14 @@ describe("the same brokerage's next statement", () => {
         ),
       );
       const firstReview = await reviewPage(firstDraft, "?asOf=2026-01-31");
+      const firstSection = onlySection(firstReview.diff);
       await redirectTo(() =>
         commit(
           args(
             post(`/upload/${firstDraft}/review`, {
               accountId: account.id,
               asOf: "2026-01-31",
-              baselineSetId: firstReview.diff.baselineSetId ?? "",
+              [sectionKey("baselineSetId", account.id)]: firstSection.baselineSetId ?? "",
               reviewRevision: firstReview.diff.reviewRevision ?? "",
             }),
             { draftId: firstDraft },
@@ -263,10 +269,11 @@ describe("the same brokerage's next statement", () => {
       const review = await reviewPage(draftId, "?asOf=2026-02-28");
       expect(review.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
       if (review.diff === null) throw new Error("The valid statement was blocked.");
+      const section = onlySection(review.diff);
 
-      expect(review.diff.added).toEqual([]);
-      expect(review.diff.removed).toEqual([]);
-      expect(review.diff.updated.map((row) => row.symbol)).toEqual(["VTI"]);
+      expect(section.added).toEqual([]);
+      expect(section.removed).toEqual([]);
+      expect(section.updated.map((row) => row.symbol)).toEqual(["VTI"]);
 
       const landing = await redirectTo(() =>
         commit(
@@ -276,7 +283,7 @@ describe("the same brokerage's next statement", () => {
               asOf: "2026-02-28",
               // The hidden field the real form carries from the render above (#181) — January's
               // set is what the diff was drawn against.
-              baselineSetId: review.diff.baselineSetId ?? "",
+              [sectionKey("baselineSetId", account.id)]: section.baselineSetId ?? "",
               reviewRevision: review.diff.reviewRevision ?? "",
             }),
             { draftId },
