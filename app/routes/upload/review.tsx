@@ -1,4 +1,4 @@
-import { Form, Link, data, redirect } from "react-router";
+import { Form, Link, data, redirect, redirectDocument } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
@@ -16,12 +16,17 @@ import {
   RefusedUpload,
   STALE_REVIEW_MESSAGE,
   StaleReviewError,
+  draftAccountId,
+  drawnByEarlierBuild,
   recordUpload,
   reviewForDraft,
 } from "~/lib/uploads.server";
 
+import { reviewedFields, sectionKey } from "~/lib/review-form";
+
 import type { UploadStepsData } from "~/components/upload-steps";
 import type {
+  AccountDiff,
   DiffAdded,
   DiffRemoved,
   DiffSection,
@@ -97,6 +102,16 @@ function withoutTicks(values: Record<string, string>): Record<string, string> {
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
 
+  if (drawnByEarlierBuild(values)) {
+    const query = [
+      ...(values.intent === "review-date" ? [] : ["stale=true"]),
+      ...(values.asOf ? [`asOf=${encodeURIComponent(values.asOf)}`] : []),
+    ];
+    const search = query.length > 0 ? `?${query.join("&")}` : "";
+    // The open page is the earlier build's component; only a document load replaces it.
+    throw redirectDocument(`/upload/${params.draftId}/review${search}`);
+  }
+
   try {
     if (values.intent === "review-date") {
       const diff = await reviewForDraft(params.draftId, values.asOf ?? "");
@@ -114,6 +129,9 @@ export async function action({ params, request }: Route.ActionArgs) {
       );
     }
 
+    // Read before the commit consumes the draft. A gone draft is recordUpload's NotFoundError (the
+    // catch below).
+    const chosen = await draftAccountId(params.draftId);
     const written = await recordUpload(params.draftId, values);
 
     // Here, not inside `recordUpload`: the statement is committed by now, so
@@ -126,11 +144,12 @@ export async function action({ params, request }: Route.ActionArgs) {
       console.error("An upload could not request a refresh; the next tick will price it:", error);
     }
 
-    throw redirect(
-      written.multiAccount
-        ? `/upload/done?sets=${written.recorded.map((set) => set.setId).join(",")}`
-        : `/accounts/${written.recorded.accountId}?uploaded=${written.recorded.setId}`,
-    );
+    if (chosen === null) {
+      throw redirect(`/upload/done?sets=${written.map((set) => set.setId).join(",")}`);
+    }
+    const [only] = written;
+    if (only === undefined) throw new Error("A chosen-account commit recorded no statement.");
+    throw redirect(`/accounts/${only.accountId}?uploaded=${only.setId}`);
   } catch (error) {
     if (error instanceof StaleReviewError) {
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
@@ -508,7 +527,7 @@ function RecordControls({
       <div className="panel-form">
         {diff.asOf.source === "file" ? (
           // Statement said it — an editor here would invite overriding a fact with an opinion.
-          diff.accounts !== null ? (
+          diff.accountId === null ? (
             <p className="form-note">Every account's statement is dated by the file.</p>
           ) : (
             <p className="form-note">
@@ -552,7 +571,7 @@ function RecordControls({
           </button>
         ) : null}
         <button type="submit" className="button" disabled={diff.reviewRevision === null}>
-          {diff.accounts !== null ? "Record these statements" : "Record this statement"}
+          {diff.accountId === null ? "Record these statements" : "Record this statement"}
         </button>
         {/* Nothing was written yet — safe to walk back and remap. */}
         <Link className="button button--text" to={`/upload/${diff.draftId}/columns`}>
@@ -560,6 +579,79 @@ function RecordControls({
         </Link>
       </div>
     </>
+  );
+}
+
+function ReviewSection({
+  section,
+  several,
+  filename,
+  resetKey,
+}: {
+  section: AccountDiff;
+  several: boolean;
+  filename: string;
+  resetKey: string;
+}) {
+  const content = (
+    <>
+      {several ? (
+        <header className="panel-header">
+          <h3 className="panel-title" id={`account-${section.accountId}`}>
+            <span>
+              {section.accountName}
+              <AccountNumberTail tail={section.accountNumberTail} /> — owned by{" "}
+              {section.ownerName}
+            </span>
+          </h3>
+          <span className="panel-count">{summaryOf(section)}</span>
+        </header>
+      ) : null}
+
+      <div className="panel-body form-intro">
+        {several ? null : (
+          <p>
+            <strong>{filename}</strong> · {section.accountName}
+            {section.accountNumberTail ? ` ${section.accountNumberTail}` : ""} — owned by{" "}
+            {section.ownerName}
+          </p>
+        )}
+        {several ? (
+          <p>
+            {section.asOf.source === "file" ? (
+              <>
+                The file dates this statement{" "}
+                <span className="u-data">{section.asOf.date}</span>.
+              </>
+            ) : (
+              <>The file does not date this statement, so it takes the date below.</>
+            )}
+          </p>
+        ) : null}
+        <Comparison section={section} />
+        <SkippedLines skipped={section.skipped} />
+      </div>
+
+      <DiffTable section={section} />
+
+      <FiledBehindConfirmation
+        section={section}
+        name={sectionKey("confirmFiledBehind", section.accountId)}
+        resetKey={resetKey}
+      />
+      <RemovalConfirmation
+        section={section}
+        name={sectionKey("confirmRemovals", section.accountId)}
+        resetKey={resetKey}
+      />
+    </>
+  );
+
+  // The heading, not the bare name: two accounts can share one.
+  return several ? (
+    <section aria-labelledby={`account-${section.accountId}`}>{content}</section>
+  ) : (
+    content
   );
 }
 
@@ -652,18 +744,27 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
     />
   );
 
-  if (diff.accounts !== null) {
-    const count = diff.accounts.length;
+  const several = diff.accountId === null;
+  const count = diff.accounts.length;
+  const [only] = diff.accounts;
 
-    return (
-      <section className="panel">
+  return (
+    <section className="panel">
+      {several ? (
         <header className="panel-header">
           <h2 className="panel-title">What this file changes</h2>
           <span className="panel-count">
             {count} {count === 1 ? "ACCOUNT" : "ACCOUNTS"}
           </span>
         </header>
+      ) : (
+        <header className="panel-header">
+          <h2 className="panel-title">What this statement changes</h2>
+          <span className="panel-count">{only !== undefined ? summaryOf(only) : null}</span>
+        </header>
+      )}
 
+      {several ? (
         <div className="panel-body form-intro">
           <p>
             <strong>{diff.filename}</strong> · several accounts
@@ -678,115 +779,24 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           ) : null}
           <SkippedLines skipped={diff.skipped} />
         </div>
-
-        <Form method="post">
-          {diff.accounts.map((section) => (
-            // The heading, not the bare name: two accounts can share one.
-            <section key={section.accountId} aria-labelledby={`account-${section.accountId}`}>
-              <header className="panel-header">
-                <h3 className="panel-title" id={`account-${section.accountId}`}>
-                  <span>
-                    {section.accountName}
-                    <AccountNumberTail tail={section.accountNumberTail} /> — owned by{" "}
-                    {section.ownerName}
-                  </span>
-                </h3>
-                <span className="panel-count">{summaryOf(section)}</span>
-              </header>
-
-              <div className="panel-body form-intro">
-                <p>
-                  {section.asOf.source === "file" ? (
-                    <>
-                      The file dates this statement{" "}
-                      <span className="u-data">{section.asOf.date}</span>.
-                    </>
-                  ) : (
-                    <>The file does not date this statement, so it takes the date below.</>
-                  )}
-                </p>
-                <Comparison section={section} />
-                <SkippedLines skipped={section.skipped} />
-              </div>
-
-              <DiffTable section={section} />
-
-              {/* Its own binding and ticks, suffixed with its id (uploads.server.ts CommitInput). */}
-              <input
-                type="hidden"
-                name={`baselineSetId-${section.accountId}`}
-                value={section.baselineSetId ?? ""}
-              />
-              <input
-                type="hidden"
-                name={`appendWatermark-${section.accountId}`}
-                value={section.appendWatermark ?? ""}
-              />
-              <FiledBehindConfirmation
-                section={section}
-                name={`confirmFiledBehind-${section.accountId}`}
-                resetKey={resetKey}
-              />
-              <RemovalConfirmation
-                section={section}
-                name={`confirmRemovals-${section.accountId}`}
-                resetKey={resetKey}
-              />
-            </section>
-          ))}
-
-          <input type="hidden" name="accountId" value="" />
-          {diff.reviewRevision !== null ? (
-            <input type="hidden" name="reviewRevision" value={diff.reviewRevision} />
-          ) : null}
-          <input type="hidden" name="reviewedAsOf" value={diff.asOfInput} />
-
-          {controls}
-        </Form>
-      </section>
-    );
-  }
-
-  return (
-    <section className="panel">
-      <header className="panel-header">
-        <h2 className="panel-title">What this statement changes</h2>
-        <span className="panel-count">{summaryOf(diff)}</span>
-      </header>
-
-      <div className="panel-body form-intro">
-        <p>
-          <strong>{diff.filename}</strong> ·{" "}
-          {diff.accountName !== null ? (
-            <>
-              {diff.accountName}
-              {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
-              {diff.ownerName}
-            </>
-          ) : (
-            "several accounts"
-          )}
-        </p>
-
-        <Comparison section={diff} />
-        <SkippedLines skipped={diff.skipped} />
-      </div>
-
-      <DiffTable section={diff} />
+      ) : null}
 
       <Form method="post">
-        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
-        <input type="hidden" name="accountId" value={diff.accountId ?? ""} />
-        {/* The confirmation's binding (#181) — "" is null's wire form, so a first statement's
-            missing baseline round-trips as the empty string on every side of the comparison. */}
-        <input type="hidden" name="baselineSetId" value={diff.baselineSetId ?? ""} />
-        {diff.reviewRevision !== null ? (
-          <input type="hidden" name="reviewRevision" value={diff.reviewRevision} />
-        ) : null}
-        <input type="hidden" name="reviewedAsOf" value={diff.asOfInput} />
+        {diff.accounts.map((section) => (
+          <ReviewSection
+            key={section.accountId}
+            section={section}
+            several={several}
+            filename={diff.filename}
+            resetKey={resetKey}
+          />
+        ))}
 
-        <FiledBehindConfirmation section={diff} name="confirmFiledBehind" resetKey={resetKey} />
-        <RemovalConfirmation section={diff} name="confirmRemovals" resetKey={resetKey} />
+        {/* Each section's baseline binding (#181, "" is null's wire form) and watermark; accountId
+            feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
+        {Object.entries(reviewedFields(diff)).map(([name, value]) => (
+          <input key={name} type="hidden" name={name} value={value} />
+        ))}
 
         {controls}
       </Form>

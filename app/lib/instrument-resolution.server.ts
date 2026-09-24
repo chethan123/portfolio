@@ -1,7 +1,7 @@
 // Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec 0004
 // step 04). Byte-exact lookup (raw_string collate "C") — no fuzzy merge onto the wrong fund; a
 // miss prompts once. An answer is the draft's own (upload_draft_answer) until its statement is
-// recorded, when commitUpload promotes it to vocabulary (issue #291): an abandoned draft's wrong
+// recorded, when recordUpload promotes it to vocabulary (issue #291): an abandoned draft's wrong
 // match must not resolve the next upload silently. A global row wins over a draft's answer.
 import { isAssetClass } from "./account-options.ts";
 import { getDb, inTransaction, type Database } from "./db.server.ts";
@@ -220,7 +220,7 @@ type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 // (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name
 // typed twice is created once and shared; feed requires a symbol and probes it once (non-USD
 // refuses, a provider failure just leaves it stale). Answers land on the draft, not in
-// vocabulary — commitUpload promotes them. A string vocabulary gained meanwhile, or a double
+// vocabulary — recordUpload promotes them. A string vocabulary gained meanwhile, or a double
 // submit of this draft, doesn't error: the row already there wins.
 export async function resolveAll(
   draftId: string,

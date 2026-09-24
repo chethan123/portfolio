@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { closeAccount, getAccount } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { resolveAll } from "~/lib/instrument-resolution.server";
+import { sectionKey } from "~/lib/review-form";
 import {
   DraftNotReadyError,
   RefusedUpload,
@@ -20,12 +21,11 @@ import {
   rememberMapping,
   requireDraft,
   reviewForDraft,
-  type CommitInput,
-  type UploadDiff,
 } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { renumber } from "./support/fixtures.ts";
+import { posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { TestContext } from "./support/database.ts";
@@ -107,29 +107,6 @@ async function stage(
   return draft.id;
 }
 
-/** Every account's binding exactly as the review form posts it, then `extra` on top. */
-function posted(review: UploadDiff, extra: CommitInput = {}): CommitInput {
-  const fields: CommitInput = {
-    accountId: "",
-    reviewedAsOf: review.asOfInput,
-    ...(review.reviewRevision === null ? {} : { reviewRevision: review.reviewRevision }),
-  };
-  for (const section of review.accounts ?? []) {
-    fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
-    fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
-  }
-  return { ...fields, ...extra };
-}
-
-async function reviewAndRecord(
-  draftId: string,
-  db: TestContext["db"],
-  { asOf = null, extra = {} }: { asOf?: string | null; extra?: CommitInput } = {},
-) {
-  const review = await reviewForDraft(draftId, asOf, db);
-  return recordUpload(draftId, posted(review, asOf === null ? extra : { asOf, ...extra }), db);
-}
-
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -173,9 +150,9 @@ describe("a multi-account review", () => {
       const review = await reviewForDraft(draftId, null, ctx.db);
 
       expect(review.accountId).toBeNull();
-      expect(review.reviewRevision).toMatch(/^v4\./);
+      expect(review.reviewRevision).toMatch(/^v5\./);
       expect(
-        review.accounts?.map((section) => [
+        review.accounts.map((section) => [
           section.accountId,
           section.asOf,
           section.baselineSetId,
@@ -186,7 +163,7 @@ describe("a multi-account review", () => {
         [roth.id, { source: "file", date: "2026-06-30" }, earlier.id, false],
         [mortgage.id, { source: "file", date: "2026-07-15" }, null, true],
       ]);
-      const rothSection = review.accounts?.[1];
+      const rothSection = review.accounts[1];
       expect(rothSection?.accountNumberTail).toBe("····5432");
       expect(
         rothSection?.updated.map((row) => [row.name, row.quantityBefore, row.quantityAfter]),
@@ -209,7 +186,7 @@ describe("a multi-account review", () => {
 
       const review = await reviewForDraft(draftId, "2026-06-30", ctx.db);
 
-      expect(review.accounts?.map((section) => [section.accountId, section.skipped])).toEqual([
+      expect(review.accounts.map((section) => [section.accountId, section.skipped])).toEqual([
         [account.id, [{ row: 2, instrument: "CASH" }]],
       ]);
       expect(review.skipped).toEqual([{ row: 3, instrument: "Total" }]);
@@ -228,8 +205,7 @@ describe("recording a multi-account file", () => {
 
       const written = await reviewAndRecord(draftId, db);
 
-      if (!written.multiAccount) throw new Error("A multi-account draft recorded as one account.");
-      expect(written.recorded.map((set) => [set.accountId, set.asOf, set.counts.added])).toEqual([
+      expect(written.map((set) => [set.accountId, set.asOf, set.counts.added])).toEqual([
         [individual.id, "2026-07-31", 2],
         [roth.id, "2026-06-30", 2],
         [mortgage.id, "2026-07-15", 1],
@@ -246,7 +222,7 @@ describe("recording a multi-account file", () => {
         expect(Buffer.from(sets[0]?.raw_file ?? []).equals(Buffer.from(bytes))).toBe(true);
       }
 
-      const [first, second, third] = written.recorded;
+      const [first, second, third] = written;
       expect(await holdingsOf(db, first?.setId ?? "")).toEqual([
         { instrument_id: vti.id, quantity: "120.00000000", cost_basis_per_share: "205.1200" },
         { instrument_id: aapl.id, quantity: "50.00000000", cost_basis_per_share: "170.6600" },
@@ -312,7 +288,7 @@ describe("recording a multi-account file", () => {
 
       const review = await reviewForDraft(draftId, "2026-06-30", ctx.db);
       expect(review.asOf).toEqual({ source: "asked", date: "2026-06-30" });
-      expect(review.accounts?.map((section) => section.asOf)).toEqual([
+      expect(review.accounts.map((section) => section.asOf)).toEqual([
         { source: "asked", date: "2026-06-30" },
         { source: "asked", date: "2026-06-30" },
         { source: "asked", date: "2026-06-30" },
@@ -349,7 +325,7 @@ describe("recording a multi-account file", () => {
 
       const review = await reviewForDraft(draftId, "2026-06-30", ctx.db);
       expect(review.asOf).toEqual({ source: "asked", date: "2026-06-30" });
-      expect(review.accounts?.map((section) => section.asOf)).toEqual([
+      expect(review.accounts.map((section) => section.asOf)).toEqual([
         { source: "file", date: "2026-07-31" },
         { source: "asked", date: "2026-06-30" },
       ]);
@@ -405,14 +381,14 @@ describe("recording a multi-account file", () => {
       expect(refusal.fieldErrors.form).toMatch(
         /^Huge: BIG's quantity multiplied by its cost basis is a larger figure/,
       );
-      expect(refusal instanceof RefusedUpload ? refusal.diff.accounts?.length : null).toBe(2);
+      expect(refusal instanceof RefusedUpload ? refusal.diff.accounts.length : null).toBe(2);
       expect(await setsOf(ctx.db, small.id)).toEqual([]);
       expect(await setsOf(ctx.db, huge.id)).toEqual([]);
     }),
   );
 
   it(
-    "refuses a baseline that moved under the second account, naming it, reading each binding from its own field only",
+    "refuses a baseline that moved under the second account, naming it, reading it from that account's own field",
     withDatabase(async (ctx) => {
       const { individual, roth, mortgage, vti } = await seedHousehold(ctx);
       const earlier = await ctx.seedPositionSet({
@@ -423,13 +399,9 @@ describe("recording a multi-account file", () => {
       const draftId = await stage(ctx, spreadsheet());
       const review = await reviewForDraft(draftId, null, ctx.db);
 
-      // The single-account field carries the right id; Roth IRA's own says there was none.
+      // Roth IRA's own field says there was none.
       const refusal = await refusalOf(() =>
-        recordUpload(
-          draftId,
-          posted(review, { [`baselineSetId-${roth.id}`]: "", baselineSetId: earlier.id }),
-          ctx.db,
-        ),
+        recordUpload(draftId, posted(review, { [sectionKey("baselineSetId", roth.id)]: "" }), ctx.db),
       );
 
       expect(refusal).toBeInstanceOf(RefusedUpload);
@@ -477,15 +449,13 @@ describe("recording a multi-account file", () => {
       const unticked = await refusalOf(() => recordUpload(draftId, posted(review), ctx.db));
       expect(unticked.fieldErrors.form).toContain(bothMissing);
 
-      // Ticked, but in the single-account boxes and in each other's.
+      // Ticked, but in each other's boxes.
       const misplaced = await refusalOf(() =>
         recordUpload(
           draftId,
           posted(review, {
-            confirmRemovals: "true",
-            confirmFiledBehind: "true",
-            [`confirmRemovals-${roth.id}`]: "true",
-            [`confirmFiledBehind-${individual.id}`]: "true",
+            [sectionKey("confirmRemovals", roth.id)]: "true",
+            [sectionKey("confirmFiledBehind", individual.id)]: "true",
           }),
           ctx.db,
         ),
@@ -496,12 +466,12 @@ describe("recording a multi-account file", () => {
       const written = await recordUpload(
         draftId,
         posted(review, {
-          [`confirmRemovals-${individual.id}`]: "true",
-          [`confirmFiledBehind-${roth.id}`]: "true",
+          [sectionKey("confirmRemovals", individual.id)]: "true",
+          [sectionKey("confirmFiledBehind", roth.id)]: "true",
         }),
         ctx.db,
       );
-      expect(written.multiAccount ? written.recorded.length : 0).toBe(3);
+      expect(written.length).toBe(3);
     }),
   );
 
@@ -704,11 +674,7 @@ describe("recording a file with answered account numbers", () => {
 
       const written = await reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" });
 
-      expect(written.multiAccount ? written.recorded.map((set) => set.accountId) : []).toEqual([
-        first.id,
-        second.id,
-        third.id,
-      ]);
+      expect(written.map((set) => set.accountId)).toEqual([first.id, second.id, third.id]);
       expect(await numberOf(ctx.db, second)).toBe("B-2");
       expect(await numberOf(ctx.db, third)).toBe("C-3");
       expect(await ctx.db.selectFrom("upload_draft_account_answer").selectAll().execute()).toEqual(
@@ -731,10 +697,7 @@ describe("recording a file with answered account numbers", () => {
 
       const written = await reviewAndRecord(draftId, ctx.db, { asOf: "2026-06-30" });
 
-      expect(written.multiAccount ? written.recorded.map((set) => set.accountId) : []).toEqual([
-        first.id,
-        second.id,
-      ]);
+      expect(written.map((set) => set.accountId)).toEqual([first.id, second.id]);
       const [secondSet] = await setsOf(ctx.db, second.id);
       expect(await holdingsOf(ctx.db, secondSet?.id ?? "")).toEqual([
         { instrument_id: vti.id, quantity: "2.00000000", cost_basis_per_share: null },
