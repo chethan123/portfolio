@@ -194,6 +194,24 @@ describe("refusing bad input", () => {
   );
 
   it(
+    "takes a line break out of an account number only a forged post could carry",
+    withDatabase(async ({ db }) => {
+      const alice = await createPerson({ name: "Alice" }, db);
+
+      // A single-line box strips newlines on the way out, so no browser sends this. The column is
+      // canonicalised anyway because settings has to post the number back unchanged and the
+      // upload's mismatch check compares the file's cell against it (#312), and 0018 folds the
+      // rows written before it did.
+      const account = await createAccount(
+        { ...validInput(alice.id), externalAccountNumber: "Z12-\n345678" },
+        db,
+      );
+
+      expect(account.externalAccountNumber).toBe("Z12-345678");
+    }),
+  );
+
+  it(
     "reports an unknown account as not found rather than as an error",
     withDatabase(async ({ db }) => {
       await expect(getAccount("999999", db)).rejects.toBeInstanceOf(NotFoundError);
