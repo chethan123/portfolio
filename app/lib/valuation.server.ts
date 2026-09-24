@@ -759,6 +759,8 @@ type Baseline =
 
 // §7 rules 2 and 3, narrowed to one date: positions win wherever they reach, the hand-typed history
 // covers only what precedes them, and a range reaching past both is measured from where it can be.
+// The hole this fills is the one 0003_holding_valued_at.sql named as it dug it: no set at-or-before
+// d means no rows, not zero (#347).
 export async function netWorthChange(
   filter: OwnerFilter,
   since: IsoDate,
