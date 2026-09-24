@@ -1,18 +1,20 @@
 /**
- * Connection lifecycle for one tick (prices are refresh-quotes.test.ts's job). A tick that fails
- * mid-lock and returns its connection intact poisons the pool — silent, permanent (§11; healthz
- * can't see it). Fake interval + fake provider, real pool patched to report handbacks.
+ * A tick that fails mid-lock and returns its connection intact poisons the pool — silent,
+ * permanent (§11; healthz can't see it). Plus the tick's own rules through the built instance:
+ * dropped not queued, quotes gated, cadence re-read, the /healthz snapshot, the log lines.
  */
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
 import {
+  createPricePoller,
+  pinPricePoller,
   readPollerSnapshot,
   requestRefresh,
   startPricePoller,
   stopPricePoller,
 } from "~/lib/price-poller.server";
-import * as providerSocketModule from "~/lib/provider-socket.server";
+import { runRefresh } from "~/lib/refresh.server";
 import { createPool } from "../server/db.ts";
 
 import { action as refreshAction } from "../app/routes/refresh.ts";
@@ -25,25 +27,28 @@ import {
 } from "./support/database.ts";
 import { args, post } from "./support/routes.ts";
 
-import type { Kysely, KyselyPlugin } from "kysely";
-import type pg from "pg";
-import type { Database } from "~/lib/db.server";
-import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
+import type { BackfillReport, RefreshReport } from "~/lib/prices.server";
+import type { PriceProvider } from "~/lib/price-provider.server";
+import type { RefreshRun } from "~/lib/refresh.server";
 
 // getConfig() memoises its first read — set before any test runs, as the container does before serving
 process.env.DATABASE_URL = TEST_DATABASE_URL;
-
-// seeded refresh cadence the timer is first armed with; no tick re-arms it
-const INTERVAL_MS = 15 * 60 * 1000;
 
 // a Thursday, 11:00 NY — inside the regular session, not a holiday
 const TRADING_HOUR = new Date("2026-06-04T15:00:00Z");
 
 const WEEKEND = new Date("2026-06-07T15:00:00Z");
 
-// withRefreshLock's own key (refresh.test.ts's own copy, kept in step by hand) — taken from a
-// second real session, so a test holds the lock exactly as a second tab or a racing tick would.
-const REFRESH_ADVISORY_LOCK_KEY = "7295380114023642";
+const A_MINUTE_LATER = new Date(TRADING_HOUR.getTime() + 60_000);
+
+const QUOTED: RefreshReport = {
+  requested: 3,
+  priced: 2,
+  stale: 1,
+  closes: 2,
+  observed: 2,
+  providerFailed: true,
+};
 
 afterAll(closeTestDatabase);
 
@@ -77,98 +82,94 @@ function brokenProvider(): PriceProvider {
   };
 }
 
-type WatchedPool = {
-  /** The real pool, handed to the poller in place of the process-wide one. */
-  pool: pg.Pool;
-  /** One entry per connection handed back: true when it was destroyed. */
-  destroyed: boolean[];
-  handedBack(count: number): Promise<void>;
-  close(): Promise<void>;
-};
+// local copy, as tests/masking-browser.test.ts keeps its own
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
+}
 
-/**
- * Real pool, patched not replaced: the lock is a real advisory lock on a real session, so
- * idleCount/totalCount stay the pool's own accounting. Handback is the last observable step of a
- * tick — wait on it, not a sleep.
- */
-function watchedPool(): WatchedPool {
-  const pool = createPool(TEST_DATABASE_URL);
-  const destroyed: boolean[] = [];
-  const waiting: { count: number; resolve: () => void }[] = [];
+/** Every line the instance wrote, prefixed with its level. */
+function capturedLog(): { lines: string[]; log: Pick<Console, "info" | "warn" | "error"> } {
+  const lines: string[] = [];
+  const at =
+    (level: string) =>
+    (...args: unknown[]) =>
+      void lines.push(`${level}: ${args.map(String).join(" ")}`);
 
-  // cast past connect's callback overload, unused here
-  const openConnection = pool.connect.bind(pool) as () => Promise<pg.PoolClient>;
+  return { lines, log: { info: at("info"), warn: at("warn"), error: at("error") } };
+}
 
-  pool.connect = (async () => {
-    const client = await openConnection();
-    const handBack = client.release.bind(client);
-
-    client.release = (broken?: Error | boolean) => {
-      handBack(broken);
-      destroyed.push(broken === true);
-      for (const waiter of waiting.splice(0)) {
-        if (destroyed.length >= waiter.count) waiter.resolve();
-        else waiting.push(waiter);
-      }
-    };
-
-    return client;
-  }) as typeof pool.connect;
-
+// emptyBackfillReport's keys, restated: it is unexported (spec 0025 §7)
+function backfill(overrides: Partial<BackfillReport> = {}): BackfillReport {
   return {
-    pool,
-    destroyed,
-    handedBack: (count) =>
-      destroyed.length >= count
-        ? Promise.resolve()
-        : new Promise((resolve) => waiting.push({ count, resolve })),
-    close: () => pool.end(),
+    attempted: 0,
+    written: 0,
+    outcomes: {
+      filled: 0,
+      nothing_to_write: 0,
+      no_history: 0,
+      non_usd: 0,
+      split_unresolved: 0,
+      provider_failed: 0,
+    },
+    batchFailed: false,
+    ...overrides,
   };
 }
 
-// handedBack fires before the tick's log line resolves (finally releases early); one macrotask
-// (setImmediate) drains the rest — a sleep would be guessing.
-const tickFinished = () => new Promise<void>((resolve) => setImmediate(resolve));
+function done(quotes: RefreshReport | null, backfillReport = backfill()): RefreshRun {
+  return { status: "done", report: { quotes, backfill: backfillReport } };
+}
 
-// Only setInterval/clearInterval/Date faked — pg's connect timeout uses a real setTimeout.
-// advanceTimersByTime returns once ticks have started; caller then waits on the pool.
-function runTicks(
-  provider: PriceProvider,
-  { at = TRADING_HOUR, ticks = 1 }: { at?: Date; ticks?: number } = {},
-): void {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: at });
-  try {
-    startPricePoller(provider);
-    vi.advanceTimersByTime(ticks * INTERVAL_MS);
-  } finally {
-    stopPricePoller();
-    vi.useRealTimers();
-  }
+/** The factory with scripted defaults; `answer` gets the refresh call's index. */
+function pollerWith(
+  overrides: Partial<Parameters<typeof createPricePoller>[0]> & {
+    answer?: (call: number) => RefreshRun | Promise<RefreshRun>;
+  } = {},
+) {
+  const { answer = () => done(null), ...dependencies } = overrides;
+  const refreshCalls: { quotes: boolean }[] = [];
+  const { lines, log } = capturedLog();
+
+  const poller = createPricePoller({
+    provider: fakeProvider(),
+    clock: () => TRADING_HOUR,
+    readCadence: async () => 15,
+    refresh: async (options) => {
+      refreshCalls.push({ ...options });
+      return answer(refreshCalls.length - 1);
+    },
+    log,
+    ...dependencies,
+  });
+
+  return { poller, refreshCalls, lines };
 }
 
 describe("the connection a tick borrows", () => {
   it("is destroyed when the refresh throws, rather than returned to the pool still holding the lock", async () => {
-    const watched = watchedPool();
+    const pool = createPool(TEST_DATABASE_URL);
+    const releases: unknown[] = [];
+    pool.on("release", (err) => {
+      releases.push(err);
+    });
     // pool is fine, refresh is what breaks — a briefly unreachable database is the ordinary case
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+    const { poller } = pollerWith({ refresh: runRefresh });
 
     try {
-      await withDb(
-        unreachable,
-        async () => {
-          runTicks(fakeProvider());
-          await watched.handedBack(1);
-        },
-        watched.pool,
-      );
+      await withDb(unreachable, () => poller.tick(), pool);
 
-      expect(watched.destroyed).toEqual([true]);
+      expect(releases).toEqual([true]);
       // nothing left to hand out — no later tick gets a session with unknown lock state
-      expect(watched.pool.totalCount).toBe(0);
-      expect(watched.pool.idleCount).toBe(0);
+      expect(pool.totalCount).toBe(0);
+      expect(pool.idleCount).toBe(0);
     } finally {
       await unreachable.destroy();
-      await watched.close();
+      await pool.end();
     }
   });
 
@@ -176,23 +177,21 @@ describe("the connection a tick borrows", () => {
     "is handed back intact when it was the provider that failed, since a third-party outage is not a broken session",
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const watched = watchedPool();
+      const pool = createPool(TEST_DATABASE_URL);
+      const releases: unknown[] = [];
+      pool.on("release", (err) => {
+        releases.push(err);
+      });
+      const { poller } = pollerWith({ provider: brokenProvider(), refresh: runRefresh });
 
       try {
-        await withDb(
-          db,
-          async () => {
-            runTicks(brokenProvider());
-            await watched.handedBack(1);
-          },
-          watched.pool,
-        );
+        await withDb(db, () => poller.tick(), pool);
 
         // destroying on every failure would force a fresh connect every tick during an outage
-        expect(watched.destroyed).toEqual([false]);
-        expect(watched.pool.idleCount).toBe(1);
+        expect(releases).toEqual([false]);
+        expect(pool.idleCount).toBe(1);
       } finally {
-        await watched.close();
+        await pool.end();
       }
     }),
   );
@@ -209,455 +208,490 @@ describe("the connection a tick borrows", () => {
         holdings: [{ instrument, quantity: "1.00000000" }],
       });
 
-      const watched = watchedPool();
+      const pool = createPool(TEST_DATABASE_URL);
+      const releases: unknown[] = [];
+      pool.on("release", (err) => {
+        releases.push(err);
+      });
       const provider = fakeProvider();
+      const { poller } = pollerWith({ provider, clock: () => WEEKEND, refresh: runRefresh });
 
       try {
-        // calendar only gates quotes now (ADR-0011) — weekend tick still spends a connection
-        await withDb(
-          db,
-          async () => {
-            runTicks(provider, { at: WEEKEND });
-            await watched.handedBack(1);
-          },
-          watched.pool,
-        );
+        // calendar only gates quotes (ADR-0011) — weekend tick still spends a connection
+        await withDb(db, () => poller.tick(), pool);
 
         expect(provider.asked).toEqual([]);
         expect(provider.askedHistory).toEqual(["VTI"]);
-        expect(watched.destroyed).toEqual([false]);
+        expect(releases).toEqual([false]);
         expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
       } finally {
-        await watched.close();
+        await pool.end();
       }
     }),
   );
 });
 
 describe("a cadence the household moved", () => {
-  it(
-    "re-arms the timer at the next tick, so a save needs no restart",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      // boot case: timer arms at seeded 15 while the row already says 60; mid-run save is the same mechanism
-      await db.updateTable("app_setting").set({ refresh_cadence_minutes: 60 }).execute();
+  it("re-arms the timer at the next tick and stamps the tick's instant, so a save needs no restart", async () => {
+    let now = TRADING_HOUR;
+    const { poller } = pollerWith({ clock: () => now, readCadence: async () => 60 });
 
-      const watched = watchedPool();
-      const provider = fakeProvider();
+    poller.start();
+    try {
+      expect(poller.snapshot().minutes).toBe(15);
 
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
-      try {
-        await withDb(
-          db,
-          async () => {
-            startPricePoller(provider);
+      now = A_MINUTE_LATER;
+      await poller.tick();
 
-            vi.advanceTimersByTime(INTERVAL_MS);
-            await watched.handedBack(1);
+      expect(poller.snapshot().minutes).toBe(60);
+      expect(poller.snapshot().lastTickStartedAt).toEqual(A_MINUTE_LATER);
+    } finally {
+      poller.stop();
+    }
+  });
 
-            // tick read 60 and re-armed; 15 more minutes must fire nothing. Real setTimeout race,
-            // not a fake advance — a fire reaches the pool via real IO.
-            vi.advanceTimersByTime(INTERVAL_MS);
-            const early = await Promise.race([
-              watched.handedBack(2).then(() => "ticked" as const),
-              new Promise<"quiet">((resolve) => setTimeout(() => resolve("quiet"), 300)),
-            ]);
-            expect(early).toBe("quiet");
+  it("keeps the armed cadence when the read fails, and says so", async () => {
+    const failure = new Error("connection terminated");
+    const { poller, lines } = pollerWith({
+      readCadence: async () => {
+        throw failure;
+      },
+    });
 
-            // 45 more minutes completes the re-armed 60-minute cadence
-            vi.advanceTimersByTime(45 * 60 * 1000);
-            await watched.handedBack(2);
-          },
-          watched.pool,
-        );
+    await poller.tick();
 
-        expect(provider.asked).toHaveLength(2);
-        expect(watched.destroyed).toEqual([false, false]);
-      } finally {
-        stopPricePoller();
-        vi.useRealTimers();
-        await watched.close();
-      }
-    }),
-  );
+    expect(poller.snapshot().minutes).toBe(15);
+    expect(lines).toEqual([
+      "error: Refresh cadence could not be read; keeping the current one: Error: connection terminated",
+    ]);
+  });
+
+  it("is not armed by a tick whose read lands after the poller was stopped", async () => {
+    const cadence = deferred<number>();
+    const { poller } = pollerWith({ readCadence: () => cadence.promise });
+
+    poller.start();
+    const tick = poller.tick();
+    poller.stop();
+
+    cadence.resolve(60);
+    await tick;
+
+    expect(poller.snapshot().minutes).toBe(15);
+  });
+});
+
+describe("starting the poller", () => {
+  it("arms the timer without running a tick, so a crash-looping container never fetches on boot", () => {
+    let now = TRADING_HOUR;
+    const { poller, refreshCalls } = pollerWith({ clock: () => now });
+
+    now = A_MINUTE_LATER;
+    poller.start();
+    try {
+      expect(refreshCalls).toEqual([]);
+      expect(poller.snapshot().lastTickStartedAt).toEqual(A_MINUTE_LATER);
+    } finally {
+      poller.stop();
+    }
+  });
+
+  it("leaves no referenced timer behind, so the interval cannot hold a container open through shutdown", () => {
+    const timeouts = () =>
+      process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+    const { poller } = pollerWith();
+
+    const before = timeouts();
+    poller.start();
+    try {
+      expect(timeouts()).toBe(before);
+    } finally {
+      poller.stop();
+    }
+  });
 });
 
 describe("a tick that arrives while one is still running", () => {
-  it(
-    "is dropped rather than queued, so a slow provider cannot stack requests",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const watched = watchedPool();
-      const provider = fakeProvider();
+  it("is dropped rather than queued, whether scheduled or requested, so a slow provider cannot stack requests", async () => {
+    const first = deferred<RefreshRun>();
+    const entered = deferred<void>();
+    const { poller, refreshCalls } = pollerWith({
+      answer: (call) => {
+        if (call > 0) return done(null);
+        entered.resolve();
+        return first.promise;
+      },
+    });
 
-      try {
-        await withDb(
-          db,
-          async () => {
-            runTicks(provider, { ticks: 2 });
-            await watched.handedBack(1);
-          },
-          watched.pool,
-        );
+    const firstTick = poller.tick();
+    await entered.promise;
 
-        expect(provider.asked).toHaveLength(1);
-        expect(watched.destroyed).toEqual([false]);
-      } finally {
-        await watched.close();
-      }
-    }),
-  );
+    await poller.tick();
+    await poller.requestRefresh();
+
+    expect(refreshCalls).toHaveLength(1);
+    expect(poller.snapshot().running).toBe(true);
+    expect(poller.snapshot().lastObservation).toBeUndefined();
+
+    first.resolve(done(QUOTED));
+    await firstTick;
+
+    expect(poller.snapshot().running).toBe(false);
+    expect(poller.snapshot().lastObservation?.outcome).toBe("quoted");
+  });
 });
 
-describe("a refresh an upload asks for", () => {
-  it(
-    "runs quotes regardless of the calendar, unlike the tick's own schedule",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const watched = watchedPool();
-      const provider = fakeProvider();
+describe("which ticks ask for quotes", () => {
+  it("asks for quotes on a scheduled tick inside the window and not on one outside it", async () => {
+    const trading = pollerWith({ clock: () => TRADING_HOUR });
+    await trading.poller.tick();
 
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
-      try {
-        await withDb(
-          db,
-          async () => {
-            startPricePoller(provider);
+    const weekend = pollerWith({ clock: () => WEEKEND });
+    await weekend.poller.tick();
 
-            requestRefresh();
-            await watched.handedBack(1);
-          },
-          watched.pool,
-        );
+    expect(trading.refreshCalls).toEqual([{ quotes: true }]);
+    expect(weekend.refreshCalls).toEqual([{ quotes: false }]);
+  });
 
-        expect(provider.asked).toEqual([["VTI"]]);
-        expect(watched.destroyed).toEqual([false]);
-      } finally {
-        stopPricePoller();
-        vi.useRealTimers();
-        await watched.close();
-      }
-    }),
-  );
+  it("forces quotes on a requested refresh outside the window, as an upload needs", async () => {
+    const { poller, refreshCalls } = pollerWith({ clock: () => WEEKEND });
 
-  it(
-    "is dropped while a tick is running, rather than queued behind it",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const watched = watchedPool();
-      const provider = fakeProvider();
+    await poller.requestRefresh();
 
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
-      try {
-        await withDb(
-          db,
-          async () => {
-            startPricePoller(provider);
-
-            // request lands on the same `running` flag an overlapping tick would
-            vi.advanceTimersByTime(INTERVAL_MS);
-            requestRefresh();
-
-            await watched.handedBack(1);
-          },
-          watched.pool,
-        );
-
-        expect(provider.asked).toHaveLength(1);
-      } finally {
-        stopPricePoller();
-        vi.useRealTimers();
-        await watched.close();
-      }
-    }),
-  );
-
-  it(
-    "reaches no provider when the poller was never started, and is not replayed when it is",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const watched = watchedPool();
-      const provider = fakeProvider();
-
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
-      try {
-        await withDb(
-          db,
-          async () => {
-            // action runs before its own request's loaders, so the poller may not exist yet
-            requestRefresh();
-
-            startPricePoller(provider);
-
-            // long enough for a replayed request to have shown up
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          },
-          watched.pool,
-        );
-
-        expect(provider.asked).toEqual([]);
-        expect(provider.askedHistory).toEqual([]);
-        expect(watched.pool.totalCount).toBe(0);
-      } finally {
-        stopPricePoller();
-        vi.useRealTimers();
-        await watched.close();
-      }
-    }),
-  );
+    expect(refreshCalls).toEqual([{ quotes: true }]);
+  });
 });
 
-describe("what the batch writes to the log", () => {
-  // every line the tick wrote, whatever level it chose
+describe("the snapshot /healthz reads", () => {
+  it("is stamped synchronously when a tick starts, before anything it awaits", async () => {
+    let now = TRADING_HOUR;
+    const { poller } = pollerWith({ clock: () => now });
+
+    poller.start();
+    try {
+      now = A_MINUTE_LATER;
+      const tick = poller.tick();
+
+      expect(poller.snapshot().lastTickStartedAt).toEqual(A_MINUTE_LATER);
+      await tick;
+    } finally {
+      poller.stop();
+    }
+  });
+
+  it("records a done run with quotes as quoted, with the counts healthz reports", async () => {
+    const { poller } = pollerWith({ answer: () => done(QUOTED) });
+
+    await poller.tick();
+
+    expect(poller.snapshot().lastObservation).toStrictEqual({
+      outcome: "quoted",
+      requested: 3,
+      priced: 2,
+      providerFailed: true,
+    });
+  });
+
+  it("keeps market_closed for a weekend tick whose backfill batch then fails", async () => {
+    const { poller } = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill({ batchFailed: true })),
+    });
+
+    await poller.tick();
+
+    expect(poller.snapshot().lastObservation).toStrictEqual({ outcome: "market_closed" });
+  });
+
+  it("keeps market_closed for a weekend tick that then finds the lock held", async () => {
+    const { poller } = pollerWith({ clock: () => WEEKEND, answer: () => ({ status: "busy" }) });
+
+    await poller.tick();
+
+    expect(poller.snapshot().lastObservation).toStrictEqual({ outcome: "market_closed" });
+    expect(poller.snapshot().running).toBe(false);
+  });
+
+  it("leaves the previous observation when a later tick finds the lock held", async () => {
+    const { poller } = pollerWith({
+      answer: (call) => (call === 0 ? done(QUOTED) : { status: "busy" }),
+    });
+
+    await poller.tick();
+    const settled = poller.snapshot().lastObservation;
+    await poller.tick();
+
+    expect(settled?.outcome).toBe("quoted");
+    expect(poller.snapshot().lastObservation).toStrictEqual(settled);
+  });
+
+  it("records an error run as error", async () => {
+    const { poller } = pollerWith({ answer: () => ({ status: "error" }) });
+
+    await poller.tick();
+
+    expect(poller.snapshot().lastObservation).toStrictEqual({ outcome: "error" });
+  });
+
+  it("records a thrown refresh as error, clears running, and resolves the tick rather than rejecting", async () => {
+    const { poller, lines } = pollerWith({
+      answer: () => {
+        throw new Error("socket hang up");
+      },
+    });
+
+    await expect(poller.tick()).resolves.toBeUndefined();
+
+    expect(poller.snapshot().lastObservation).toStrictEqual({ outcome: "error" });
+    expect(poller.snapshot().running).toBe(false);
+    expect(lines).toEqual([
+      "error: Price refresh failed; last known prices are kept: Error: socket hang up",
+    ]);
+  });
+
+  it("is a copy, so a reader mutating it leaves the next read unchanged", async () => {
+    // fresh Date per read: a leaked reference must not reach the shared constant
+    const { poller } = pollerWith({
+      clock: () => new Date(TRADING_HOUR),
+      answer: () => done(QUOTED),
+    });
+    await poller.tick();
+
+    const read = poller.snapshot();
+    read.lastTickStartedAt.setTime(0);
+    const observation = read.lastObservation;
+    if (observation?.outcome !== "quoted") throw new Error("expected a quoted observation");
+    observation.priced = 99;
+
+    expect(poller.snapshot()).toStrictEqual({
+      running: false,
+      lastTickStartedAt: TRADING_HOUR,
+      minutes: 15,
+      lastObservation: { outcome: "quoted", requested: 3, priced: 2, providerFailed: true },
+    });
+  });
+});
+
+describe("what a tick writes to the log", () => {
+  it("reports every attempt at quotes at info, so a quiet loop is told from a dead one", async () => {
+    const { poller, lines } = pollerWith({
+      answer: () =>
+        done({ requested: 1, priced: 1, stale: 0, closes: 1, observed: 1, providerFailed: false }),
+    });
+
+    await poller.tick();
+
+    expect(lines).toEqual(["info: Price refresh: 1 of 1 priced, 0 stale, 1 closes written, 1 new."]);
+  });
+
+  it("warns when any instrument came back stale, the line an operator greps for", async () => {
+    const { poller, lines } = pollerWith({
+      answer: () =>
+        done({ requested: 2, priced: 1, stale: 1, closes: 0, observed: 1, providerFailed: false }),
+    });
+
+    await poller.tick();
+
+    expect(lines).toEqual(["warn: Price refresh: 1 of 2 priced, 1 stale, 0 closes written, 1 new."]);
+  });
+
+  it("says nothing on a weekend tick whose backfill found nothing to fill", async () => {
+    // "no price line in the log" must keep meaning what docs/operating.md says
+    const { poller, lines } = pollerWith({ clock: () => WEEKEND });
+
+    await poller.tick();
+
+    expect(lines).toEqual([]);
+  });
+
+  it("counts what the backfill attempted when there was something to fill", async () => {
+    const { poller, lines } = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill({ attempted: 1 })),
+    });
+
+    await poller.tick();
+
+    // an answer isn't a failure, the ledger names the reason
+    expect(lines).toEqual(["info: Price backfill: 1 attempted, 0 closes written, 0 failed."]);
+  });
+
+  it("warns when a backfill call failed or the batch itself failed", async () => {
+    const failedCall = pollerWith({
+      clock: () => WEEKEND,
+      answer: () =>
+        done(
+          null,
+          backfill({
+            attempted: 2,
+            written: 1,
+            outcomes: { ...backfill().outcomes, provider_failed: 1 },
+          }),
+        ),
+    });
+    await failedCall.poller.tick();
+
+    const failedBatch = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill({ batchFailed: true })),
+    });
+    await failedBatch.poller.tick();
+
+    expect(failedCall.lines).toEqual([
+      "warn: Price backfill: 2 attempted, 1 closes written, 1 failed.",
+    ]);
+    expect(failedBatch.lines).toEqual([
+      "warn: Price backfill: 0 attempted, 0 closes written, 0 failed. The batch itself failed; see the line above.",
+    ]);
+  });
+});
+
+describe("the pinned poller", () => {
+  // the two module-level lines have no instance to carry a `log`
   function capturedConsole() {
-    const lines: string[] = [];
-    const restore = (["info", "warn"] as const).map((level) => {
+    const calls: { level: string; args: unknown[] }[] = [];
+    const restore = (["info", "warn", "error"] as const).map((level) => {
       const was = console[level];
-      console[level] = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+      console[level] = (...args: unknown[]) => void calls.push({ level, args });
       return () => {
         console[level] = was;
       };
     });
 
-    return { lines, restore: () => restore.forEach((undo) => undo()) };
+    return { calls, restore: () => restore.forEach((undo) => undo()) };
   }
 
-  it(
-    "says nothing when the gap query found nothing to fill",
-    withDatabase(async ({ db, seedInstrument }) => {
-      // no gap here — "no price line in the log" must keep meaning what docs/operating.md says
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+  /** Bounded poll on real timers: module `requestRefresh()` returns void, so there is nothing to await. */
+  async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error("condition was never met");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
 
-      const watched = watchedPool();
-      const provider = fakeProvider();
-      const console = capturedConsole();
+  it("builds once when pinned twice, since the second call is only the idempotent guard", () => {
+    let firstBuilds = 0;
+    let secondBuilds = 0;
 
-      try {
-        await withDb(
-          db,
-          async () => {
-            runTicks(provider, { at: WEEKEND });
-            await watched.handedBack(1);
-            await tickFinished();
-          },
-          watched.pool,
-        );
-      } finally {
-        console.restore();
-        await watched.close();
-      }
-
-      expect(console.lines.filter((line) => line.startsWith("Price backfill"))).toEqual([]);
-    }),
-  );
-
-  it(
-    "counts what it attempted when there was something to fill",
-    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      const account = await seedAccount();
-      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      await seedPositionSet({
-        account,
-        asOf: "2024-03-29",
-        holdings: [{ instrument, quantity: "1.00000000" }],
+    try {
+      pinPricePoller(() => {
+        firstBuilds += 1;
+        return pollerWith().poller;
+      });
+      pinPricePoller(() => {
+        secondBuilds += 1;
+        return pollerWith().poller;
       });
 
-      const watched = watchedPool();
-      const provider = fakeProvider();
-      const console = capturedConsole();
-
-      try {
-        await withDb(
-          db,
-          async () => {
-            runTicks(provider, { at: WEEKEND });
-            await watched.handedBack(1);
-            await tickFinished();
-          },
-          watched.pool,
-        );
-      } finally {
-        console.restore();
-        await watched.close();
-      }
-
-      expect(console.lines.filter((line) => line.startsWith("Price backfill"))).toEqual([
-        // fake answers no-history: an answer isn't a failure, the ledger names the reason
-        "Price backfill: 1 attempted, 0 closes written, 0 failed.",
-      ]);
-    }),
-  );
-});
-
-// A provider whose getQuotes never resolves on its own — the running-guard test's own control.
-// `entered` settles the instant getQuotes() is actually called, so a caller can wait past the
-// cadence read and lock acquisition that precede it rather than guessing at a sleep long enough to
-// outlast them: too short and resolveQuotes() below fires before a resolver exists to receive it,
-// leaving the tick — and the poller's own timer — hanging for good.
-function controllableProvider(): {
-  provider: PriceProvider;
-  entered: Promise<void>;
-  resolveQuotes: (quotes: ProviderQuote[]) => void;
-} {
-  let release: ((quotes: ProviderQuote[]) => void) | undefined;
-  let markEntered: (() => void) | undefined;
-  const entered = new Promise<void>((resolve) => {
-    markEntered = resolve;
-  });
-  return {
-    provider: {
-      getQuotes: () => {
-        markEntered?.();
-        return new Promise<ProviderQuote[]>((resolve) => {
-          release = resolve;
-        });
-      },
-      async getDailyCloses() {
-        return { status: "no-history" };
-      },
-    },
-    entered,
-    resolveQuotes: (quotes) => release?.(quotes),
-  };
-}
-
-// plugin, not a Proxy (breaks on private fields); throws in JS so it aborts the transaction —
-// copied from price-backfill.test.ts's own helper, trimmed to the one shape needed here (always
-// refuses, rather than letting the first `after` attempts through).
-function refusingInsertInto(db: Kysely<Database>, table: string): Kysely<Database> {
-  const plugin: KyselyPlugin = {
-    transformQuery({ node }) {
-      if (
-        node.kind === "InsertQueryNode" &&
-        "into" in node &&
-        node.into?.table.identifier.name === table
-      ) {
-        throw new Error(`the database refused an insert into ${table}`);
-      }
-      return node;
-    },
-    async transformResult({ result }) {
-      return result;
-    },
-  };
-
-  return db.withPlugin(plugin);
-}
-
-/**
- * Bounded polling for a condition driven by a fire-and-forget tick (`requestRefresh`, or a
- * fake-timer-fired scheduled tick once real timers are restored) — there is no connection-handback
- * signal to await here, unlike `tickFinished` above, since these tests read the snapshot itself
- * rather than pool state.
- */
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error("condition was never met");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-// The tests above fake Date (and, where a scheduled tick must fire, setInterval too) to control the
-// market-hours decision, matching this file's existing convention. The tests below that don't need
-// to control wall-clock time run on real timers instead — `pricingHealth`'s own `now`-as-parameter
-// cases are pure and live in tests/price-health.test.ts, with no clock to fake at all.
-describe("the healthz snapshot the poller slot now carries (spec price-health/03)", () => {
-  it(
-    "stamps the phase overdue is measured from on every tick, not only when the timer is armed",
-    withDatabase(async () => {
-      // The one field `scheduler` is computed against, and until this test nothing read it off the
-      // real slot — deleting the stamp in `tick` left the whole suite green. A tick that runs
-      // without moving it leaves a healthy poller reporting `overdue` one grace period after it
-      // armed, on the endpoint the slice exists for.
-      const armedAt = new Date("2026-09-08T14:00:00Z");
-      vi.useFakeTimers({ toFake: ["Date"], now: armedAt });
-
-      try {
-        startPricePoller(fakeProvider());
-        expect(readPollerSnapshot()?.lastTickStartedAt).toEqual(armedAt);
-
-        const tickAt = new Date(armedAt.getTime() + 60_000);
-        vi.setSystemTime(tickAt);
-
-        // The stamp is taken synchronously at the top of `tick`, before its first await, so it is
-        // already observable here — no polling under a frozen clock, whose `Date.now()` would leave
-        // `waitFor`'s own deadline unreachable and turn a failure into a hang.
-        requestRefresh();
-        expect(readPollerSnapshot()?.lastTickStartedAt).toEqual(tickAt);
-
-        // Real timers back before waiting on anything, then drain the tick this test set going
-        // rather than leaving it running against a transaction about to roll back.
-        vi.useRealTimers();
-        await waitFor(() => readPollerSnapshot()?.running === false);
-      } finally {
-        stopPricePoller();
-        vi.useRealTimers();
-      }
-    }),
-  );
-
-  it("makes the next read not_started once stopped", () => {
-    startPricePoller(fakeProvider());
-    expect(readPollerSnapshot()).not.toBeUndefined();
-
-    stopPricePoller();
-    expect(readPollerSnapshot()).toBeUndefined();
+      expect(firstBuilds).toBe(1);
+      expect(secondBuilds).toBe(0);
+    } finally {
+      stopPricePoller();
+    }
   });
 
-  it(
-    "is updated by requestRefresh but left alone by a direct POST /refresh, which calls runRefresh on its own",
-    withDatabase(async () => {
+  it("swallows a throwing build, logs it, and leaves no poller pinned", () => {
+    const failure = new Error("no worker listening at /run/price-worker/worker.sock (ENOENT)");
+    const captured = capturedConsole();
+
+    try {
+      expect(() =>
+        pinPricePoller(() => {
+          throw failure;
+        }),
+      ).not.toThrow();
+
       expect(readPollerSnapshot()).toBeUndefined();
+      expect(captured.calls).toEqual([
+        { level: "error", args: ["Price poller did not start; prices will not refresh:", failure] },
+      ]);
+      expect(captured.calls[0]?.args[1]).toBe(failure);
+    } finally {
+      captured.restore();
+      stopPricePoller();
+    }
+  });
 
-      // app/routes/refresh.ts's action calls runRefresh directly — it never imports price-poller.server.ts.
+  it("leaves no poller pinned when starting the one it built throws, since the slot is written last", () => {
+    const captured = capturedConsole();
+
+    try {
+      pinPricePoller(() => ({
+        ...pollerWith().poller,
+        start() {
+          throw new Error("setInterval refused");
+        },
+      }));
+
+      expect(readPollerSnapshot()).toBeUndefined();
+      expect(captured.calls.map(({ level, args }) => [level, args[0]])).toEqual([
+        ["error", "Price poller did not start; prices will not refresh:"],
+      ]);
+    } finally {
+      captured.restore();
+      stopPricePoller();
+    }
+  });
+
+  it("reads as not started once stopped", () => {
+    try {
+      startPricePoller(fakeProvider());
+      expect(readPollerSnapshot()).not.toBeUndefined();
+
+      stopPricePoller();
+      expect(readPollerSnapshot()).toBeUndefined();
+    } finally {
+      stopPricePoller();
+    }
+  });
+
+  it("drops a refresh requested before the poller started, says so, and does not replay it", () => {
+    const captured = capturedConsole();
+
+    try {
+      // action runs before its own request's middleware, so the poller may not exist yet
+      requestRefresh();
+      startPricePoller(fakeProvider());
+
+      expect(captured.calls).toEqual([
+        {
+          level: "info",
+          args: [
+            "A refresh was requested before the price poller started in this process; it was dropped, and a later tick will do the work.",
+          ],
+        },
+      ]);
+      // a replayed tick sets running synchronously
+      expect(readPollerSnapshot()?.running).toBe(false);
+      expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
+    } finally {
+      captured.restore();
+      stopPricePoller();
+    }
+  });
+
+  it(
+    "reaches the first poller started with quotes forced, while a direct POST /refresh leaves it alone",
+    withDatabase(async ({ seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // the route calls runRefresh itself and never imports price-poller.server.ts
       await refreshAction(args(post("/refresh", {})));
       expect(readPollerSnapshot()).toBeUndefined();
 
+      const first = fakeProvider();
+      const second = fakeProvider();
+
       try {
-        startPricePoller(fakeProvider());
+        startPricePoller(first);
+        startPricePoller(second);
         requestRefresh();
         await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
 
-        expect(readPollerSnapshot()?.lastObservation).toEqual({
-          outcome: "quoted",
-          requested: 0,
-          priced: 0,
-          providerFailed: false,
-        });
-      } finally {
-        stopPricePoller();
-      }
-    }),
-  );
-
-  it(
-    "changes neither running nor the previous observation when a tick is dropped by the running guard",
-    withDatabase(async ({ seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const { provider, entered, resolveQuotes } = controllableProvider();
-
-      try {
-        startPricePoller(provider);
-        requestRefresh();
-        await waitFor(() => readPollerSnapshot()?.running === true);
-        expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
-
-        // Only once getQuotes() has actually been called is a resolver in place to receive
-        // resolveQuotes() below — waiting on `running` alone races the cadence read and lock
-        // acquisition that still separate it from this point.
-        await entered;
-
-        // Dropped: `state.running` is already true, so this returns before touching anything.
-        requestRefresh();
-        expect(readPollerSnapshot()?.running).toBe(true);
-        expect(readPollerSnapshot()?.lastObservation).toBeUndefined();
-
-        resolveQuotes([]);
-        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
-
-        expect(readPollerSnapshot()?.running).toBe(false);
-        expect(readPollerSnapshot()?.lastObservation).toEqual({
+        expect(first.asked).toEqual([["VTI"]]);
+        expect(second.asked).toEqual([]);
+        expect(readPollerSnapshot()?.lastObservation).toStrictEqual({
           outcome: "quoted",
           requested: 1,
           priced: 0,
@@ -667,179 +701,5 @@ describe("the healthz snapshot the poller slot now carries (spec price-health/03
         stopPricePoller();
       }
     }),
-  );
-
-  it(
-    "leaves the previous observation intact when a later tick finds the advisory lock held",
-    withDatabase(async ({ seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      const lockPool = createPool(TEST_DATABASE_URL);
-      const holder = await lockPool.connect();
-
-      try {
-        startPricePoller(fakeProvider());
-        requestRefresh();
-        await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
-
-        const settled = readPollerSnapshot()?.lastObservation;
-        expect(settled).toEqual({
-          outcome: "quoted",
-          requested: 1,
-          priced: 0,
-          providerFailed: false,
-        });
-
-        await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
-        try {
-          requestRefresh();
-          // Wait for the busy tick to return — state.running flips true synchronously inside
-          // requestRefresh's own call to tick(), then back to false once the attempt finds the
-          // lock held and gives up — all while `holder` still has it. Releasing on a blind sleep
-          // instead risks the unlock landing before the attempt: the tick would then acquire the
-          // lock itself and run an ordinary refresh, which happens to leave the same observation
-          // behind and could pass without ever exercising the busy path this test is named for.
-          await waitFor(() => readPollerSnapshot()?.running === false);
-        } finally {
-          await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
-        }
-
-        expect(readPollerSnapshot()?.running).toBe(false);
-        expect(readPollerSnapshot()?.lastObservation).toEqual(settled);
-      } finally {
-        stopPricePoller();
-        holder.release();
-        await lockPool.end();
-      }
-    }),
-  );
-
-  it(
-    "still reports market_closed for a weekend tick whose backfill batch then fails against the database",
-    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // held from a date the spine doesn't reach — makes this a backfill candidate, as in
-      // "the connection a tick borrows" above
-      const account = await seedAccount();
-      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      await seedPositionSet({
-        account,
-        asOf: "2024-03-29",
-        holdings: [{ instrument, quantity: "1.00000000" }],
-      });
-
-      const provider: PriceProvider = {
-        async getQuotes() {
-          return [];
-        },
-        async getDailyCloses() {
-          return { status: "ok", closes: [{ date: "2024-03-25", close: "10.0000" }] };
-        },
-      };
-
-      try {
-        await withDb(refusingInsertInto(db, "price_backfill"), async () => {
-          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
-          try {
-            startPricePoller(provider);
-            vi.advanceTimersByTime(INTERVAL_MS);
-          } finally {
-            // Real timers before waiting: the market-hours decision above already read the fake
-            // clock synchronously: switching now only affects timing this test doesn't assert on.
-            vi.useRealTimers();
-          }
-
-          await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
-          expect(readPollerSnapshot()?.lastObservation).toEqual({ outcome: "market_closed" });
-        });
-      } finally {
-        stopPricePoller();
-      }
-    }),
-  );
-
-  it(
-    "still reports market_closed for a weekend tick that then finds the advisory lock held",
-    withDatabase(async () => {
-      const lockPool = createPool(TEST_DATABASE_URL);
-      const holder = await lockPool.connect();
-
-      try {
-        await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
-
-        try {
-          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
-          try {
-            startPricePoller(fakeProvider());
-            vi.advanceTimersByTime(INTERVAL_MS);
-          } finally {
-            vi.useRealTimers();
-          }
-
-          await waitFor(() => readPollerSnapshot()?.lastObservation !== undefined);
-          expect(readPollerSnapshot()?.lastObservation).toEqual({ outcome: "market_closed" });
-          expect(readPollerSnapshot()?.running).toBe(false);
-        } finally {
-          stopPricePoller();
-        }
-      } finally {
-        await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
-        holder.release();
-        await lockPool.end();
-      }
-    }),
-  );
-});
-
-describe("the default provider, when none is passed", () => {
-  it(
-    "is built once even when startPricePoller is called twice, since the second call is only the idempotent guard",
-    () => {
-      // Pins the lazy default (`provider ?? socketProvider()`, resolved inside the try): a default
-      // parameter would have built one on the first call's own argument evaluation regardless of
-      // this spy, and a second, unguarded build on the second call would double-count here.
-      const socketProviderSpy = vi.spyOn(providerSocketModule, "socketProvider");
-
-      try {
-        startPricePoller();
-        startPricePoller();
-
-        expect(socketProviderSpy).toHaveBeenCalledTimes(1);
-      } finally {
-        stopPricePoller();
-        socketProviderSpy.mockRestore();
-      }
-    },
-  );
-
-  it(
-    "swallows a throw from building the default provider, logs it, and leaves the poller unarmed — the failure the lazy resolve inside the try exists to catch",
-    () => {
-      // Reproduces the defect this ticket fixes: were `provider ?? socketProvider()` still a default
-      // parameter (evaluated before the `try`), this throw would escape `startPricePoller` — a 500 on
-      // every request once a middleware is the caller, `/healthz` included, rather than the swallowed
-      // failure asserted below.
-      stopPricePoller();
-      const buildFailure = new Error("no worker listening at /run/price-worker/worker.sock (ENOENT)");
-      const socketProviderSpy = vi
-        .spyOn(providerSocketModule, "socketProvider")
-        .mockImplementation(() => {
-          throw buildFailure;
-        });
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
-      const host = globalThis as unknown as Record<symbol, unknown>;
-
-      try {
-        expect(() => startPricePoller()).not.toThrow();
-        expect(host[POLLER_SLOT]).toBeUndefined();
-        expect(errorSpy).toHaveBeenCalledWith(
-          "Price poller did not start; prices will not refresh:",
-          buildFailure,
-        );
-      } finally {
-        stopPricePoller();
-        socketProviderSpy.mockRestore();
-        errorSpy.mockRestore();
-      }
-    },
   );
 });
