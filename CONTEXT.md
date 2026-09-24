@@ -98,6 +98,26 @@ The value at the last plotted point in the chosen chart range. It uses that poin
 and can differ from current net worth, even when the range ends today.
 _Avoid_: current value, latest value, ending balance, final value.
 
+**Change basis**:
+Which history the change chip measured its earlier figure from: `computed` (positions at the range's
+start), `manual` (the hand-typed value in force there), `clamped` (the earliest date the reading can
+value), or `none` (nothing recorded). The basis date is where that figure was actually taken, and it
+is the range's start only when the basis is `computed`.
+_Avoid_: baseline (that names what a statement's diff is compared to), start value, reference point.
+
+**Clamped**:
+The change basis used when the range reaches back further than the reading does: the chip measures
+from the earliest date it can value instead of from the start that was asked for, and says so under
+the figure. Clamping moves where the change is measured from and never what the line plots.
+_Avoid_: truncated, capped, adjusted, partial range.
+
+**In force**:
+What a hand-typed net worth point is on its own date and every date after it, until the next one
+replaces it — carried forward like a price, however old it gets. The value in force on a date need
+not be a point the line draws. The hand-typed history is the household's and has no owner, so a
+reading narrowed to an owner has no value in force at all.
+_Avoid_: latest manual value, effective value, interpolated, as-of value.
+
 ### How prices stay fresh
 
 **Refresh cadence**:

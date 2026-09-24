@@ -572,6 +572,29 @@ describe("where the change chip measures from", () => {
       expect(renderRoute(Overview, "/", data)).toContain("Measured from");
     }),
   );
+
+  it(
+    "says the start of the range was empty for these owners, not for the household, while narrowed",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      const household = await loader(args(get("/?range=5y")));
+
+      expect(household.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", household)).toContain(
+        "Nothing was recorded at the start of this range.",
+      );
+
+      const hers = await loader(args(get(`/?${ownerParam(alice.id)}&range=5y`)));
+
+      // Alice's own first statement, not the household's — the unqualified sentence would read as
+      // the whole household having nothing, which `NarrowedTo` directly above contradicts.
+      expect(hers.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", hers)).toContain(
+        "Nothing was recorded for these owners at the start of this range.",
+      );
+    }),
+  );
 });
 
 describe("the range in the query string", () => {

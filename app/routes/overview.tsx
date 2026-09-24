@@ -412,7 +412,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
 
           {change.basis === "clamped" && change.basisDate !== null ? (
             <p className="coverage-note">
-              Nothing was recorded at the start of this range. Measured from{" "}
+              Nothing was recorded{isFiltered(owners) ? " for these owners" : null} at the start
+              of this range. Measured from{" "}
               {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
             </p>
           ) : null}
