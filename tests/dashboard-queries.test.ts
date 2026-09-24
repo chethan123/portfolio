@@ -375,6 +375,8 @@ describe("netWorthChange", () => {
     }),
   );
 
+  // Regression for round(…, 4) over a bounded cast — a typmod back in that select raises 22003
+  // here and in the sum case below.
   it(
     "states the ratio between a hand-typed ten-thousandth and the largest balance the app takes, rather than overflowing",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, seedManualNetWorth, usdInstrument }) => {
