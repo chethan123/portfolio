@@ -390,3 +390,15 @@ Code review (2026-09-24), findings not taken:
 - **`capturedLog()` has one caller.** Kept: its name says what `pollerWith`'s `log` is.
 - **`fakeProvider`/`brokenProvider` near-copy `tests/refresh-quotes.test.ts`'s.** Pre-existing in
   this file; not this change's.
+
+Pull request review (2026-09-24, Codex), taken — none changes what production does, where the pinned
+instance is always started before any tick and its clock never throws:
+
+- The pre-start `lastTickStartedAt` placeholder no longer reads the injected clock, so a scripted
+  clock's first instant is `start()`'s.
+- A tick re-arms only a running schedule: on a factory instance never started, a moved cadence arms
+  nothing (§2 property 7 is about the started poller).
+- `arm` reads the clock before installing the interval, so a throwing clock cannot leave an interval
+  nothing holds.
+- The module-level `/refresh` test seeds its feed instrument after the route call, so the route's
+  default socket provider is never dialled.

@@ -296,6 +296,29 @@ describe("starting the poller", () => {
     }
   });
 
+  it("reads the clock only when started and when ticked, so a scripted clock's instants land where meant", async () => {
+    const instants = [TRADING_HOUR, A_MINUTE_LATER];
+    const { poller } = pollerWith({ clock: () => instants.shift() ?? WEEKEND });
+
+    poller.start();
+    try {
+      expect(poller.snapshot().lastTickStartedAt).toEqual(TRADING_HOUR);
+
+      await poller.tick();
+      expect(poller.snapshot().lastTickStartedAt).toEqual(A_MINUTE_LATER);
+    } finally {
+      poller.stop();
+    }
+  });
+
+  it("arms no timer when ticked before it was started, however the cadence moved", async () => {
+    const { poller } = pollerWith({ readCadence: async () => 60 });
+
+    await poller.tick();
+
+    expect(poller.snapshot().minutes).toBe(15);
+  });
+
   it("leaves no referenced timer behind, so the interval cannot hold a container open through shutdown", () => {
     const timeouts = () =>
       process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
@@ -674,11 +697,12 @@ describe("the pinned poller", () => {
   it(
     "reaches the first poller started with quotes forced, while a direct POST /refresh leaves it alone",
     withDatabase(async ({ seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-
-      // the route calls runRefresh itself and never imports price-poller.server.ts
+      // the route calls runRefresh itself and never imports price-poller.server.ts; no feed
+      // instrument yet, so its default socket provider is never dialled
       await refreshAction(args(post("/refresh", {})));
       expect(readPollerSnapshot()).toBeUndefined();
+
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       const first = fakeProvider();
       const second = fakeProvider();

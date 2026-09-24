@@ -65,8 +65,9 @@ export function createPricePoller(dependencies: {
   let stopped = false;
   /** Stamped by {@link arm} and by every tick past the running guard, scheduled or requested alike
    * — what `scheduler` is measured from (spec price-health/03). Two fields, deliberately, and no
-   * "has completed a tick" third one; 0021's Rejected section is why. A placeholder until `start`. */
-  let lastTickStartedAt: Date = clock();
+   * "has completed a tick" third one; 0021's Rejected section is why. A placeholder until `start`,
+   * never the injected clock: a scripted clock's reads belong to `start` and the ticks. */
+  let lastTickStartedAt = new Date(0);
   /** The last tick that observed a provider outcome; `undefined` before any has. Left untouched by
    * a `busy` tick, which observed none — see {@link run}'s `finally`. */
   let lastObservation: TickObservation | undefined;
@@ -82,12 +83,14 @@ export function createPricePoller(dependencies: {
   function arm(nextMinutes: number): void {
     if (stopped) return;
 
+    // Read before the interval exists: a throw here must not leave one nothing holds.
+    const armedAt = clock();
     clearInterval(timer);
     timer = setInterval(() => void run(false), nextMinutes * 60 * 1000);
     // A pending interval would hold the event loop open, keeping a container alive through shutdown.
     timer.unref?.();
     minutes = nextMinutes;
-    lastTickStartedAt = clock();
+    lastTickStartedAt = armedAt;
   }
 
   /** Every failure path warns and returns: a timer has no caller to catch a throw (§6.1). */
@@ -117,7 +120,8 @@ export function createPricePoller(dependencies: {
         log.error("Refresh cadence could not be read; keeping the current one:", error);
         return minutes;
       });
-      if (nextMinutes !== minutes) arm(nextMinutes);
+      // Re-arms a running schedule only: a tick on a poller never started must not start one.
+      if (nextMinutes !== minutes && timer !== undefined) arm(nextMinutes);
 
       // `refresh` owns the lock, and logs `busy`/`error` itself; only `done` has a report.
       const result = await refresh({ quotes }, provider);
