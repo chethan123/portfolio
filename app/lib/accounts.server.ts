@@ -364,9 +364,11 @@ export async function updateAccount(
   }
 
   // An edit: compare-and-set on what the form was drawn with — the alias confirm's shape
-  // (ARCHITECTURE.md §7.2), not a second lock. The typed value matches too, so a column another
-  // writer already moved to it reads as the edit done rather than as a conflict. Zero rows means
-  // the column is neither, which is the refusal.
+  // (ARCHITECTURE.md §7.2), not a second lock. Only that arm is the alias confirm's, though: it
+  // refuses an already-at-target change outright, where the second arm here accepts one. A save
+  // carrying no drawn-with copy compares against null, so without it an ordinary re-post of the
+  // recorded number reads as a conflict — refused once, accepted on reload. Zero rows means the
+  // column is neither value, which is the refusal.
   const written = await refusingDuplicateNumber(
     input.externalAccountNumber,
     db,
