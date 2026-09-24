@@ -102,17 +102,19 @@ _Avoid_: current value, latest value, ending balance, final value.
 Which history the change chip measured its earlier figure from, at its comparison date: `computed`
 (positions valued there), `manual` (the hand-typed value in force there), `clamped` (the earliest
 date the reading can value), or `none` (nothing recorded). The comparison date is the range's start,
-except under 1D, where it is the day before the session: there the chip asks for the previous close,
-which a household whose history begins on the session itself has never recorded. The basis date is
-where that figure was actually taken — the comparison date under `computed`, and under `manual` too
-when a hand-typed point falls on it.
+except under 1D, where it is the day before the session: there the chip asks for a value at the
+previous close, which a household whose history begins on the session itself has none of, however
+many closes the market recorded. The basis date is where that figure was actually taken — the
+comparison date under `computed`, and under `manual` too when a hand-typed point falls on it.
 _Avoid_: baseline (that names what a statement's diff is compared to), start value, reference point.
 
 **Clamped**:
 The change basis used when nothing the reading can value reaches the comparison date: the chip
-measures from the earliest date it can value instead, and says so under the figure. Clamping moves
-where the change is measured from and never what the line plots — under 1D the line draws the whole
-session while the chip clamps, because what is missing is the previous close, not a range start.
+measures from the earliest date it can value instead, and says so under the figure. It is read off
+recorded positions and hand-typed points alone, never off stored prices, so a clamp says a value was
+missing there and nothing about the closes. Clamping moves where the change is measured from and
+never what the line plots — under 1D the line draws the whole session while the chip clamps, because
+what is missing is a value at the previous close, not a range start.
 _Avoid_: truncated, capped, adjusted, partial range.
 
 **In force**:

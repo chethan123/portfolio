@@ -197,13 +197,14 @@ function forOwners(narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"])
 /**
  * What the clamp is an apology for, which is not the same absence on every range. 1D compares
  * against the day before the session it plots (`resolveRange`, chart-range.ts), so a clamp there
- * means no previous close — while the line draws the whole session, range start included.
+ * is a value missing at that close, never the close itself — `netWorthChange` picks the basis off
+ * recorded history alone — while the line draws the whole session, range start included.
  */
 function clampedAbsence(
   range: RangeKey,
   narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"],
 ): string {
-  if (range === "1d") return `No previous close was recorded${forOwners(narrowedTo)}.`;
+  if (range === "1d") return `No value was available${forOwners(narrowedTo)} at the previous close.`;
 
   return `Nothing was recorded${forOwners(narrowedTo)} at the start of this range.`;
 }
