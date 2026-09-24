@@ -256,8 +256,10 @@ because the module-level `requestRefresh()` returns `void` by contract.
 (`:793`, `:813` — replaced by properties 1 and 3), and the two tests that held a real advisory lock
 (`:673`, `:760` — the lock itself is `tests/refresh.test.ts`'s).
 
-None of `vi.useFakeTimers`, `vi.setSystemTime`, `vi.spyOn` on a module, a patched pool, or
-`Symbol.for("portfolio.pricePoller")` remains in the file. `console` is captured only for the two
+No faked `Date`, no `vi.setSystemTime`, no `vi.spyOn` on a module, no patched pool, and no
+`Symbol.for("portfolio.pricePoller")` remains in the file. One test fakes `setInterval` and
+`clearInterval` alone, to pin the armed period and the old interval's clearing — what a tick is
+never asked to prove (amended 2026-09-24 after review; see the end of this spec). `console` is captured only for the two
 module-level lines.
 
 **The other files' hooks stay.** The review (§2.3, "Tests") expected them and the `finally` calls to go;
@@ -348,8 +350,9 @@ cadences still produce one line per tick, not two.
 
 **The tests**
 
-- [ ] `tests/price-poller.test.ts` contains no `useFakeTimers`, `setSystemTime`, module `spyOn`,
-      patched pool method, or `Symbol.for`
+- [ ] `tests/price-poller.test.ts` contains no faked `Date`, `setSystemTime`, module `spyOn`,
+      patched pool method, or `Symbol.for`; `useFakeTimers` only for `setInterval`/`clearInterval`,
+      in the one test of the armed period (amended 2026-09-24)
 - [ ] The `Price refresh` and "never started" pins exist and pass
 - [ ] The four other files' `stopPricePoller` hooks are unchanged
 - [ ] `npm run typecheck`, `npm test` and `npm run build` pass
@@ -402,3 +405,13 @@ instance is always started before any tick and its clock never throws:
   nothing holds.
 - The module-level `/refresh` test seeds its feed instrument after the route call, so the route's
   default socket provider is never dialled.
+
+Owner review (2026-09-24), taken:
+
+- The interval itself — its period, and the old one cleared on re-arm — was outside every test (a
+  mutation of either survived here and on `main`). One test now fakes `setInterval` and
+  `clearInterval` alone, never `Date`, and counts `refresh` calls across a cadence move. The review's
+  objection was to learning a tick's end from timers, not to pinning the timer's period; injecting the
+  timer instead would widen the factory for one test.
+- `stop()` also clears `timer`, so the re-arm guard's "a running schedule" is literally what it tests.
+- ARCHITECTURE.md §6.2's hazards row says the instance holding the handle is pinned, not the handle.

@@ -3,7 +3,7 @@
  * permanent (§11; healthz can't see it). Plus the tick's own rules through the built instance:
  * dropped not queued, quotes gated, cadence re-read, the /healthz snapshot, the log lines.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
 import {
@@ -278,6 +278,35 @@ describe("a cadence the household moved", () => {
     await tick;
 
     expect(poller.snapshot().minutes).toBe(15);
+  });
+});
+
+describe("the timer start arms", () => {
+  it("fires a tick at the armed cadence, and after a move only at the new one", async () => {
+    // Only the interval is faked, never `Date`: the tick still reads its own clock.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let cadence = 15;
+    const { poller, refreshCalls } = pollerWith({ readCadence: async () => cadence });
+
+    try {
+      poller.start();
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+      expect(refreshCalls).toHaveLength(0);
+
+      cadence = 60;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshCalls).toHaveLength(1);
+
+      // the 15-minute interval, left armed, would fire three more times in here
+      await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
+      expect(refreshCalls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshCalls).toHaveLength(2);
+    } finally {
+      poller.stop();
+      vi.useRealTimers();
+    }
   });
 });
 

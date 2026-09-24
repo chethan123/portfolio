@@ -186,6 +186,7 @@ export function createPricePoller(dependencies: {
     stop() {
       stopped = true;
       clearInterval(timer);
+      timer = undefined;
     },
     tick: () => run(false),
     requestRefresh: () => run(true),

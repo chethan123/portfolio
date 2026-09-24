@@ -1488,7 +1488,7 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 | Hazard | Guard |
 |---|---|
-| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
+| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The instance holding the handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
 | Two timers in two processes, a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
 | A tick outliving its interval, because the provider is slow | Serialised by a flag; an overlapping tick is **dropped, not queued**, because a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
 
