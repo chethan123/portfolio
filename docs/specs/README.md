@@ -52,6 +52,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0022](0022-chart-grain.md) | A chart range of at most 92 days drawn at a grain from the observation log, on a per-day axis (ADR-0014) |
 | [0023](0023-multi-account-upload.md) | One file covering several accounts, each row routed by its account number; the number becomes the selector there and stays the guard elsewhere (ADR-0015; implemented) |
 | [0024](0024-one-commit-over-routed-sections.md) | One assembler, one commit and one review revision over per-account sections; a chosen account is a routing of one (architecture review 2026-09-24 §2.1) |
+| [0025](0025-the-poller-as-a-built-instance.md) | The price poller as one built instance pinned on `globalThis`, its `tick()` promise the completion signal and its clock, cadence read, refresh and log injected (architecture review 2026-09-24 §2.3) |
 
 ## The ticket directories
 
