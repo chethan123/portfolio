@@ -245,6 +245,22 @@ export async function renumber(
   );
 }
 
+/** Stands in for a draft whose stored file or name changed under an open review, which no app path writes. */
+export async function restateDraft(
+  db: Kysely<Database>,
+  draftId: string,
+  change: { bytes?: Uint8Array | Buffer; filename?: string },
+): Promise<void> {
+  await db
+    .updateTable("upload_draft")
+    .set({
+      ...(change.bytes === undefined ? {} : { raw_file: Buffer.from(change.bytes) }),
+      ...(change.filename === undefined ? {} : { filename: change.filename }),
+    })
+    .where("id", "=", draftId)
+    .execute();
+}
+
 export function makeFixtures(db: Kysely<Database>): Fixtures {
   const seedPerson: Fixtures["seedPerson"] = async ({ name = `Person ${next()}` } = {}) => {
     const row = await db

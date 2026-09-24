@@ -8,11 +8,12 @@ import Review, {
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
 import { lastRecorded } from "~/lib/balances.server";
+import { sectionKey } from "~/lib/review-form";
 import {
   RefusedUpload,
   StaleReviewError,
-  commitUpload,
   diffForDraft,
+  recordUpload,
   rememberMapping,
   reviewForDraft,
 } from "~/lib/uploads.server";
@@ -20,6 +21,7 @@ import {
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post } from "../support/routes.ts";
 import { renderRoute } from "../support/render.tsx";
+import { onlyRecorded, onlySection } from "../support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { SeededAccount } from "../support/fixtures.ts";
@@ -79,20 +81,21 @@ describe("baseline resolution against an account's history", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,10,\n");
       const reviewRevision = await revisionFor(draftId, "2026-01-01", db);
       const undatedDiff = await diffForDraft(draftId, db);
-      expect(undatedDiff.firstStatement).toBe(false);
-      expect(undatedDiff.filedBehind).toBeNull();
+      expect(onlySection(undatedDiff).firstStatement).toBe(false);
+      expect(onlySection(undatedDiff).filedBehind).toBeNull();
 
       // Dated ahead of every set the account holds — the diff the commit actually acts on.
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           { accountId: account.id, asOf: "2026-01-01", reviewRevision },
           db,
         ),
       );
-      expect(refusal.diff.baselineSetId).toBeNull();
-      expect(refusal.diff.firstStatement).toBe(true);
-      expect(refusal.diff.filedBehind).toEqual({ asOf: "2026-01-01", currentAsOf: "2026-06-30" });
+      const refusedSection = onlySection(refusal.diff);
+      expect(refusedSection.baselineSetId).toBeNull();
+      expect(refusedSection.firstStatement).toBe(true);
+      expect(refusedSection.filedBehind).toEqual({ asOf: "2026-01-01", currentAsOf: "2026-06-30" });
     }),
   );
 
@@ -117,15 +120,16 @@ describe("baseline resolution against an account's history", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
       const reviewRevision = await revisionFor(draftId, "2026-07-31", db);
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           { accountId: account.id, asOf: "2026-07-31", reviewRevision },
           db,
         ),
       );
-      expect(refusal.diff.baselineSetId).toBe(early.id);
-      expect(refusal.diff.firstStatement).toBe(false);
-      expect(refusal.diff.filedBehind).toEqual({ asOf: "2026-07-31", currentAsOf: "2026-09-09" });
+      const refusedSection = onlySection(refusal.diff);
+      expect(refusedSection.baselineSetId).toBe(early.id);
+      expect(refusedSection.firstStatement).toBe(false);
+      expect(refusedSection.filedBehind).toEqual({ asOf: "2026-07-31", currentAsOf: "2026-09-09" });
     }),
   );
 
@@ -148,16 +152,16 @@ describe("baseline resolution against an account's history", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
       const reviewRevision = await revisionFor(draftId, "2026-06-30", db);
       // The commit resolves the same date the file's own history already carries.
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         draftId,
         {
           accountId: account.id,
           asOf: "2026-06-30",
-          baselineSetId: existing.id,
+          [sectionKey("baselineSetId", account.id)]: existing.id,
           reviewRevision,
         },
         db,
-      );
+      ));
       expect(written.setId).not.toBe(existing.id);
 
       // The tie is broken in the new set's favour — it is what the account now reads.
@@ -182,16 +186,16 @@ describe("baseline resolution against an account's history", () => {
       const reviewRevision = await revisionFor(draftId, "2026-09-15", db);
       // The 99% case: forward-dated (but not into the future recordedDate itself refuses), so no
       // filed-behind confirmation is asked for at all.
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         draftId,
         {
           accountId: account.id,
           asOf: "2026-09-15",
-          baselineSetId: existing.id,
+          [sectionKey("baselineSetId", account.id)]: existing.id,
           reviewRevision,
         },
         db,
-      );
+      ));
       expect(written.asOf).toBe("2026-09-15");
     }),
   );
@@ -219,7 +223,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
       const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
       const first = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
@@ -229,18 +233,19 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
           db,
         ),
       );
-      expect(first.diff.baselineSetId).toBe(early.id);
+      const firstSection = onlySection(first.diff);
+      expect(firstSection.baselineSetId).toBe(early.id);
 
       // The reader edits the date to one after every statement recorded, but the browser still
       // carries the earlier refusal's hidden baselineSetId — nobody re-rendered in between.
       const second = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
             asOf: "2026-09-14",
-            baselineSetId: first.diff.baselineSetId ?? "",
-            confirmFiledBehind: "true",
+            [sectionKey("baselineSetId", account.id)]: firstSection.baselineSetId ?? "",
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
             reviewRevision: first.diff.reviewRevision ?? "",
             reviewedAsOf: first.diff.asOfInput,
           },
@@ -249,8 +254,9 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       );
       // 2026-09-14 is after every statement recorded, so there is nothing to be filed behind. The
       // revision proof still identifies the date as the only change before baseline confirmations.
-      expect(second.diff.filedBehind).toBeNull();
-      expect(second.diff.baselineSetId).not.toBe(early.id);
+      const secondSection = onlySection(second.diff);
+      expect(secondSection.filedBehind).toBeNull();
+      expect(secondSection.baselineSetId).not.toBe(early.id);
       expect(second.fieldErrors.form).toMatch(/different statement date/);
       expect(second.fieldErrors.form).not.toMatch(/statement or its account changed/);
 
@@ -284,7 +290,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,120,\n");
       const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
       const first = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
@@ -294,7 +300,8 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
           db,
         ),
       );
-      expect(first.diff.baselineSetId).toBe(early.id);
+      const firstSection = onlySection(first.diff);
+      expect(firstSection.baselineSetId).toBe(early.id);
 
       // A second tab lands a statement in the gap, between the refused baseline and the date this
       // draft is dated for — the true baseline for 2026-07-31 has moved without this form knowing.
@@ -305,22 +312,23 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       });
 
       const second = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
             asOf: "2026-07-31",
-            baselineSetId: first.diff.baselineSetId ?? "",
-            confirmFiledBehind: "true",
+            [sectionKey("baselineSetId", account.id)]: firstSection.baselineSetId ?? "",
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
             reviewRevision: first.diff.reviewRevision ?? "",
           },
           db,
         ),
       );
-      expect(second.diff.baselineSetId).not.toBe(early.id);
+      const secondSection = onlySection(second.diff);
+      expect(secondSection.baselineSetId).not.toBe(early.id);
       // The revision mismatch takes precedence over the confirmation wording: the concurrent
       // write must not be presented as only another filed-behind acknowledgement.
-      expect(second.diff.filedBehind).not.toBeNull();
+      expect(secondSection.filedBehind).not.toBeNull();
       expect(second.fieldErrors.form).toMatch(/statement or its account changed/);
       expect(second.fieldErrors.form).not.toMatch(/confirm to file it behind/);
 
@@ -378,10 +386,11 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       // Keep an explicitly unknown/current diff as the stale baseline fixture, while the reviewed
       // revision below is correctly bound to the typed date.
       const undated = await diffForDraft(draftId, db);
+      const undatedSection = onlySection(undated);
       const reviewed = await reviewForDraft(draftId, "2026-07-31", db);
-      expect(undated.baselineSetId).not.toBeNull();
-      expect(undated.currentCount).toBe(3);
-      expect(undated.majorityRemoved).toBe(true);
+      expect(undatedSection.baselineSetId).not.toBeNull();
+      expect(undatedSection.currentCount).toBe(3);
+      expect(undatedSection.majorityRemoved).toBe(true);
 
       // Post that stale current baseline with the date-bound revision to isolate the baseline
       // confirmation guard from the broader revision check.
@@ -390,21 +399,23 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
           post(`/upload/${draftId}/review`, {
             accountId: account.id,
             asOf: "2026-07-31",
-            baselineSetId: undated.baselineSetId ?? "",
-            confirmRemovals: "true",
+            [sectionKey("baselineSetId", account.id)]: undatedSection.baselineSetId ?? "",
+            [sectionKey("confirmRemovals", account.id)]: "true",
             reviewRevision: reviewed.reviewRevision ?? "",
           }),
           { draftId },
         ),
       );
       if (response instanceof Response) throw new Error("Expected data back, got a redirect.");
+      if (response.diff === null) throw new Error("Expected data back, got a redirect.");
 
       // The dated diff is against 2026-06-30 (5 positions), not the undated one the tick answered
       // for — a tick given against the wrong baseline must not silence the real removal it never
       // actually confirmed.
-      expect(response.diff?.baselineSetId).not.toBe(undated.baselineSetId);
-      expect(response.diff?.currentCount).toBe(5);
-      expect(response.diff?.removed).toHaveLength(4);
+      const responseSection = onlySection(response.diff);
+      expect(responseSection.baselineSetId).not.toBe(undatedSection.baselineSetId);
+      expect(responseSection.currentCount).toBe(5);
+      expect(responseSection.removed).toHaveLength(4);
       expect(response.formError).toMatch(/removes 4 of the 5 positions recorded on 2026-06-30/);
 
       // The screen's own checkbox label computes this same "recorded on" scoping independently
@@ -418,7 +429,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
       // Scoped to the checkbox's own `<label>`, not the `.form-error` paragraph beside it — the
       // latter merely echoes the domain's message and would pass even if `removalScope` regressed
       // to the unconditional "this account holds".
-      const checkboxStart = markup.indexOf('name="confirmRemovals"');
+      const checkboxStart = markup.indexOf(`name="${sectionKey("confirmRemovals", account.id)}"`);
       const label = markup.slice(checkboxStart, markup.indexOf("</label>", checkboxStart));
       expect(label).toContain("removes");
       expect(label).toContain("recorded on");
@@ -466,8 +477,10 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         ),
       );
       if (firstResponse instanceof Response) throw new Error("Expected data back, got a redirect.");
-      expect(firstResponse.diff?.filedBehind).not.toBeNull();
-      expect(firstResponse.diff?.majorityRemoved).toBe(true);
+      if (firstResponse.diff === null) throw new Error("Expected data back, got a redirect.");
+      const firstSection = onlySection(firstResponse.diff);
+      expect(firstSection.filedBehind).not.toBeNull();
+      expect(firstSection.majorityRemoved).toBe(true);
 
       // Another tab lands a statement in the gap before the reader ticks and resubmits.
       await seedPositionSet({
@@ -482,9 +495,9 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
           post(`/upload/${draftId}/review`, {
             accountId: account.id,
             asOf: "2026-07-31",
-            baselineSetId: firstResponse.diff?.baselineSetId ?? "",
-            confirmFiledBehind: "true",
-            confirmRemovals: "true",
+            [sectionKey("baselineSetId", account.id)]: firstSection.baselineSetId ?? "",
+            [sectionKey("confirmFiledBehind", account.id)]: "true",
+            [sectionKey("confirmRemovals", account.id)]: "true",
             reviewRevision: firstResponse.diff?.reviewRevision ?? "",
           }),
           { draftId },
@@ -499,7 +512,7 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         actionData: secondResponse,
       });
       // Both boxes still render — proving the checkbox is unticked, not gone.
-      expect(markup).toContain('name="confirmFiledBehind"');
+      expect(markup).toContain(`name="${sectionKey("confirmFiledBehind", account.id)}"`);
       expect(markup).not.toContain("checked");
 
       // The screen half of the copy #181 also rewrote (uploads.server.ts's matching sentences are
@@ -539,8 +552,10 @@ describe("the confirmation binds to the baseline it was drawn against", () => {
         ),
       );
       if (response instanceof Response) throw new Error("Expected data back, got a redirect.");
-      expect(response.diff?.firstStatement).toBe(true);
-      expect(response.diff?.filedBehind).not.toBeNull();
+      if (response.diff === null) throw new Error("Expected data back, got a redirect.");
+      const responseSection = onlySection(response.diff);
+      expect(responseSection.firstStatement).toBe(true);
+      expect(responseSection.filedBehind).not.toBeNull();
 
       const loaderData = await reviewLoader(args(get(`/upload/${draftId}/review`), { draftId }));
       if (loaderData instanceof Response) throw new Error("Expected the review screen, not a redirect.");
@@ -575,8 +590,9 @@ describe("a refusal always carries a sentence", () => {
       // The explicit unknown-mode view supplies the old current baseline for this guard test.
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nORD,100,\n");
       const undated = await diffForDraft(draftId, db);
+      const undatedSection = onlySection(undated);
       const reviewed = await reviewForDraft(draftId, "2026-09-14", db);
-      expect(undated.majorityRemoved).toBe(false);
+      expect(undatedSection.majorityRemoved).toBe(false);
 
       // Another tab lands a set after the dated review was assembled.
       await seedPositionSet({
@@ -589,19 +605,20 @@ describe("a refusal always carries a sentence", () => {
       // removal. The current revision now includes the concurrent set, so that mismatch takes
       // precedence over the stale-baseline confirmation evidence.
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
             asOf: "2026-09-14",
-            baselineSetId: undated.baselineSetId ?? "",
+            [sectionKey("baselineSetId", account.id)]: undatedSection.baselineSetId ?? "",
             reviewRevision: reviewed.reviewRevision ?? "",
           },
           db,
         ),
       );
-      expect(refusal.diff.filedBehind).toBeNull();
-      expect(refusal.diff.majorityRemoved).toBe(false);
+      const refusedSection = onlySection(refusal.diff);
+      expect(refusedSection.filedBehind).toBeNull();
+      expect(refusedSection.majorityRemoved).toBe(false);
       expect(refusal.fieldErrors.form).not.toBe("");
       expect(refusal.fieldErrors.form).toMatch(/statement or its account changed/);
 
@@ -610,12 +627,12 @@ describe("a refusal always carries a sentence", () => {
       // name exactly what moved instead of allowing the mismatched hidden field through.
       const currentReview = await reviewForDraft(draftId, "2026-09-14", db);
       const baselineOnly = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           {
             accountId: account.id,
             asOf: "2026-09-14",
-            baselineSetId: undated.baselineSetId ?? "",
+            [sectionKey("baselineSetId", account.id)]: undatedSection.baselineSetId ?? "",
             reviewRevision: currentReview.reviewRevision ?? "",
             reviewedAsOf: currentReview.asOfInput,
           },
@@ -647,11 +664,16 @@ describe("a first statement", () => {
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nNEW,10,\n");
       const reviewRevision = await revisionFor(draftId, "2026-06-30", db);
-      const written = await commitUpload(
+      const written = onlyRecorded(await recordUpload(
         draftId,
-        { accountId: account.id, asOf: "2026-06-30", baselineSetId: "", reviewRevision },
+        {
+          accountId: account.id,
+          asOf: "2026-06-30",
+          [sectionKey("baselineSetId", account.id)]: "",
+          reviewRevision,
+        },
         db,
-      );
+      ));
       expect(written.counts).toEqual({ added: 1, updated: 0, unchanged: 0, removed: 0 });
 
       const sets = await db
@@ -708,14 +730,16 @@ describe("a removed row against a dated baseline", () => {
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nKPT,5,\n");
       const reviewRevision = await revisionFor(draftId, "2026-07-31", db);
       const refusal = await refusalOf(() =>
-        commitUpload(
+        recordUpload(
           draftId,
           { accountId: account.id, asOf: "2026-07-31", reviewRevision },
           db,
         ),
       );
 
-      const removed = new Map(refusal.diff.removed.map((row) => [row.instrumentId, row]));
+      const removed = new Map(
+        onlySection(refusal.diff).removed.map((row) => [row.instrumentId, row]),
+      );
       // 50.00 x 10, the current quote — never 40.00 x 10, the close on the statement's own date.
       expect(removed.get(priced.id)?.value).toBe("500.0000");
       // No quote at all does not throw; it renders the same "never priced" null every other

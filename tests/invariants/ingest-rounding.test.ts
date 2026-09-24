@@ -6,10 +6,11 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { foldLots, parseStatement } from "~/lib/statement";
-import { commitUpload, rememberMapping, reviewForDraft } from "~/lib/uploads.server";
+import { recordUpload, rememberMapping, reviewForDraft } from "~/lib/uploads.server";
 import { accountHoldings } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { onlySection, posted } from "../support/review.ts";
 
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
@@ -137,13 +138,9 @@ describe("a statement that states the position's cost rather than the share's", 
 
       const diff = await reviewForDraft(draftId, "2026-06-30", ctx.db);
       if (diff.reviewRevision === null) throw new Error("The valid review has no revision.");
-      expect(diff.added[0]?.costBasisPerShare).toBe("33.3333");
+      expect(onlySection(diff).added[0]?.costBasisPerShare).toBe("33.3333");
 
-      await commitUpload(
-        draftId,
-        { accountId, asOf: "2026-06-30", reviewRevision: diff.reviewRevision },
-        ctx.db,
-      );
+      await recordUpload(draftId, posted(diff, { asOf: "2026-06-30" }), ctx.db);
 
       const [held] = await accountHoldings(accountId, ctx.db);
       expect(held?.costBasisPerShare).toBe("33.3333");
@@ -166,14 +163,10 @@ describe("a statement that states the position's cost rather than the share's", 
       const diff = await reviewForDraft(draftId, "2026-06-30", ctx.db);
       if (diff.reviewRevision === null) throw new Error("The valid review has no revision.");
       // Unfolded row keeps the file's own spelling; formatQuantity trims either representation to the same on-screen value.
-      expect(diff.added[0]?.quantity).toBe("-10");
-      expect(diff.added[0]?.costBasisPerShare).toBe("250.0000");
+      expect(onlySection(diff).added[0]?.quantity).toBe("-10");
+      expect(onlySection(diff).added[0]?.costBasisPerShare).toBe("250.0000");
 
-      await commitUpload(
-        draftId,
-        { accountId, asOf: "2026-06-30", reviewRevision: diff.reviewRevision },
-        ctx.db,
-      );
+      await recordUpload(draftId, posted(diff, { asOf: "2026-06-30" }), ctx.db);
 
       const [held] = await accountHoldings(accountId, ctx.db);
       expect(held?.quantity).toBe("-10.00000000");
@@ -208,17 +201,9 @@ describe("the value shown on the review screen", () => {
 
       const review = await reviewForDraft(draftId, "2026-06-30", ctx.db);
       if (review.reviewRevision === null) throw new Error("The valid review has no revision.");
-      const shown = review.added[0]?.value;
+      const shown = onlySection(review).added[0]?.value;
 
-      await commitUpload(
-        draftId,
-        {
-          accountId,
-          asOf: "2026-06-30",
-          reviewRevision: review.reviewRevision,
-        },
-        ctx.db,
-      );
+      await recordUpload(draftId, posted(review, { asOf: "2026-06-30" }), ctx.db);
       const [held] = await accountHoldings(accountId, ctx.db);
 
       expect(shown).toBe(held?.value);
