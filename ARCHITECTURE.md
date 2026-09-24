@@ -1488,7 +1488,7 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 | Hazard | Guard |
 |---|---|
-| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
+| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The instance holding the handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
 | Two timers in two processes, a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
 | A tick outliving its interval, because the provider is slow | Serialised by a flag; an overlapping tick is **dropped, not queued**, because a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
 
@@ -1811,7 +1811,7 @@ raises no serialization failure for a transaction that only reads.
 | Operation | Idempotent? | Mechanism |
 |---|---|---|
 | Applying migrations | Yes | The `schema_migrations` ledger; re-running skips what is recorded |
-| `startPricePoller()` | Yes | After the first call it is a property lookup on `globalThis` |
+| `startPricePoller()` | Yes | After the first call it is a property lookup on `globalThis`, where the one built poller is pinned |
 | A quote refresh | Yes | Upserts keyed on `instrument_id` and `(instrument_id, date)` |
 | Re-POSTing a commit | **No, and deliberately so** | The draft is gone, so the second POST is a 404 rather than a second position set |
 | Re-uploading the same statement | No | It appends a new set. Uploads append, never mutate (DESIGN.md §5.2), and the tie-break decides which speaks |
@@ -2400,7 +2400,7 @@ still live in the current code:
 | `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03): the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
 | `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
-| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
+| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. `createPricePoller` builds it as an instance (clock, cadence read, refresh and log injected, its `tick()` promise the completion signal); `startPricePoller` pins one on `globalThis` (spec 0025). The instance also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by its `snapshot()`, through `readPollerSnapshot`, and turned into the published categories by `price-health.ts` |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
 | `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
 | `accounts.server.ts` | Accounts, and `withAccountLock`, the row lock every position-set writer and `closeAccount` run inside (§7.2). Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
