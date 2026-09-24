@@ -30,9 +30,14 @@ two of them appear below with what changed since.
   document, re-verifying every `file:line`, count and duplicate it names against the source.
 - Fifteen ADRs and a glossary exist now, unlike in August. No candidate reverses an ADR. Each card
   says which ADR it touches and why it is not a reversal.
-- The suite still imports no route module for rendering, so logic in a route body is testable only
-  through a full request (§9.3 of ARCHITECTURE.md). Several candidates lean on that standing
-  constraint.
+- Route bodies are testable only as far as they export (§9.3 of ARCHITECTURE.md): the suite calls
+  loaders and actions directly and renders route components through `tests/support/render.tsx`, so
+  a helper left unexported in a route body is reachable only through a full request. Several
+  candidates lean on that standing constraint.
+- Line numbers were the weakest part of the first draft, as in August. The grounding pass checked
+  about four hundred `file:line` references and corrected seventy-three: most by a few lines, a few
+  of substance (the suite is no longer mock-free, route components are rendered in tests, only one
+  of the poller's two log stems is pinned). All are folded in below.
 - Counts and line numbers describe `8f0cf8f`. They will drift; the shape of each finding will not.
 
 ---
@@ -43,13 +48,13 @@ The first review's §1 table holds. Additions worth naming, because a candidate 
 
 | Module | Why it earns its keep |
 |---|---|
-| `withAccountLock` / `withAccountLocks` (`accounts.server.ts:151-192`) | The one door onto an account's history, `select … for no key update` on the bare row, ascending `compareIds` order for several. Every writer of `position_set` runs inside it (§7.2). Candidate 1.1 keeps it exactly where it is. |
-| `resolveAll` (`instrument-resolution.server.ts:225`) and `routeStatement` (`statement-routing.server.ts:75`) | Validate-then-write behind one call; a pure matcher with a closed taxonomy. Candidate 1.8 is about who *interprets* the taxonomy, not the matcher. |
-| `createWorkerHealthProbe` (`worker-reachability.server.ts:85-110`) | Builds an instance with an injected `now`; one pinned `workerHealthProbe`. The shape candidate 1.3 asks the poller to copy. |
+| `withAccountLock` / `withAccountLocks` (`accounts.server.ts:151-189`) | The one door onto an account's history, `select … for no key update` on the bare row, ascending `compareIds` order for several. Every writer of `position_set` runs inside it (§7.2). Candidate 2.1 keeps it exactly where it is. |
+| `resolveAll` (`instrument-resolution.server.ts:225`) and `routeStatement` (`statement-routing.server.ts:75`) | Validate-then-write behind one call; a pure matcher with a closed taxonomy. Candidate 2.8 is about who *interprets* the taxonomy, not the matcher. |
+| `createWorkerHealthProbe` (`worker-reachability.server.ts:85-110`) | Builds an instance whose `check(now)` takes the clock as a parameter; one pinned `workerHealthProbe`. The shape candidate 2.3 asks the poller to copy. |
 | `socket-transport.server.ts` | Two callers (`ask`, the health probe), one settle-once guard. Spec 0021 rejected hand-copying it. |
-| `chart-series.server.ts` | 89 lines, two callers, the one site of the `coverage.total > 0` rule (spec 0015). Candidate 1.6 deepens *above* it. |
-| `tests/support/webauthn.ts` | Signs real assertions; WebAuthn is never mocked server-side. Candidate 1.11 leaves it alone. |
-| The suite's zero mocks and the trailing `db` parameter | Unchanged since August. Do not let either be "modernised". |
+| `chart-series.server.ts` | 89 lines, two callers, the one site of the `coverage.total > 0` rule (spec 0015). Candidate 2.6 deepens *above* it. |
+| `tests/support/webauthn.ts` | Signs real assertions; WebAuthn is never mocked server-side. Candidate 2.11 leaves it alone. |
+| The trailing `db` parameter | Unchanged since August; do not let it be "modernised". August's "zero mocks" no longer holds: nineteen test files use `vi.mock`, `vi.spyOn` or `vi.fn`, three of them cited in 2.3 and 2.11 as tests past the interface. |
 
 ---
 
@@ -63,10 +68,10 @@ how the deepened module is tested across its seam: **in-process** (pure), **loca
 ### 2.1 One commit over N routed sections; a chosen account is a routing of one
 
 **Rating: Strong.** Local-substitutable. Ingest.
-**Files:** `app/lib/uploads.server.ts` — `commitUploadUnderLock` (`:1704-1839`) against
-`commitMultiAccountUnderLocks` (`:1861-1976`); `assembleDiff` (`:1371-1451`) against
-`assembleMultiDiff` (`:1453-1578`); `UploadDiff.accounts: AccountDiff[] | null` (`:940`).
-`app/routes/upload/review.tsx` — two render branches (`:523-630`, `:632-668`) over the same
+**Files:** `app/lib/uploads.server.ts` — `commitUploadUnderLock` (`:1704-1836`) against
+`commitMultiAccountUnderLocks` (`:1861-1973`); `assembleDiff` (`:1371-1448`) against
+`assembleMultiDiff` (`:1453-1578`); `UploadDiff.accounts: AccountDiff[] | null` (`:939`).
+`app/routes/upload/review.tsx` — two render branches (`:655-748`, `:750-794`) over the same
 `Comparison` and `DiffTable`.
 
 **The problem.** The single-account and multi-account commits are two near-copies above a seam that
@@ -74,18 +79,17 @@ is already shared: `compareAccount` (`:1109`), `reasonsToRefuse` (`:2146`), `ins
 (`:2058`), `promoteAnswers`, `verifyVocabulary` and `deleteDraft` (`:1978-2056`). The duplicated
 orchestration, pairwise: lock and re-read the draft (`:1711` / `:1867`); the closed refusal (`:1716`
 / `:1871`); assemble, then `refuseStaleReview` with a closure that re-runs the whole assemble to
-reproduce a hash (`:1729-1753` / `:1874-1903`); the `boundedNumber` refusal (`:1786` / `:1918`);
-`recordAccountNumber` with a refuse closure (`:1793-1806` / `:1936-1949`); `reasonsToRefuse`
-(`:1808` / `:1928`); the `CommittedUpload` counts literal, verbatim (`:1833-1846` / `:1958-1971`).
+reproduce a hash (`:1729-1753` / `:1874-1903`); the `boundedNumber` refusal (`:1788-1794` / `:1918-1924`);
+`recordAccountNumber` with a refuse closure (`:1797-1804` and `:1819-1821` / `:1936-1949`); `reasonsToRefuse` (`:1810` / `:1930`); the `CommittedUpload` counts literal, identical but for `diff.` against `section.` (`:1823-1835` / `:1958-1970`).
 In the assemblers: the review-revision hash written twice with different recipes (v3 at
 `:1396-1418` folds `accountId` and the append watermark in; v4 at `:1519-1534` folds the bound
 sections in), and the `UploadDiff` literal twice (`:1421-1448` / `:1540-1577`), the second filling
-nine fields with `[]`, `0`, `false` and `null` because the type is the single path's. The genuinely
-single-path behaviour is about fifty lines: the two-numbers-in-one-file refusal (`:1756-1770`), the
-recorded-number guard (`:1772-1784`), capture from the file (`:1786-1806`).
+eleven figure fields with `[]`, `0`, `false` and `null` (`:1548-1568`) and four header fields with
+`null`, because the type is the single path's. The genuinely
+single-path behaviour is about fifty lines: the two-numbers-in-one-file refusal (`:1755-1769`), the
+recorded-number guard (`:1771-1785`), capture from the file (`:1787-1808`).
 
-**Drift is already visible.** The single path reads `numberHolder` ahead of the confirmations
-(`:1803-1806`) while the multi path lets the unique index alone decide, after `promoteAnswers`
+**Drift is already visible.** The single path reads `numberHolder` ahead of the confirmations (`:1805-1808`) while the multi path lets the unique index alone decide, after `promoteAnswers`
 (`:1934-1949`). The single path checks the posted `accountId` (`:1719-1724`); the multi path always
 posts `""` (`review.tsx:738`). The multi path names a moved account through a separately posted
 `appendWatermark-<id>` (`:1888-1894`) that is also inside its hash; the single path only through
@@ -101,10 +105,11 @@ single-account review renders one section, and `recordUpload` returns `Committed
 route picking the landing page from the draft rather than a union tag. `withAccountLock` and
 `withAccountLocks` stay exactly where they are.
 
-**Tests.** Today two encoders of one binding (`tests/commit-upload.test.ts:95-113`,
-`tests/multi-account-upload.test.ts:118-129`), four `written.multiAccount ?` branches in the
-latter, and shape assertions that pin the split ("a single-account draft carries no groups",
-`tests/routes/upload-wizard.test.ts:1302`; `accounts: null`, `tests/upload-draft.test.ts:225-227`).
+**Tests.** Today two encoders of one binding (`tests/commit-upload.test.ts:96-114`,
+`tests/multi-account-upload.test.ts:111-122`), three `written.multiAccount ?` ternaries and one
+`if (!written.multiAccount) throw` guard in the latter, and shape assertions that pin the split ("a
+single-account draft carries no groups", `tests/routes/upload-wizard.test.ts:1302`; `accountId: null …
+added: []` on a multi-account diff, `tests/upload-draft.test.ts:226-227`).
 After: one staging helper, assertions on sections.
 
 **ADR.** None. ADR-0015 fixes behaviour (the number is a guard on one path, a selector on the
@@ -115,19 +120,18 @@ other), not code shape; the guard becomes the one-group adapter's own rule.
 **Rating: Strong.** In-process for the comparison; the reproduce-at-reviewed-date closure stays
 local-substitutable. Ingest. Falls out of 2.1, since one hash over sections is most of it.
 **Files:** `uploads.server.ts` — the two hash recipes (`:1396-1418`, `:1519-1534`),
-`appendWatermark` (`:1343`), `refuseStaleReview` (`:1681`) and its closures (`:1748`, `:1897`),
-`baselineMoved` (`:2127`, called `:1914`, `:2157`), `CommitInput`'s key scheme (`:1605-1620`), the
-reason ordering (`:2178-2181`), and `""` as null's wire form explained at `:899` and `:1611`.
-`review.tsx` — hidden inputs (`:717-742`, `:782-786`), `withoutTicks` (`:91-95`), `resetKey`
+`appendWatermark` (`:1343`), `refuseStaleReview` (`:1681`) and its closures (`:1751-1752`, `:1899-1901`),
+`baselineMoved` (`:2127`, called `:1914`, `:2157`), `CommitInput`'s key scheme (`:1605-1620`), the reason ordering (`refuseStaleReview` at `:1688-1701`, rerouted `:1883-1886`, watermark `:1889-1894`, baseline `:1914`, ticks voided at `:2197-2202`), and `""` as null's wire form explained at `:900` and `:1618`.
+`review.tsx` — hidden inputs (`:715-742`, `:779-786`), `withoutTicks` (`:91-95`), `resetKey`
 (`:639`), the same `""` explained a third time (`:780`).
 
 **The problem.** "Is this commit still authorised" is nine sites in two files. The wire encoding is
 in the route, and the ordering of refusal reasons (revision, then rerouted, then watermark, then
 baseline, with ticks voided by a moved baseline) is readable only by walking both commit paths. The
 interface is the test surface, and it fails: three test files each hand-write the diff-to-form
-encoding (`commit-upload.test.ts:95-113`, `multi-account-upload.test.ts:118-129`,
-`tests/journeys/dated-upload-baseline-orderings.test.ts:58-60`), and
-`tests/dated-upload-baseline-review.test.ts:131-138, :224-233` re-encodes `?? ""` by hand. The
+encoding (`commit-upload.test.ts:96-114`, `multi-account-upload.test.ts:111-122`,
+`tests/journeys/dated-upload-baseline-orderings.test.ts:59-61`), and
+`tests/dated-upload-baseline-review.test.ts:121, :147-149, :212, :233-235` re-encodes `?? ""` by hand. The
 reason ordering is reachable only through a whole commit against Postgres
 (`multi-account-upload.test.ts:508-540`, `orderings:266-336`).
 
@@ -148,21 +152,21 @@ everything else here; the cheapest Strong.
 **Files:** `app/lib/price-poller.server.ts` — `SLOT` (`:26`); `tick` (`:73-137`) with `new Date()`
 at `:59`, `:77`, `:88`, `getConfig()` at `:85`, `readRefreshCadence()` at `:94`, `runRefresh` at
 `:101`; `startPricePoller` (`:165`), `requestRefresh` (`:200`), `readPollerSnapshot` (`:222`),
-`stopPricePoller` (`:235`). `tests/price-poller.test.ts` — fake `Date`/`setInterval` nine times;
-`watchedPool` (`:92-130`) patching `pool.connect` and `client.release` to learn that a tick ended;
-`tickFinished` (`:136`); `waitFor` (`:552-559`); a direct `Symbol.for("portfolio.pricePoller")`
-poke (`:822-824`); `vi.spyOn` on `socketProvider` (`:791`, `:807`). Five test files call
-`stopPricePoller()` in `afterEach` because the slot is process-wide.
+`stopPricePoller` (`:235`). `tests/price-poller.test.ts` — fake `Date`/`setInterval` eight times plus one `setSystemTime`;
+`watchedPool` (`:94-127`) patching `pool.connect` and `client.release` to learn that a tick ended;
+`tickFinished` (`:131`); `waitFor` (`:552-559`); a direct `Symbol.for("portfolio.pricePoller")`
+poke (`:828-830`); `vi.spyOn` on `socketProvider` (`:799`, `:822-823`). Three test files call
+`stopPricePoller()` in `afterEach`, and `tests/price-poller.test.ts` calls it fifteen times in
+`finally` blocks, because the slot is process-wide.
 
-**The problem.** Every export starts by reading the slot (`:68`, `:166`, `:201`, `:223`, `:237`).
+**The problem.** Every export starts by reading the slot (`:166`, `:201`, `:223`, `:237`; `retime` too, `:68`).
 `tick` has five ambient dependencies and returns nothing observable (`void tick(...)` at `:56`,
 `:212`), so its tests reach past the interface on four axes: timers, the pool, the symbol, module
 spies. `readPollerSnapshot` exists to hand out a defensive copy of mutable global state.
 
 **Deletion test.** The `globalThis` pin earns its keep (Vite HMR, `:25`, `:245`; §6.2's hazards
 table). The module-functions-over-a-global shape does not: `createWorkerHealthProbe()`
-(`worker-reachability.server.ts:85-110`) already solves the same problem the other way, an instance
-with an injected `now` and one pinned singleton. The poller is the odd one out in its own slice.
+(`worker-reachability.server.ts:85-110`) already solves the same problem the other way, an instance whose `check(now)` takes the clock as a parameter, and one pinned singleton. The poller is the odd one out in its own slice.
 
 **What would change.** `createPricePoller({ provider, clock, readCadence, refresh })` returns
 `{ start, stop, requestRefresh, tick(): Promise<void>, snapshot }`; `startPricePoller()` builds one
@@ -172,8 +176,9 @@ is still one.
 
 **Tests.** After: `await poller.tick()` with a fake clock and provider. The connection-poisoning
 test keeps `watchedPool` (a genuine pool property) but awaits the tick instead of counting handbacks.
-The five `afterEach` hooks go. Keep the log lines out of the blast radius: `docs/operating.md:1121-1127`
-fixes the `Price refresh` / `Price backfill` stems and `tests/price-poller.test.ts:384-464` pins them.
+The three `afterEach` hooks and the fifteen `finally` calls go. Keep the log lines out of the blast radius: `docs/operating.md:1121-1127`
+fixes the `Price refresh` / `Price backfill` stems; `tests/price-poller.test.ts:450, :484-486` pins
+`Price backfill`, and nothing yet pins `Price refresh`.
 
 **ADR.** None.
 
@@ -184,8 +189,7 @@ fixes the `Price refresh` / `Price backfill` stems and `tests/price-poller.test.
 the writer at `:298` (the backfill's `until`), `:309` and `:462` (`startedAt`), `:606` (the ±7-day
 window). `app/lib/refresh.server.ts` — `RefreshRun` (`:35-38`), `RunWithQuotes` (`:41-44`, a
 hand-narrowed copy), `runRefresh` overloads (`:54-65`), `outcomeOf` (`:80-92`). The clock faking it
-forces: `tests/refresh-quotes.test.ts` `withClockNear` (`:52-59`), `tests/price-backfill.test.ts`
-four times, `tests/routes/refresh.test.ts:86-91` computing fixture dates relative to real `now`
+forces: `tests/refresh-quotes.test.ts` `withClockNear` (`:52-59`), `tests/price-backfill.test.ts` three times plus one `setSystemTime`, `tests/routes/refresh.test.ts:86-91` computing fixture dates relative to real `now`
 because "a fixed-past fixture would age out of range".
 
 **The problem.** `{ quotes: boolean }` selects between two behaviours, and to let `outcomeOf` avoid
@@ -217,14 +221,16 @@ card.
 - `instanceof ValidationError` — 16 route sites.
 - `const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors` — 11 sites, and its
   justifying comment ("Split here, not in the component — `FORM_ERROR`'s `.server` module can't
-  reach the client bundle") copied near-verbatim at nine of them: `settings/people.tsx:40`,
+  reach the client bundle") copied near-verbatim at ten of them: `settings/people.tsx:40`,
   `tax.tsx:31`, `prices.tsx:36`, `display.tsx:51`, `instruments.tsx:43`, `upload.tsx:59`,
-  `upload/columns.tsx:242`, `upload/accounts.tsx:66`, `upload/instruments.tsx:108`.
-- Three payload spellings for the same error: the split (10 sites); wholesale `error.fieldErrors`
-  (`settings/accounts.tsx:36`, `settings/account.tsx:185`, `holdings.tsx:203`, `account.tsx:172`);
-  joined `error.message` (`settings/passkeys.tsx:164`).
+  `upload/columns.tsx:242`, `upload/accounts.tsx:66`, `upload/instruments.tsx:108`,
+  `upload/review.tsx:146`.
+- Three payload spellings for the same error: the split (11 sites in 10 files); wholesale
+  `error.fieldErrors` (`settings/accounts.tsx:36`, `settings/account.tsx:47`, `holdings.tsx:203`,
+  `account.tsx:172`); joined `error.message` (`settings/passkeys.tsx:165`).
 - `<p className="field-error" role="alert">` — 21 sites in 14 files; `<p className="form-error"
-  role="alert">` — 21 sites in 15 files. Two files already wrote a local helper for it
+  role="alert">` — 21 sites in 15 files, one of them (`unlock.tsx:301`) with the role on the
+  wrapping `div`. Two files already wrote a local helper for it
   (`account-fields.tsx:28`, `upload/instruments.tsx:124`).
 
 §11.3's "two settings routes never render a form-level refusal" is the wholesale spelling: `AccountFields`
@@ -240,14 +246,14 @@ forty-two reappear. Both earn their keep.
 `app/components`. Routes import less, still never touch Zod or state a rule (§4.1 kept), and the next
 settings tab does not copy thirty lines. `holdings.tsx:940` keeps its brief-mandated fixed order
 (form first, then Quantity, then Cost basis) and still uses the element. The `refusalOf` test
-helper, duplicated in six test files, moves to `tests/support`.
+helper, duplicated in sixteen test files, moves to `tests/support`.
 
 **Tests.** Today `tests/routes/settings-tax.test.tsx:16-24` builds a Request plus FormData to assert
 one paragraph's `id` / `aria-describedby` shape. After: the shape is asserted once against the
 element; route tests assert placement only.
 
 **Why this reopens §4.5.** The first review refuted a `refusal()` module on four legs. Two have
-expired: "one canonical comment plus back-references" is now nine near-verbatim copies, and "one
+expired: "one canonical comment plus back-references" is now ten near-verbatim copies, and "one
 destructuring line goes back to six routes" is eleven. Two still stand and are honoured above:
 `holdings.tsx`'s fixed-order rendering keeps its own order, and heterogeneous action payloads spread
 their extension fields rather than being forced into one shape. §2.6's `<FieldError>` was accepted
@@ -260,12 +266,12 @@ then and has not landed; its count has grown from "roughly fifteen" to forty-two
 build `earliest` → `chartWindow(surface, { request, today, earliest, session, timeZone })` →
 `chartSeries(scope, resolved)` → spread `controls`, about fifteen lines each, wired by hand twice.
 `app/lib/chart-range.ts` — `RangeWindow.session?` / `.grain?` (`:44-57`), the `SessionAxis` mirror
-(`:71-75`), probes at `:81` and `:380-385`. `app/lib/chart-series.server.ts` — probes at `:55-56`,
+(`:71-75`), probes at `:81` and `:387-391`. `app/lib/chart-series.server.ts` — probes at `:55-56`,
 `:66-67`; reads `MARKET_TIMEZONE` again at `:60`, `:71`. `app/components/net-worth-chart.tsx` —
-probes at `:244`, `:262`, `:462`; `all.length < 2 → null` at `:312`, predicted at `overview.tsx:389`
+probes at `:91`, `:106`, `:244`, `:262`, `:471`; `all.length < 2 → null` at `:312`, predicted at `overview.tsx:389`
 and, stricter, `account.tsx:340`. DESIGN.md §7's rules 2–3 (computed wins on overlap, prefix withheld
-while narrowed) as a loader-body array filter: `reachable` (`overview.tsx:86`), `earliest.manual`
-(`:89`), `manualPrefix` (`:112-124`), `manualWithheld` (`:138-141`), with eight Postgres-seeded
+while narrowed) as a loader-body array filter: `reachable` (`overview.tsx:85`), `earliest.manual`
+(`:88`), `manualPrefix` (`:112-122`), `manualWithheld` (`:137-140`), with eight Postgres-seeded
 loader tests (`tests/routes/overview.test.ts:152, 227, 297, 363, 494, 514, 883, 984`).
 
 **The problem.** The tier (dated, session, grained) is decided once in `resolveRange` but encoded as
@@ -294,8 +300,8 @@ loader tests become array-level unit tests.
 ### 2.7 Valuation's surface × time matrix: two dead exports, one twin, twelve predicate-only variants
 
 **Rating: Strong for step one, Worth exploring for step two.** Local-substitutable. Read path.
-**Files:** `app/lib/valuation.server.ts` — 19 exports; the `ValuedSource` seam (`:103-110`); the
-household/account pairs at `:155-187`, `:247-341`, `:381-397`, `:538-556`, `:685-707`, `:770-802`.
+**Files:** `app/lib/valuation.server.ts` — 19 exported functions; the `ValuedSource` seam (`:103-110`); the
+household/account pairs at `:155-187`, `:247-341`, `:381-397`, `:538-553`, `:685-706`, `:770-802`.
 
 **The problem.** Twelve exports are household/account pairs over five private helpers, where the pair
 members differ in exactly one predicate, `ownedBy("x.owner_id", filter)` against
@@ -305,11 +311,13 @@ members differ in exactly one predicate, `ownedBy("x.owner_id", filter)` against
 `firstRecordedDate` / `accountFirstRecordedDate` (`:770`, `:791`). Evidence the matrix outran demand:
 
 - `holdingsAt` (`:171`) and `netWorthAt` (`:180`) have **zero production callers** (grep over `app`,
-  `server`, `scripts`). They are held up by `tests/holdings-at.test.ts`,
-  `tests/valuation-owner-filter.test.ts` and the invariant suite's oracle.
+  `server`, `scripts`). They are held up by eight test files: `tests/holdings-at.test.ts` (thirty calls),
+  `tests/valuation-owner-filter.test.ts`, the invariant suite's oracle, and one-off oracle reads in
+  `accounts`, `revise-position`, `grained-series`, `dated-upload-baseline-review` and
+  `journeys/dated-upload-baseline`.
 - `accountTotal` (`:290-322`) and `accountTotals` (`:247-287`) are hand-written twins: the
-  `selectFrom` / `innerJoin` / `leftJoin` / ten-column `select` block is identical (`:250-268` against
-  `:293-311`), and `tests/account-queries.test.ts:21-70` exists to assert that they agree, the test a
+  `selectFrom` / `innerJoin` / `leftJoin` / nine-column `select` block is identical (`:254-267` against
+  `:295-308`), as is the `groupBy` (`:272-279` / `:311-318`), and `tests/account-queries.test.ts:21-70` exists to assert that they agree, the test a
   duplicate buys.
 - `chart-series.server.ts:26-28` already invented the union this module lacks
   (`ChartScope = { surface: "household", reading } | { surface: "account", accountId }`) and then
@@ -338,21 +346,21 @@ is the shape §6.3 already accepts for the chart's four reads. Not a reversal.
 
 **Rating: Worth exploring.** In-process. Ingest.
 **Files:** `app/lib/statement-routing.server.ts` emits seven `RoutingProblem` kinds (`:47-59`).
-`app/lib/uploads.server.ts` interprets them in four places: `refusalsByStep` (`:369-384`, which
-kinds "ask again"), `stepOf` (`:545-556`, rebuilding `unanswered` from problems), `accountsScreen`
-(`:704-709`, a stale map by hand), `answerAccountNumbers` (`:818-830`, `as-of` and
+`app/lib/uploads.server.ts` interprets them in four places: `refusalsByStep` (`:369-382`, which
+kinds "ask again"), `stepOf` (`:548-556`, rebuilding `unanswered` from problems), `accountsScreen`
+(`:704-709`, a stale map by hand), `answerAccountNumbers` (`:795-808`, `as-of` and
 `nothing-to-record` re-filtered under a comment about which step owns them). `numberQuestions`
 (`:677-690`) is a third reader of `readDraft` beside `parseDraft` (`:574`) and `accountsScreen`
 (`:692`).
 
 **The problem.** A leak across the seam: the router's taxonomy is the router's knowledge, and its
 step ownership lives next door. And re-derivation per request: an accounts POST parses and routes
-three times (`numberQuestions` at `:744`, the trial route at `:818`, `parseDraft` at `:849`); an
+three times (`numberQuestions` at `:744`, the trial route at `:797`, `parseDraft` at `:849`); an
 instruments GET calls `unresolvedStrings` twice (`stepOf` at `:562`, then `resolutionScreen` at
 `instrument-resolution.server.ts:109`); the columns loader reads the CSV twice (`columns.tsx:55` via
 its own `readDraftFile`, then `parseDraft` at `columns.tsx:81`) and its action twice more. The
 first review's §2.1 moved the redirect decision, but its "parsed twice" table still holds. The
-stale-form guard lives in the route for instruments (`instruments.tsx:88-93`) and in the domain for
+stale-form guard lives in the route for instruments (`instruments.tsx:89-96`) and in the domain for
 accounts (`uploads.server.ts:748-753`).
 
 **Deletion test.** Delete `refusalsByStep` and the "asks again" predicate reappears in three
@@ -372,14 +380,12 @@ moves into the pure test.
 **Rating: Worth exploring.** Local-substitutable. Ingest, route side.
 **Files:** `uploads.server.ts` — `parseDraft` (`:574-581`) decides the step; `DraftNotReadyError`
 (`:621-632`) carries "blocked" as an exception payload; `instrumentsStepSkipped` (`:595-597`) is
-restated in `accounts.tsx:42` and `instruments.tsx:59`. Across `app/routes/upload/`: step-to-redirect
-translated at seven sites; `?stale=true` carried by hand at twelve (`columns.tsx:180, 217`;
-`accounts.tsx:29-30, 59`; `instruments.tsx:40-41, 75`; `review.tsx:60, 82, 163, 188`); `NotFoundError`
-to 404 at nine; the `steps` literal built six times (`columns.tsx:153-158`, `accounts.tsx:38-43`,
-`instruments.tsx:55-60`, `review.tsx:51-56, 67-72`, `upload.tsx:86`); the blocked-or-redirect branch
-three times in `review.tsx` alone (`:81-83`, `:163-166`, `:187-190`). Four spellings of the draft
+restated in `accounts.tsx:42` and `instruments.tsx:59`. Across `app/routes/upload/`: step-to-redirect translated at nine sites; `?stale=true` carried by hand at twelve (`columns.tsx:180, 217`;
+`accounts.tsx:29-30, 59`; `instruments.tsx:40-41, 75`; `review.tsx:60, 82, 163, 188`); `NotFoundError` to 404 at ten; the `steps` literal built six times (`columns.tsx:153-158`, `accounts.tsx:39-44`,
+`instruments.tsx:56-61`, `review.tsx:51-56, 68-73`, `upload.tsx:86`); the blocked-or-redirect branch
+three times in `review.tsx` alone (`:65-83`, `:159-165`, `:184-190`). Four spellings of the draft
 header: `UploadDraft` (`:85-99`), `BlockedDraft` (`:583-593`), `UploadDiff` (`:925-940`),
-`columns.tsx:158-164`.
+`columns.tsx:159-165`.
 
 **The problem.** Forgetting one stale carry silently drops the "review went stale" warning; nothing
 fails. `tests/routes/upload-wizard.test.ts:1-4` admits `parseDraft` "has no test of its own; the
@@ -401,12 +407,12 @@ folder, one draft, one query parameter, and a rule that fails silently.
 **Files:** `app/routes/holdings.tsx` loader (`:76-173`, 98 lines, about 45 of composition):
 `availableFilters(household, q)` / `applyFilters(visible, q)` (`:113-114`, same signature, different
 arrays, the August hazard, still live); `groupHoldings` or `sortHoldings` (`:127-131`); `summarise`
-(`:132`); `projectGroup` / `projectHolding` / `projectTotal` (`:150-152`) each taking
-`amountsAvailable`; a fourth hand-masking at `:163` (`written.quantity`). Stranded in the route body
+(`:132`); `projectGroup` / `projectHolding` / `projectTotal` (`:151-153`) each taking
+`amountsAvailable`; a fourth hand-masking at `:165` (`written.quantity`). Stranded in the route body
 and untestable there: sort-reset (`:80-84`), `columnsFor` / `firstDirection` (`:264-274`), `describe`
 (`:444-481`, 38 lines of prose rules), `hiddenFields` (`:512-525`, a copy of `toSearch`'s loop at
-`holdings-view.ts:311-323`), `Coverage` (`:1025-1059`). `holdings-view.ts` exports 19 values;
-`holdings.tsx` imports 20 names (`:27-49`).
+`holdings-view.ts:284-291`), `Coverage` (`:1025-1059`). `holdings-view.ts` exports 19 values;
+`holdings.tsx` imports 21 names (`:28-50`).
 
 **Deletion test.** Delete the module: the dimension registry reappears in Holdings, Analysis
 (`analysis.tsx:160-163`) and Income (`income.tsx:67-68`), so it earns its keep as a registry. Delete
@@ -420,30 +426,33 @@ fragments to a lib first. The registry exports stay for the other two screens, a
 `tests/holdings-view.test.ts`'s rule tests stay; one composition test replaces the loader-level
 sort-reset and filter-building route tests (`tests/routes/holdings.test.ts:71, 191`).
 
-**What changed since August.** Its four corrections still hold and are honoured above. Five calls
-are now eight; §2.2 (the chart-range primitives) has landed, so the sequencing conflict it named is
-gone; §11.4's count is stale.
+**What changed since August.** Three of its four corrections hold as written; the first's count (five, not
+eight) is now eight, though its reason, that the three calls before the canonicalising redirect
+cannot merge, still stands. §2.2 (the chart-range primitives) has landed. August's sequencing note,
+`holdingsTable` last because it rewrites `groupHoldings` and `summarise`'s call shape and moves
+`COLUMNS`, still applies. §11.4's count is stale.
 
 ### 2.11 Admission, and the grant a browser is left holding
 
 **Rating: Worth exploring.** Local-substitutable. The lock.
-**Files:** `app/lib/lock.server.ts` — the ceremony entries are narrow and deep (`:208-303`,
-`:313-364`); the grant-and-cookie primitives are wide and shallow: `readLockCookie`, `lockCookie`,
-`clearedLockCookie`, `isLocked`, `readGrant`, `touchGrant`, `deleteGrant` (`:90-206`);
-`signerIsRemovalTarget` (`:465-470`); the `deleteGrant` cascade (`:783`). `app/root.tsx:145-171` —
+**Files:** `app/lib/lock.server.ts` — the ceremony entries are narrow and deep (`:401-421`,
+`:506-512`, `:569-594`, `:632-740`, `:747-789`); the grant-and-cookie primitives are wide and shallow: `readLockCookie`, `lockCookie`,
+`clearedLockCookie`, `isLocked`, `readGrant`, `touchGrant`, `deleteGrant` (`:64-69`, `:89-102`,
+`:163-213`); `signerIsRemovalTarget` (`:500-503`); the passkey delete whose cascade takes the grant
+(`:782`). `app/root.tsx:145-171` —
 cookie → `isLocked` → `touchGrant` → clear-or-not, two fail-closed `try/catch` branches; it imports
 four names (`:32`) and asks two. `app/routes/unlock.tsx:31-50` — cookie → `isLocked` → `readGrant`,
 failing open (argued at `:25-26`); `supersedes: readLockCookie(request)` at `:75`.
 `app/routes/settings/passkeys.tsx:133-158` — 26 lines: two extra `readGrant` reads and a three-way
-cookie choice after `removePasskey`; `supersedes` at `:112`, `:135`. `Set-Cookie` built at eight
+cookie choice after `removePasskey`; `supersedes` at `:112`, `:140`. `Set-Cookie` built at nine
 sites.
 
 **The problem.** The composition is the rule, and it lives in three routes. "Is this browser
 admitted" is spelled twice with different fail directions. "Which grant is this browser left holding
 after a removal" is 26 lines of route detecting a row the module already knows it deleted
-(`lock.server.ts:465-470` computes `signerIsRemovalTarget`, then returns a grant the delete at `:783`
-cascades away). `supersedes` is threaded from three call sites under an invariant the module states
-("never a form field", `:106-107`) but only callers uphold.
+(`lock.server.ts:500-503` computes `signerIsRemovalTarget`, then returns a grant the passkey delete
+at `:782` cascades away). `supersedes` is threaded from three call sites under an invariant the module states
+("never a form field", `:124-125`) but only callers uphold.
 
 **Deletion test.** The primitives pass through by count only if the composition also moves; deleting
 them today scatters cookie parsing into four routes. The finding is the composition.
@@ -456,7 +465,7 @@ presented grant id from the request themselves, closing "never a form field" str
 
 **Tests.** `tests/routes/settings-passkeys.test.ts:1048-1295` (seven removal tests) and
 `tests/lock.test.ts:1404-1490` prove the same cookie rule twice, the route copies via a regex over
-`Set-Cookie` (`grantIdOf`, `:121-123`). `tests/routes/root.test.ts:53-63` mocks `touchGrant` and
+`Set-Cookie` (`grantIdOf`, `:122-124`). `tests/routes/root.test.ts:53-63` mocks `touchGrant` and
 `isLocked` individually to fail one read, a test past the interface that a behaviour-preserving
 merge of those reads would break. `tests/support/webauthn.ts` signs real assertions and stays.
 
@@ -467,7 +476,8 @@ merge of those reads would break. `tests/support/webauthn.ts` signs real asserti
 **Rating: Worth exploring.** In-process; ports & adapters for the probe. Pricing.
 **Files:** `app/lib/price-provider.server.ts:11` imports `matchKey` from `prices.server.ts:448`;
 `prices.server.ts:12` imports `ProviderUnreachable` back; `provider-socket.server.ts:25` imports
-`matchKey` too. `ProbeSymbols` (`price-provider.server.ts:313-362`) is a second seam beside
+`matchKey` too. `ProbeSymbols` (`price-provider.server.ts:314-322`, with `probeVerdicts` at
+`:325-362`) is a second seam beside
 `PriceProvider` (`:48`); `socketProbe` (`provider-socket.server.ts:214-241`) repeats
 `socketProvider`'s batch loop: `wellFormedSymbols` (`:169` / `:215`), `batchesOf` (`:176` / `:219`),
 `ask("quotes", …)` (`:177` / `:221`), `fetchedAt` (`:172` / `:216`), `toProviderQuote` (`:181` / via
@@ -503,7 +513,7 @@ refusal must stay named, `:324`) is untouched.
 **Rating: Worth exploring, small.** In-process. Cross-cutting; §4.2's "worth watching".
 **Files:** `migrations/0006_annual_dividend.sql:51` (the view's quantity(8) × price(4) → money(4),
 the authority); `uploads.server.ts` `valueAt` (`:1032-1043`, called `:1245`, `:1273`, `:1299`),
-`divide(toUnits(q, 8) * toUnits(p, 4), 10n ** 8n, MONEY_SCALE)`; `positions.server.ts`
+`render(divide(toUnits(q, 8) * toUnits(p, 4), 10n ** 8n, 0), MONEY_SCALE)`; `positions.server.ts`
 `fitsTheMoneyColumn` (`:118-135`), the same product rounded inline at `:132`, the "rounding rule
 spelled twice" §4.2 records; `format.ts:31-48`, a third half-away-from-zero on digit strings, kept
 equal to `money.ts:17` by a comment; `breakdown.tsx:27`, `Number(share)` claiming `toPlotValue`'s
@@ -515,7 +525,7 @@ figure produced outside the view.
 
 **What would change, two shapes.** The cheaper: one exported product in `money.ts`, called by
 `valueAt` and `fitsTheMoneyColumn`, each keeping its own guard; §4.2's "spelled twice" closes. The
-deeper: the review's Value column computed in SQL. The facts query at `uploads.server.ts:1183-1204`
+deeper: the review's Value column computed in SQL. The facts query at `uploads.server.ts:1187-1204`
 already joins `quote`; hand it `unnest(ids, quantities)` and a `valueAtCurrentQuote(pairs)` in
 `valuation.server.ts` makes every figure the review shows SQL's, by §4.2's own argument for
 `readSessionSeries` ("the same module owns both"). The invariant test then pins nothing and goes.
@@ -531,25 +541,26 @@ Either way `breakdown.tsx` calls `toPlotValue`.
   `normalizedPathname`, `isUnlockPath`, `isLockNowPath` (`root.tsx:55-84`) and `LOCK_EXEMPT_PATHS`
   (`:53`) are pure string logic used on both sides of the `.server` line (middleware `:141`, `Layout`
   `:297`). Move them to `lock.ts`, and `tests/routes/root.test.ts:566-600` stops seeding a passkey to
-  check a string comparison. §4.2:388 and §7.6:1919 say "in `app/root.tsx`" and move with it.
+  check a string comparison. §4.2:390, §4.4:513, §7.2:1829 and §7.6:1919 say "in `app/root.tsx`" and move
+  with it.
 - **Health chain trims** (Worth exploring). `WorkerReachability` is declared twice
   (`price-health.ts:9`, `worker-reachability.server.ts:23`) though `import type` crosses freely.
-  `health-response.ts` is a fifteen-line pass-through with one caller; delete it and three lines
+  `health-response.ts` is one seventeen-line function with one caller; delete it and three lines
   reappear in the route once. The other three modules in the chain are deep and stay.
 - **Worker/app mirrored text rules** (Speculative). `ERROR_TEXT_LIMIT` (`price-worker.ts:22`,
-  `provider-socket.server.ts:49`) and the control-character regex (`:95` / `:52`) could share a
+  `provider-socket.server.ts:49`) and the control-character regex (`:96` / `:53`) could share a
   `server/` module as `symbol-pattern.ts` does. The body caps are not a duplicate (a request and a
   response over different stream APIs); symbol validation on both sides is deliberate (spec 0018 §2.1).
 - **A settings column accessor** (Speculative). Three read/save pairs of one shape in
-  `settings.server.ts` (`:20-42`, `:55-82`, `:116-138`) and five identical test sentences per pair;
+  `settings.server.ts` (`:20-42`, `:55-82`, `:116-138`) and five tests of one shape per pair;
   the promised theme setting (`display.tsx:21`) would be a fourth copy. Marginal leverage, and a risk
   of a shape more elaborate than three pairs need.
 - **Masking: return the parsed policy** (Speculative). `display.tsx:37` discards
-  `saveMaskingPolicy`'s result and re-narrows the raw value at `:83-86`; `routes/masking.ts:24`
+  `saveMaskingPolicy`'s result and re-narrows the raw value at `:83-86`; `routes/masking.ts:17-19`
   restates the vocabulary check. Three lines. Everything else in masking is one resolver per side by
   design (ADR-0002).
 - **One group-and-fold** (Speculative). `compareAccount` (`uploads.server.ts:1117-1160`)
-  re-implements `parseStatement`'s grouping loop (`statement.ts:524-583`) around the shared
+  re-implements `parseStatement`'s grouping loop (`statement.ts:522-583`) around the shared
   `foldLots`; a `foldBy(positions, keyOf)` in `statement.ts` removes about forty lines. Two callers.
 - **Noted.** `people.server.ts` computes the two account counts twice (`:37-62`, `:171-190`) and
   `createPerson` (`:114`) hard-codes the zeros. `DAY_MS` (`chart-range.ts:29`,
@@ -557,13 +568,13 @@ Either way `breakdown.tsx` calls `toPlotValue`.
   (`overview.tsx:189`, `account.tsx:180`) are each still declared twice, remnants of August's §2.2.
 - **Invariant suite gaps** (`tests/invariants/aggregates-agree.test.ts`). Not pinned: the Holdings
   total row (`summarise`, JS) against the Overview headline (`netWorth`, SQL), the most visible pair
-  and exactly the shape the file's header names; `readGrainedSeries`'s instant branch (`:620-641`)
+  and exactly the shape the file's header names; `readGrainedSeries`'s instant branch (`:627-655`)
   against `readSessionSeries` for the same instant, two SQL valuations ADR-0014 says agree;
-  `netWorthChange.current` against `netWorth.amount`, two hand-written `sum(value)` (`:735-741`,
-  `:137`). And `tests/dashboard-queries.test.ts:59-61` compares totals through `Number()`, a float sum
+  `netWorthChange.current` against `netWorth.amount`, two hand-written `sum(value)` (`:740-744`,
+  `:141`). And `tests/dashboard-queries.test.ts:57-59` compares totals through `Number()`, a float sum
   in an exact-string suite.
 - **Housekeeping.** `app/lib/uploads.server.ts.orig` and `tests/commit-upload.test.ts.orig` are
-  tracked, 2 597 diff lines behind their originals, imported by nothing. Delete them.
+  tracked, 2 597 and 1 425 diff lines behind their originals, imported by nothing. Delete them.
 
 ---
 
@@ -574,17 +585,17 @@ Checked and left alone, with the document that says why, so the next review does
 - `commitUpload` / `recordUpload` thin over `withAccountLock`, and the unlocked `draftAccountId`
   read (`uploads.server.ts:275-288`): §4.2's "Appending to an account's history" row, §7.2's "Two
   commits of one draft".
-- `routeDraft`'s three-line pass-through (`:357-366`) keeps `routeStatement` pure (Appendix A).
+- `routeDraft`'s three-line pass-through (`:357-364`) keeps `routeStatement` pure (Appendix A).
   `readUploadForm`'s single caller is §4.2's upload-cap row; August's §4.4 refuted absorbing it.
 - `aliasesFor`'s two queries, the second overwriting the first
   (`instrument-resolution.server.ts:44-57`): ADR-0013, vocabulary wins. `had_first_sightings`
-  written at the columns step, not derived later (`uploads.server.ts:93-95`, `:390-393`): §6.1's "the
-  one moment the answer exists". Created instruments outliving an abandoned draft: ADR-0013.
+  written at the columns step, not derived later (`uploads.server.ts:95-97`, `:390-393`): "written
+  here, where the answer exists" (`:390`; §6.1). Created instruments outliving an abandoned draft: ADR-0013.
 - Conversion on the app side of the worker's raw JSON (§7.5; ADR-0010's "no second schema"; the
-  worker may not import `money.ts`, `price-worker.ts:15-17`). `socket-transport.server.ts` as its own
+  worker holds no domain logic, `price-worker.ts:2-3`). `socket-transport.server.ts` as its own
   module (spec 0021, Rejected). `worker-reachability` memoising while `provider-socket` remembers
   nothing (its header, `:9-14`).
-- Fixtures planting price rows raw (`fixtures.ts:393-489`, 25 test files): §4.2's "Writing a price"
+- Fixtures planting price rows raw (`fixtures.ts:393-489`, 24 test files): §4.2's "Writing a price"
   row. `writeDailyClose` refuses history older than seven days by design (`prices.server.ts:608`), so
   a 2024 close cannot come through the writer; the fixtures are not evidence that the write interface
   is hard to drive. `isMarketOpen` (`market-hours.ts:108`) is live: `scripts/seed-demo.ts:421` walks
@@ -597,9 +608,9 @@ Checked and left alone, with the document that says why, so the next review does
 - The owner-filter obligation on four screens, about 55 lines: the loader half is deliberately not
   absorbable, since `currentHoldings(reading)` must stay visible in review (ADR-0008;
   `owner-reading.server.ts:3-4`). The element half (control, sentence, empty state, and the three
-  identical `instance` lines at `overview.tsx:128`, `analysis.tsx:147`, `income.tsx:53`) could take one
+  identical `instance` lines at `overview.tsx:126`, `analysis.tsx:147`, `income.tsx:53`) could take one
   `OwnerBlock` prop with visibility unchanged. Speculative; not carded.
-- `expectedRelyingParty()` reads config per call (`lock.server.ts:56`), and the `getConfig` mock in
+- `expectedRelyingParty()` reads config per call (`lock.server.ts:59`), and the `getConfig` mock in
   `tests/lock.test.ts:52-66` is the accepted price. The in-memory challenge map, one adapter
   (ADR-0012). The lock middleware throws before `next()` while chart-range's decorates after
   (ADR-0012 names the contrast). `LOCK_EXEMPT_PATHS` pinned to length (`tests/routes/root.test.ts:226`).
@@ -613,7 +624,7 @@ Checked and left alone, with the document that says why, so the next review does
 - `first-run.server.ts` at 21 lines fails the deletion test by count and passes it by §4.1:
   deleting it puts a query and a rule into a route. Correctly small.
 - `holdings.tsx:940` renders the form-level refusal as `.field-error` in a fixed order
-  (`docs/design/holdings-ui-brief.md:637-639`; August's §4.5). `Amount` as the one renderer, enforced
+  (`docs/design/holdings-ui-brief.md:644-645`; August's §4.5). `Amount` as the one renderer, enforced
   by `tests/masking-boundary.test.ts` (ADR-0002).
 - `tests/account-lock.test.ts` is `withAccountLock`, the account row lock (§7.2), not the passkey
   lock; `tests/lock*.test.ts` are the passkey lock. A naming collision with CONTEXT.md's "Locked";
@@ -627,30 +638,32 @@ Not architecture findings. Cheap to fix, and the document promises that "where a
 checked, it is anchored to a file and a symbol".
 
 - §6.1: `recordAccountNumber (uploads.server.ts:2096)` → `:2098`. "Six live in
-  `tests/fixtures/statements/`" → eight. The commit flowchart omits the bounded-number (`:1786`) and
-  already-recorded-elsewhere (`:1803`) refusals between F and H.
+  `tests/fixtures/statements/`" → eight. The commit flowchart omits the bounded-number (`:1793`) and
+  already-recorded-elsewhere (`:1808`) refusals between F and H.
 - §7.2: `uploads.server.ts:1878-1885` for the rerouted refusal → `:1883-1886`.
   `balances.server.ts:104, :132-149` → `:104` is inside `balanceReceipt`; the locked
-  `currentStatement` read is `:145`, the guard CTE `:172-190`. "The index decides, not a read first":
-  the single-account commit now reads `numberHolder` first (`:1803-1806`); the guarantee holds, the
-  sentence does not. `migrations.ts:126-128` for the ledger's `create table if not exists` before the
+  `currentStatement` read is `:145`, the guard CTE `:172-190`. §7.2:1774's "not a
+  read first" (and `accounts.server.ts:191`'s "The index decides, not a read first", the same
+  sentence): the single-account commit now reads `numberHolder` first (`:1805-1808`); the guarantee
+  holds, the sentence does not. `migrations.ts:126-128` for the ledger's `create table if not exists` before the
   lock → `:61` (create) and `:84` (lock).
 - §7.5: "`socketProvider()` dials the worker's socket (`provider-socket.server.ts:213`)" → `:166`;
-  `:214` is `socketProbe`. Appendix A's `symbol-pattern.ts` row: the import is at
-  `provider-socket.server.ts:9`, not `:11`. Appendix A's `refresh.server.ts` row: "one edit here and
-  one in `startPricePoller`" misses `upload/instruments.tsx:102`. August's float excursion moved from
-  `price-provider.server.ts:266-270` to `:172-176`, with `inRange`'s `Number(value)` at `:99-102`.
+  `:214` is `socketProbe`. Appendix A:2366 and §8.1:2045 cite
+  `provider-socket.server.ts:11` for the `symbol-pattern` import; it is at `:9`. Appendix A's `refresh.server.ts` row: "one edit here and
+  one in `startPricePoller`" misses `upload/instruments.tsx:102`. Not an ARCHITECTURE.md fact, since
+  §5.6:969's `price-provider.server.ts:99` is current, but August §5's float excursion at `:266-270`
+  is now `:172-176`, with `inRange`'s `Number(value)` at `:99-102`.
 - §11.3: "`<FieldError>` is open-coded at roughly fifteen sites" → 42, in 14 and 15 files.
   Appendix A's `settings.server.ts` row, "The capital gains rate" → also the masking policy and the
   refresh cadence. Appendix A's `lock.server.ts` row, "the middleware asks this module one question"
   → `root.tsx:32` imports four names and asks two. §7.6:1925, "`mintGrant` inserts unconditionally"
-  → it sweeps expired rows and deletes `supersedes` first (`lock.server.ts:113-122`); the consequence
+  → it sweeps expired rows and deletes `supersedes` first (`lock.server.ts:133-138`); the consequence
   holds, the mechanism sentence does not. §7.6:1932, "both resource routes use it" → `unlock.tsx:29,
   :78`, a document route, also uses `safeReturn`. React Router is cited as 7.18.2 (§4.4:530,
   `root.tsx:55`), 7.18.3 (§4.2:391) and resolves to 7.18.4 (`package-lock.json`).
 - §6.3:1510 and Appendix A:2374, "seven reads through `ValuedSource`: `readHoldings`, `readTotal`
   and `readSeries`" → `readSeries` (`valuation.server.ts:344-379`) inlines `holding_valued_at` and
-  never takes a `ValuedSource`; the seventh is `netWorthChange` (`:735-741`). "Three household-scoped
+  never takes a `ValuedSource`; the seventh is `netWorthChange` (`:740-744`). "Three household-scoped
   reads no longer called by the screen" → four (`netWorthGrainedSeries`, `chart-series.server.ts:57`).
   §5.6: `toPlotValue` is at `format.ts:162-164`, and `breakdown.tsx:27` is a third `Number()` on a
   money-derived string. §11.4: "five array calls" → eight. §6.3's screen table lists Overview's
