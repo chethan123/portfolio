@@ -748,7 +748,8 @@ export type NetWorthChange = {
   // Null when previous is zero: undefined, not 0% or infinite.
   percent: string | null;
   basis: ChangeBasis;
-  // What `previous` is measured at, which is `since` only when basis is "computed".
+  // What `previous` is measured at: `since` under "computed", and under "manual" too when a
+  // hand-typed point falls on `since` itself.
   basisDate: IsoDate | null;
 };
 

@@ -99,10 +99,12 @@ and can differ from current net worth, even when the range ends today.
 _Avoid_: current value, latest value, ending balance, final value.
 
 **Change basis**:
-Which history the change chip measured its earlier figure from: `computed` (positions at the range's
-start), `manual` (the hand-typed value in force there), `clamped` (the earliest date the reading can
-value), or `none` (nothing recorded). The basis date is where that figure was actually taken, and it
-is the range's start only when the basis is `computed`.
+Which history the change chip measured its earlier figure from, at its comparison date: `computed`
+(positions valued there), `manual` (the hand-typed value in force there), `clamped` (the earliest
+date the reading can value), or `none` (nothing recorded). The comparison date is the range's start,
+except under 1D, where it is the day before the session so the chip reads against the previous
+close. The basis date is where that figure was actually taken — the comparison date under
+`computed`, and under `manual` too when a hand-typed point falls on it.
 _Avoid_: baseline (that names what a statement's diff is compared to), start value, reference point.
 
 **Clamped**:

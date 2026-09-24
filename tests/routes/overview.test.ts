@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
 
-import { RANGE_COOKIE } from "~/lib/chart-range";
+import { RANGE_COOKIE, isoDate, resolveRange } from "~/lib/chart-range";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -574,23 +574,68 @@ describe("where the change chip measures from", () => {
   );
 
   it(
-    "says the start of the range was empty for these owners, not for the household, while narrowed",
+    "measures from a hand-typed point dated on the comparison date itself, and reports that date",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // The resolver the loader uses, not a second copy of 5Y's calendar-month arithmetic.
+      const { since } = resolveRange("5y", {
+        today: isoDate(Date.now()),
+        earliest: { positionSet: daysAgo(200) },
+        surface: "household",
+      });
+
+      await ctx.seedManualNetWorth({ date: since, amount: "5000.0000" });
+
+      const data = await loader(args(get("/?range=5y")));
+
+      // `date <= since` reaches a point dated on `since`, so a basis date equal to it is not
+      // evidence of a computed basis.
+      expect(data.change.basis).toBe("manual");
+      expect(data.change.basisDate).toBe(since);
+      expect(data.change.previous).toBe("5000.0000");
+    }),
+  );
+
+  it(
+    "says the start of the range was empty for the one owner shown, while the household's own hand-typed history covers it",
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
+      // Older than the 5Y start, so the household measures from it and never clamps.
+      await ctx.seedManualNetWorth({ date: daysAgo(2000), amount: "5000.0000" });
+
       const household = await loader(args(get("/?range=5y")));
 
-      expect(household.change.basis).toBe("clamped");
+      expect(household.change.basis).toBe("manual");
+      expect(renderRoute(Overview, "/", household)).not.toContain("Nothing was recorded");
+
+      const hers = await loader(args(get(`/?${ownerParam(alice.id)}&range=5y`)));
+
+      // Narrowed declines the household's hand-typed history (ADR-0008), so Alice clamps to her own
+      // first statement — and the sentence is about her, not about a household that has a figure here.
+      expect(hers.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", hers)).toContain(
+        "Nothing was recorded for this owner at the start of this range.",
+      );
+    }),
+  );
+
+  it(
+    "names two selected owners in the plural, and the whole household not at all",
+    withDatabase(async (ctx) => {
+      const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      const household = await loader(args(get("/?range=5y")));
+
       expect(renderRoute(Overview, "/", household)).toContain(
         "Nothing was recorded at the start of this range.",
       );
 
-      const hers = await loader(args(get(`/?${ownerParam(alice.id)}&range=5y`)));
+      const theirs = await loader(args(get(`/?${ownerParam(alice.id, bob.id)}&range=5y`)));
 
-      // Alice's own first statement, not the household's — the unqualified sentence would read as
-      // the whole household having nothing, which `NarrowedTo` directly above contradicts.
-      expect(hers.change.basis).toBe("clamped");
-      expect(renderRoute(Overview, "/", hers)).toContain(
+      expect(theirs.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", theirs)).toContain(
         "Nothing was recorded for these owners at the start of this range.",
       );
     }),

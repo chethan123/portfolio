@@ -183,6 +183,17 @@ function Header({
   );
 }
 
+/**
+ * The clamped note's owner clause, counted off the same list `NarrowedTo` names right above it —
+ * a filter being on says nothing about how many owners it resolved to. Empty exactly when
+ * unfiltered: a filter resolving to nobody renders the empty screen instead, never this note.
+ */
+function forOwners(narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"]): string {
+  if (narrowedTo.length === 0) return "";
+
+  return narrowedTo.length === 1 ? " for this owner" : " for these owners";
+}
+
 type AccountRow = Route.ComponentProps["loaderData"]["accounts"][number];
 
 // Exhaustive over `AccountKind` — adding a kind fails the typecheck here, not a silent blank row.
@@ -412,9 +423,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
 
           {change.basis === "clamped" && change.basisDate !== null ? (
             <p className="coverage-note">
-              Nothing was recorded{isFiltered(owners) ? " for these owners" : null} at the start
-              of this range. Measured from{" "}
-              {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
+              Nothing was recorded{forOwners(narrowedTo)} at the start of this range. Measured
+              from {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
             </p>
           ) : null}
 
