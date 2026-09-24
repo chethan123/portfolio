@@ -907,16 +907,25 @@ describe("the number tail on the account rows", () => {
 
 describe("the 1D range on the Overview", () => {
   // Day zero, plus a session of observations. Daily close the day before is what an unobserved instant carries forward from; the quote is what the headline reads — both written the way one refresh writes them (story 8).
-  async function seedSession(ctx: TestContext, session: string, previous: string): Promise<void> {
+  // `firstSet` is where the household's history starts: on `previous` there is a close to compare against, on `session` itself there is none (#347).
+  async function seedSession(
+    ctx: TestContext,
+    session: string,
+    previous: string,
+    firstSet: string = previous,
+  ): Promise<void> {
     const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
     const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
     await ctx.seedPositionSet({
       account,
-      asOf: previous,
+      asOf: firstSet,
       holdings: [{ instrument: vti, quantity: "100" }],
     });
-    await ctx.seedDailyClose({ instrument: vti, date: previous, close: "100.0000" });
+    // A close on `previous` would price no holding once the history starts later than it.
+    if (firstSet <= previous) {
+      await ctx.seedDailyClose({ instrument: vti, date: previous, close: "100.0000" });
+    }
 
     for (const [minute, price] of [
       ["13:30", "101.0000"],
@@ -973,6 +982,28 @@ describe("the 1D range on the Overview", () => {
       // Yesterday's close was $100/share, session ended at $110 — "today's change" a brokerage's sense; the session's own provisional close would read zero.
       expect(data.change.previous).toBe("10000.0000");
       expect(data.change.difference).toBe("1000.0000");
+    }),
+  );
+
+  it(
+    "names the previous close it could not find, rather than an empty range start, when the household's history begins on the session it plots",
+    withDatabase(async (ctx) => {
+      const session = daysAgo(1);
+      await seedSession(ctx, session, daysAgo(2), session);
+
+      const data = await loader(args(get("/?range=1d")));
+
+      // 1D compares against the day before the session, which day zero never reaches (chart-range.ts).
+      expect(data.change.basis).toBe("clamped");
+      expect(data.change.basisDate).toBe(session);
+
+      // Every instant the session logged is plotted: the range start is drawn, not empty.
+      expect(data.computed).toHaveLength(3);
+
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(markup).not.toContain("at the start of this range");
+      expect(markup).toContain("No previous close was recorded. Measured from");
     }),
   );
 

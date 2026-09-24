@@ -194,6 +194,20 @@ function forOwners(narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"])
   return narrowedTo.length === 1 ? " for this owner" : " for these owners";
 }
 
+/**
+ * What the clamp is an apology for, which is not the same absence on every range. 1D compares
+ * against the day before the session it plots (`resolveRange`, chart-range.ts), so a clamp there
+ * means no previous close — while the line draws the whole session, range start included.
+ */
+function clampedAbsence(
+  range: RangeKey,
+  narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"],
+): string {
+  if (range === "1d") return `No previous close was recorded${forOwners(narrowedTo)}.`;
+
+  return `Nothing was recorded${forOwners(narrowedTo)} at the start of this range.`;
+}
+
 type AccountRow = Route.ComponentProps["loaderData"]["accounts"][number];
 
 // Exhaustive over `AccountKind` — adding a kind fails the typecheck here, not a silent blank row.
@@ -423,8 +437,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
 
           {change.basis === "clamped" && change.basisDate !== null ? (
             <p className="coverage-note">
-              Nothing was recorded{forOwners(narrowedTo)} at the start of this range. Measured
-              from {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
+              {clampedAbsence(range, narrowedTo)} Measured from{" "}
+              {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
             </p>
           ) : null}
 
