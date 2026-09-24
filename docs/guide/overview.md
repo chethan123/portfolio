@@ -102,8 +102,9 @@ least two observations at distinct times to draw a line.
 - The change chip's comparison date is the day before the displayed session, so it reads the way a
   brokerage's "today's change" does. If your positions begin on the session itself and no hand-typed
   point is in force on the day before, nothing can be valued there: the chip says so and measures
-  from the session instead, while the line still draws in full. An older hand-typed point is enough
-  to answer for that day, and then there is no note.
+  from the session instead, while the line still draws in full. While you are showing everyone, an
+  older hand-typed point answers for that day and there is no note; narrowed to an owner it cannot,
+  since the hand-typed history is the household's, so the note stays.
 - Current quantities are used across the session — 1D is the only range that does this. An upload
   can change the whole 1D line; every other range values each day at the positions you held on it,
   so an upload there only reshapes the line from the day it lands.
