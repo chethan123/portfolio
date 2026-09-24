@@ -7,9 +7,30 @@ What the household is worth today, and the line behind it.
 ## The headline and the chip beside it
 
 **Total net worth** adds the current value of open accounts. Loans subtract. The change chip
-compares current value with the value at the range's start. This remains true for Custom ranges
-ending in the past. The chip is not the change between the chart's endpoints. If the starting
-value is zero, only the amount is shown.
+compares current value with the value on one earlier date, its **comparison date**: the start of the
+range on every range but 1D, and on 1D the day before the session being drawn. This remains true for
+Custom ranges ending in the past. The chip is not the change between the chart's endpoints.
+
+**Three things can be that earlier value, in this order.** A statement recorded on or before the
+comparison date: your positions, valued there. Failing that — the comparison date falls before your
+first statement — the most recent hand-typed point on or before it, held forward the way a price is.
+That point need not be one the line draws. It is the value in force on that date, not the first dot
+on the chart.
+
+Failing both, the chip measures from the earliest date it can value, and says which under the
+figure: "Measured from 12 Oct 2023". That happens whenever nothing you have recorded reaches the
+comparison date: when the range starts before anything at all was recorded, as the default year does
+while nothing — no statement, no hand-typed point — is older than a year; when you have narrowed to
+an owner and the range reaches back past that owner's first statement, since the hand-typed history
+is the household's and has no owner; and on 1D on the day of your first upload, where your positions
+begin on the session itself and no hand-typed point is in force on the day before.
+
+The note is about your own history, not about the market. A closing price for that day may well be
+stored — the app fills in earlier closes for what you hold — and the chip will still measure from
+later, because none of your positions reach back that far.
+
+If that earlier value is genuinely zero — nothing was held then — only the amount is shown, with no
+percentage.
 
 The **As of** line is the oldest provider timestamp among currently held feed-priced instruments,
 across the household. A successful refresh need not advance it. [Prices](prices.md).
@@ -78,7 +99,12 @@ least two observations at distinct times to draw a line.
 
 - The axis and readout show time on the market's clock.
 - Every distinct observed instant is plotted; one refresh can add several points.
-- The change chip compares current value with the close before the displayed session.
+- The change chip's comparison date is the day before the displayed session, so it reads the way a
+  brokerage's "today's change" does. If your positions begin on the session itself and no hand-typed
+  point is in force on the day before, nothing can be valued there: the chip says so and measures
+  from the session instead, while the line still draws in full. While you are showing everyone, an
+  older hand-typed point answers for that day and there is no note; narrowed to an owner it cannot,
+  since the hand-typed history is the household's, so the note stays.
 - Current quantities are used across the session — 1D is the only range that does this. An upload
   can change the whole 1D line; every other range values each day at the positions you held on it,
   so an upload there only reshapes the line from the day it lands.

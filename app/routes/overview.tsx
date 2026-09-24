@@ -31,7 +31,7 @@ import {
   type RangeKey,
 } from "~/lib/chart-range";
 import { chartReach, chartSeries, type ChartScope } from "~/lib/chart-series.server";
-import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
+import { formatDate, formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import { ALL_OWNERS, isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
@@ -181,6 +181,32 @@ function Header({
       </div>
     </header>
   );
+}
+
+/**
+ * The clamped note's owner clause, counted off the same list `NarrowedTo` names right above it —
+ * a filter being on says nothing about how many owners it resolved to. Empty exactly when
+ * unfiltered: a filter resolving to nobody renders the empty screen instead, never this note.
+ */
+function forOwners(narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"]): string {
+  if (narrowedTo.length === 0) return "";
+
+  return narrowedTo.length === 1 ? " for this owner" : " for these owners";
+}
+
+/**
+ * What the clamp is an apology for, which is not the same absence on every range. 1D compares
+ * against the day before the session it plots (`resolveRange`, chart-range.ts), so a clamp there
+ * is a value missing at that close, never the close itself — `netWorthChange` picks the basis off
+ * recorded history alone — while the line draws the whole session, range start included.
+ */
+function clampedAbsence(
+  range: RangeKey,
+  narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"],
+): string {
+  if (range === "1d") return `No value was available${forOwners(narrowedTo)} at the previous close.`;
+
+  return `Nothing was recorded${forOwners(narrowedTo)} at the start of this range.`;
 }
 
 type AccountRow = Route.ComponentProps["loaderData"]["accounts"][number];
@@ -409,6 +435,13 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           </p>
 
           <NarrowedTo owners={narrowedTo} />
+
+          {change.basis === "clamped" && change.basisDate !== null ? (
+            <p className="coverage-note">
+              {clampedAbsence(range, narrowedTo)} Measured from{" "}
+              {formatDate(new Date(`${change.basisDate}T00:00:00Z`))}.
+            </p>
+          ) : null}
 
           <PriceFreshness freshness={freshness} />
         </div>

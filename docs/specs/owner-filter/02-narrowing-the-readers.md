@@ -51,6 +51,9 @@ three predicates, and it can be read for correctness without any argument about 
 - [ ] `manualNetWorth` — it has no owner to narrow on, and a filtered screen decides not to *draw* it
       rather than asking it for nothing. An empty return cannot be told from an instance with no
       manual rows, and the screen needs that difference to know whether to explain the absence
+- [ ] `manualNetWorthAt` — same reason: `manual_networth` has no owner column at all, so narrowing
+      it is not a choice (ADR-0008); `netWorthChange`, its one caller, decides whether to ask it,
+      not how to narrow it
 - [ ] A comment at the seam says why the line falls where it does, so the next reader does not
       "finish the job"
 

@@ -66,6 +66,23 @@ export function inTransaction<T>(
   return db.isTransaction ? body(db) : db.transaction().execute(body);
 }
 
+// One snapshot for a read that asks several questions, so a commit landing between two of them
+// cannot be half-seen. Read-only, and REPEATABLE READ rather than SERIALIZABLE: the changed error
+// semantics #332 refused this level for are a writer's — Postgres raises no serialization failure
+// for a transaction that only reads. Same test seam as inTransaction.
+export function inOneSnapshot<T>(
+  db: Kysely<Database>,
+  body: (trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  return db.isTransaction
+    ? body(db)
+    : db
+        .transaction()
+        .setIsolationLevel("repeatable read")
+        .setAccessMode("read only")
+        .execute(body);
+}
+
 /** Savepoint so a caught violation does not leave the caller's transaction aborted. No-op outside one. */
 export async function guardedAgainstConstraintViolation<T>(
   db: Kysely<Database>,

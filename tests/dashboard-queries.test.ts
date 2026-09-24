@@ -344,6 +344,143 @@ describe("netWorthChange", () => {
       expect(change.percent).toBeNull();
     }),
   );
+
+  it(
+    "measures a range that predates the first statement from the hand-typed point in force, however old",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet, seedQuote, seedDailyClose, seedManualNetWorth }) => {
+      const owner = await seedPerson();
+      const account = await seedAccount({ owner });
+      const vti = await seedInstrument({ symbol: "VTI", name: "VTI" });
+      await seedQuote({ instrument: vti, price: "250.0000" });
+      await seedDailyClose({ instrument: vti, date: "2026-01-31", close: "200.0000" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+
+      await seedManualNetWorth({ date: "2021-12-31", amount: "10000.0000" });
+      await seedManualNetWorth({ date: "2022-12-31", amount: "20000.0000" });
+
+      // 5Y-shaped: after both hand-typed points, before the first statement. The baseline is a point
+      // the line never draws — carried forward the way a price is.
+      expect(await netWorthChange(ALL_OWNERS, "2024-09-20", db)).toEqual({
+        current: "25000.0000",
+        previous: "20000.0000",
+        difference: "5000.0000",
+        percent: "25.0000",
+        basis: "manual",
+        basisDate: "2022-12-31",
+      });
+    }),
+  );
+
+  // Regression for round(…, 4) over a bounded cast — a typmod back in that select raises 22003
+  // here and in the sum case below.
+  it(
+    "states the ratio between a hand-typed ten-thousandth and the largest balance the app takes, rather than overflowing",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, seedManualNetWorth, usdInstrument }) => {
+      const owner = await seedPerson();
+      const usd = await usdInstrument();
+      const account = await seedAccount({ owner, kind: "bank" });
+
+      // Twelve integer digits, which is what a typed balance may carry (moneyMagnitudeRule).
+      await seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "999999999999.99000000" }],
+      });
+
+      // The oldest hand-typed point is the one carried forward, and decades on it can be a rounding
+      // error beside today's total. Eighteen integer digits of ratio: past anything a fixed numeric
+      // width in this query would take, and a percentage Postgres refuses is a 500 on the Overview.
+      await seedManualNetWorth({ date: "1995-12-31", amount: "0.0001" });
+      await seedManualNetWorth({ date: "2000-12-31", amount: "-0.0001" });
+
+      expect(await netWorthChange(ALL_OWNERS, "1999-01-01", db)).toEqual({
+        current: "999999999999.9900",
+        previous: "0.0001",
+        difference: "999999999999.9899",
+        percent: "999999999999989900.0000",
+        basis: "manual",
+        basisDate: "1995-12-31",
+      });
+
+      // abs(previous) reads a climb out of debt as a rise at this magnitude too.
+      expect((await netWorthChange(ALL_OWNERS, "2024-09-20", db)).percent).toBe(
+        "999999999999990100.0000",
+      );
+    }),
+  );
+
+  it(
+    "totals two holdings that each fit the money column but together do not",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet, seedQuote, seedDailyClose }) => {
+      const owner = await seedPerson();
+      // fitsTheMoneyColumn guards one holding below numeric(20, 4); nothing guards their sum, so
+      // neither the totals nor the difference between them can carry a width either.
+      const trust = await seedInstrument({ symbol: "TRUST", name: "Closely Held Trust" });
+      await seedQuote({ instrument: trust, price: "9999999.9999" });
+      await seedDailyClose({ instrument: trust, date: "2026-01-31", close: "9999999.9999" });
+
+      for (const name of ["First", "Second"]) {
+        const account = await seedAccount({ name, owner });
+        await seedPositionSet({
+          account,
+          asOf: "2026-01-31",
+          holdings: [{ instrument: trust, quantity: "1000000000.00000000" }],
+        });
+      }
+
+      expect(await netWorthChange(ALL_OWNERS, "2026-02-01", db)).toEqual({
+        current: "19999999999800000.0000",
+        previous: "19999999999800000.0000",
+        difference: "0.0000",
+        percent: "0.0000",
+        basis: "computed",
+        basisDate: "2026-02-01",
+      });
+    }),
+  );
+
+  it(
+    "measures from the earliest date it can value when the range starts before everything",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, seedDailyClose, seedManualNetWorth, usdInstrument }) => {
+      const owner = await seedPerson();
+      const usd = await usdInstrument();
+      const account = await seedAccount({ owner, kind: "bank" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "30000.00000000" }],
+      });
+      await seedDailyClose({ instrument: usd, date: "2026-01-31", close: "1.0000" });
+      await seedManualNetWorth({ date: "2023-01-01", amount: "10000.0000" });
+      await seedManualNetWorth({ date: "2023-12-31", amount: "20000.0000" });
+
+      const change = await netWorthChange(ALL_OWNERS, "2021-09-20", db);
+
+      // The earliest date anything is recorded, which is what "All" would have started at.
+      expect(change.basis).toBe("clamped");
+      expect(change.basisDate).toBe("2023-01-01");
+      expect(change.previous).toBe("10000.0000");
+    }),
+  );
+
+  it(
+    "reports nothing recorded as nothing rather than clamping to a date it does not have",
+    withDatabase(async ({ db }) => {
+      expect(await netWorthChange(ALL_OWNERS, "2025-01-01", db)).toEqual({
+        current: "0.0000",
+        previous: "0.0000",
+        difference: "0.0000",
+        percent: null,
+        basis: "none",
+        basisDate: null,
+      });
+    }),
+  );
 });
 
 describe("manualNetWorth", () => {

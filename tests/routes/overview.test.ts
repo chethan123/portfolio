@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
 
-import { RANGE_COOKIE } from "~/lib/chart-range";
+import { RANGE_COOKIE, isoDate, resolveRange } from "~/lib/chart-range";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -527,6 +527,121 @@ describe("the two series on one chart", () => {
   );
 });
 
+describe("where the change chip measures from", () => {
+  it(
+    "says so only when it had to measure later than the range asked for",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // 5Y is greyed out at this reach; the address is how it is reached anyway (spec 0008).
+      const clamped = await loader(args(get("/?range=5y")));
+
+      expect(clamped.change.basis).toBe("clamped");
+      expect(clamped.change.basisDate).toBe(daysAgo(200));
+      expect(renderRoute(Overview, "/", clamped)).toContain("Measured from");
+
+      // Older than the whole window, so the line never draws it — and it is still the baseline.
+      await ctx.seedManualNetWorth({ date: daysAgo(2000), amount: "5000.0000" });
+      await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "8000.0000" });
+
+      const carried = await loader(args(get("/?range=5y")));
+
+      expect(carried.change.basis).toBe("manual");
+      expect(carried.change.basisDate).toBe(daysAgo(2000));
+      expect(carried.change.previous).toBe("5000.0000");
+      expect(carried.manual.map((point) => point.date)).not.toContain(daysAgo(2000));
+
+      // A hand-typed baseline is the value in force, not an apology — no label (issue #347).
+      expect(renderRoute(Overview, "/", carried)).not.toContain("Measured from");
+    }),
+  );
+
+  it(
+    "measures a household younger than the default year from its first statement, with no range asked for",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // The landing screen: no query string, no cookie. 1Y is greyed out and the default resolves
+      // to a `since` 1Y reaches anyway, so the clamp is where a first-run household lands.
+      const data = await loader(args(get("/")));
+
+      expect(data.range).toBe("1y");
+      expect(data.change.basis).toBe("clamped");
+      expect(data.change.basisDate).toBe(daysAgo(200));
+      expect(data.change.percent).toBe("0.0000");
+      expect(renderRoute(Overview, "/", data)).toContain("Measured from");
+    }),
+  );
+
+  it(
+    "measures from a hand-typed point dated on the comparison date itself, and reports that date",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      // The resolver the loader uses, not a second copy of 5Y's calendar-month arithmetic.
+      const { since } = resolveRange("5y", {
+        today: isoDate(Date.now()),
+        earliest: { positionSet: daysAgo(200) },
+        surface: "household",
+      });
+
+      await ctx.seedManualNetWorth({ date: since, amount: "5000.0000" });
+
+      const data = await loader(args(get("/?range=5y")));
+
+      // `date <= since` reaches a point dated on `since`, so a basis date equal to it is not
+      // evidence of a computed basis.
+      expect(data.change.basis).toBe("manual");
+      expect(data.change.basisDate).toBe(since);
+      expect(data.change.previous).toBe("5000.0000");
+    }),
+  );
+
+  it(
+    "says the start of the range was empty for the one owner shown, while the household's own hand-typed history covers it",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      // Older than the 5Y start, so the household measures from it and never clamps.
+      await ctx.seedManualNetWorth({ date: daysAgo(2000), amount: "5000.0000" });
+
+      const household = await loader(args(get("/?range=5y")));
+
+      expect(household.change.basis).toBe("manual");
+      expect(renderRoute(Overview, "/", household)).not.toContain("Nothing was recorded");
+
+      const hers = await loader(args(get(`/?${ownerParam(alice.id)}&range=5y`)));
+
+      // Narrowed declines the household's hand-typed history (ADR-0008), so Alice clamps to her own
+      // first statement — and the sentence is about her, not about a household that has a figure here.
+      expect(hers.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", hers)).toContain(
+        "Nothing was recorded for this owner at the start of this range.",
+      );
+    }),
+  );
+
+  it(
+    "names two selected owners in the plural, and the whole household not at all",
+    withDatabase(async (ctx) => {
+      const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      const household = await loader(args(get("/?range=5y")));
+
+      expect(renderRoute(Overview, "/", household)).toContain(
+        "Nothing was recorded at the start of this range.",
+      );
+
+      const theirs = await loader(args(get(`/?${ownerParam(alice.id, bob.id)}&range=5y`)));
+
+      expect(theirs.change.basis).toBe("clamped");
+      expect(renderRoute(Overview, "/", theirs)).toContain(
+        "Nothing was recorded for these owners at the start of this range.",
+      );
+    }),
+  );
+});
+
 describe("the range in the query string", () => {
   it(
     "falls back to the default year when the range is not one the page offers",
@@ -792,13 +907,19 @@ describe("the number tail on the account rows", () => {
 
 describe("the 1D range on the Overview", () => {
   // Day zero, plus a session of observations. Daily close the day before is what an unobserved instant carries forward from; the quote is what the headline reads — both written the way one refresh writes them (story 8).
-  async function seedSession(ctx: TestContext, session: string, previous: string): Promise<void> {
+  // `firstSet` is where the household's history starts. The close on `previous` is seeded either way — backfill records one for a held instrument whatever date the positions start — so a `firstSet` on `session` clamps with that close in the table, on value and not on price (#347).
+  async function seedSession(
+    ctx: TestContext,
+    session: string,
+    previous: string,
+    firstSet: string = previous,
+  ): Promise<void> {
     const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
     const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
     await ctx.seedPositionSet({
       account,
-      asOf: previous,
+      asOf: firstSet,
       holdings: [{ instrument: vti, quantity: "100" }],
     });
     await ctx.seedDailyClose({ instrument: vti, date: previous, close: "100.0000" });
@@ -858,6 +979,31 @@ describe("the 1D range on the Overview", () => {
       // Yesterday's close was $100/share, session ended at $110 — "today's change" a brokerage's sense; the session's own provisional close would read zero.
       expect(data.change.previous).toBe("10000.0000");
       expect(data.change.difference).toBe("1000.0000");
+    }),
+  );
+
+  it(
+    "names the value it could not take at the previous close, rather than an empty range start, when the household's history begins on the session it plots",
+    withDatabase(async (ctx) => {
+      const session = daysAgo(1);
+      await seedSession(ctx, session, daysAgo(2), session);
+
+      const data = await loader(args(get("/?range=1d")));
+
+      // 1D compares against the day before the session, which day zero never reaches (chart-range.ts).
+      expect(data.change.basis).toBe("clamped");
+      expect(data.change.basisDate).toBe(session);
+
+      // The previous day's close is seeded and still values nothing — the session's own close is what the clamp reads. What the chip lacks is a value there, not a price.
+      expect(data.change.previous).toBe("11000.0000");
+
+      // Every instant the session logged is plotted: the range start is drawn, not empty.
+      expect(data.computed).toHaveLength(3);
+
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(markup).not.toContain("at the start of this range");
+      expect(markup).toContain("No value was available at the previous close. Measured from");
     }),
   );
 

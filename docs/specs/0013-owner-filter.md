@@ -167,6 +167,7 @@ required with no default so a new caller cannot forget them.
 | `accountTotals`, `netWorthChange`, `firstRecordedDate` | yes | household aggregates and the chart's reach |
 | `netWorthSeries`, `netWorthSessionSeries` | yes | narrowing goes **inside** the lateral |
 | `manualNetWorth` | **no** | the rule is a display decision about two lines; it belongs in the loader |
+| `manualNetWorthAt` | **no** | no owner column to narrow (ADR-0008); `netWorthChange` decides whether to ask it at all |
 | `accountTotal`, `accountHoldings`, `accountSeries`, `accountSessionSeries`, `accountFirstRecordedDate` | **no** | already narrower than an owner; ADR-0008's account-screen rule |
 | `latestObservedSession` | **no** | a fact about the price feed, not about holdings |
 
