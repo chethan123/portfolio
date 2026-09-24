@@ -13,11 +13,11 @@ import {
   RefusedUpload,
   StaleReviewError,
   answerAccountNumbers,
-  commitUpload,
   recordUpload,
   reviewForDraft,
   type CommitInput,
 } from "~/lib/uploads.server";
+import { sectionKey } from "~/lib/review-form";
 
 import {
   backendPid,
@@ -26,6 +26,7 @@ import {
   waitUntilBlocked,
 } from "./support/database.ts";
 import { RACE_PREFIX, clearRaces, makeFixtures, renumber } from "./support/fixtures.ts";
+import { onlySection, posted } from "./support/review.ts";
 
 import type { Database } from "~/lib/db.server";
 import type { StatementMapping } from "~/lib/statement";
@@ -107,7 +108,7 @@ type Planted = {
   x: SeededInstrument;
   y: SeededInstrument;
   z: SeededInstrument;
-  // The seeded set's own id — every commitUpload call here is dated after it, so it is the
+  // The seeded set's own id — every recordUpload call here is dated after it, so it is the
   // baseline every one of them must post to avoid an unrelated stale-baseline refusal (#181).
   baselineSetId: string;
 };
@@ -275,9 +276,14 @@ describe("the account lock", () => {
       await behindTheLock(
         database,
         (trx) =>
-          commitUpload(
+          recordUpload(
             draftId,
-            { accountId: account.id, asOf: today(), baselineSetId, reviewRevision },
+            {
+              accountId: account.id,
+              asOf: today(),
+              [sectionKey("baselineSetId", account.id)]: baselineSetId,
+              reviewRevision,
+            },
             trx,
           ),
         (trx) => revisePosition(account.id, x.id, { quantity: "111", costBasisPerShare: "" }, trx),
@@ -314,13 +320,18 @@ describe("the account lock", () => {
         behindTheLock(
           database,
           (trx) =>
-            commitUpload(
+            recordUpload(
               first,
-              { accountId: account.id, asOf: today(), baselineSetId, reviewRevision: firstRevision },
+              {
+                accountId: account.id,
+                asOf: today(),
+                [sectionKey("baselineSetId", account.id)]: baselineSetId,
+                reviewRevision: firstRevision,
+              },
               trx,
             ),
           (trx) =>
-            commitUpload(
+            recordUpload(
               second,
               { accountId: account.id, asOf: today(), reviewRevision: secondRevision },
               trx,
@@ -334,8 +345,9 @@ describe("the account lock", () => {
       expect(refusal.fieldErrors.form).not.toMatch(/measured against/);
       expect(refusal.fieldErrors.form).not.toMatch(/removes 2 of the 3 positions/);
       if (!(refusal instanceof StaleReviewError)) throw refusal;
-      expect(refusal.diff.currentCount).toBe(3);
-      expect(refusal.diff.removed).toHaveLength(2);
+      const section = onlySection(refusal.diff);
+      expect(section.currentCount).toBe(3);
+      expect(section.removed).toHaveLength(2);
       expect(await latestQuantities(database, account.id)).toEqual({
         [x.id]: "10.00000000",
         [y.id]: "20.00000000",
@@ -379,12 +391,12 @@ describe("the account lock", () => {
         behindTheLock(
           database,
           (trx) =>
-            commitUpload(
+            recordUpload(
               draftId,
               {
                 accountId: account.id,
                 asOf: today(),
-                baselineSetId: baseline.id,
+                [sectionKey("baselineSetId", account.id)]: baseline.id,
                 reviewRevision,
               },
               trx,
@@ -486,9 +498,14 @@ describe("the account lock", () => {
       const reviewRevision = await revisionFor(database, draftId, today());
 
       await behindAnOwnerChange(database, account, newOwner, (trx) =>
-        commitUpload(
+        recordUpload(
           draftId,
-          { accountId: account.id, asOf: today(), baselineSetId, reviewRevision },
+          {
+            accountId: account.id,
+            asOf: today(),
+            [sectionKey("baselineSetId", account.id)]: baselineSetId,
+            reviewRevision,
+          },
           trx,
         ),
       );
@@ -588,23 +605,9 @@ async function plantSeveral(database: Kysely<Database>, tag: string): Promise<Pl
     hadFirstSightings: false,
   });
 
-  const fields = await reviewedFields(database, draft.id);
+  const review = await reviewForDraft(draft.id, today(), database);
+  const fields = posted(review, { asOf: today() });
   return { lower, higher, x, name, draftId: draft.id, fields };
-}
-
-/** A multi-account draft's review form, as the page posts it. */
-async function reviewedFields(database: Kysely<Database>, draftId: string): Promise<CommitInput> {
-  const review = await reviewForDraft(draftId, today(), database);
-  const fields: CommitInput = {
-    asOf: today(),
-    reviewedAsOf: review.asOfInput,
-    reviewRevision: review.reviewRevision ?? "",
-  };
-  for (const section of review.accounts ?? []) {
-    fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
-    fields[`appendWatermark-${section.accountId}`] = section.appendWatermark ?? "";
-  }
-  return fields;
 }
 
 type PlantedNumber = {
@@ -712,7 +715,8 @@ describe("a multi-account commit's locks", () => {
         mapping: SEVERAL,
         hadFirstSightings: false,
       });
-      const loserFields = await reviewedFields(database, loser.id);
+      const loserReview = await reviewForDraft(loser.id, today(), database);
+      const loserFields = posted(loserReview, { asOf: today() });
 
       const refusal = await refusalOf(() =>
         behindTheLock(
@@ -743,7 +747,8 @@ describe("a multi-account commit's locks", () => {
         externalAccountNumber: number,
       });
       const draftId = await draftNaming();
-      const fields = await reviewedFields(database, draftId);
+      const review = await reviewForDraft(draftId, today(), database);
+      const fields = posted(review, { asOf: today() });
 
       // After review the number moves, so the commit's unlocked read locks the other account...
       await renumber(database, home, null);
@@ -787,7 +792,8 @@ describe("an answered account number at commit", () => {
         { "number-0": number, "accountId-0": answered.id },
         database,
       );
-      const fields = await reviewedFields(database, draftId);
+      const review = await reviewForDraft(draftId, today(), database);
+      const fields = posted(review, { asOf: today() });
 
       const refusal = await refusalOf(() =>
         behindTheLock(

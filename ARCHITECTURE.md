@@ -562,7 +562,7 @@ rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
-| Commit an upload | `uploads.server.ts` → `recordUpload` (`commitUpload` for an account chosen up front, `commitMultiAccountUpload` for a file of several, routed by `statement-routing.server.ts`) | `position_set` + `holding`s, one per account for several, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` for each account still recording none, from the form for one account or from an answered `upload_draft_account_answer` row for several | Yes, a new set (or one per routed account) |
+| Commit an upload | `uploads.server.ts` → `recordUpload` (locks the account chosen up front through `withAccountLock`, or each routed account through `withAccountLocks` for a file of several, routed by `statement-routing.server.ts`, then commits through `commitUnderLocks`) | `position_set` + `holding`s, one per account for several, promotes the draft's `upload_draft_answer` rows into `instrument_alias` for the strings the file names, deletes the draft, captures `account.external_account_number` for each account still recording none, from the form for one account or from an answered `upload_draft_account_answer` row for several | Yes, a new set (or one per routed account) |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes, a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
 | Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `upload_draft_answer` (the draft's own answer, never `instrument_alias`) | Yes, with one compensating delete: an instrument created for a string that vocabulary gained meanwhile, or that the same draft's earlier submit already answered, is removed rather than left as a duplicate |
@@ -1016,7 +1016,7 @@ flowchart TD
     end
 
     subgraph R["step 4 — REVIEW"]
-        R1["readCsv"] --> R2["parseStatement"] --> R3["assembleDiff<br/><i>folds AGAIN, by RESOLVED instrument</i>"] --> R4["commitUpload<br/>one transaction"]
+        R1["readCsv"] --> R2["parseStatement"] --> R3["assembleDiff<br/><i>folds AGAIN, by RESOLVED instrument</i>"] --> R4["recordUpload<br/>one transaction"]
     end
 
     DA[("upload_draft_answer<br/><i>this draft's answers</i>")]
@@ -1100,7 +1100,7 @@ stateDiagram-v2
     Review --> Review: saved mapping exposes a blank-instrument data row —<br/>show the source problem, no diff or commit
     Review --> Instruments: a first sighting reappeared
     Review --> Review: guards refuse — see the commit flowchart
-    Review --> Committed: commitUpload() — one transaction
+    Review --> Committed: recordUpload() — one transaction
     Committed --> [*]: redirect /accounts/:id?uploaded=<setId>
 
     Columns --> Expired: swept at 24h / already committed /<br/>account closed underneath it
@@ -1111,7 +1111,7 @@ stateDiagram-v2
 
 This state machine, like the pipeline above it, draws the single-account path (and a null-account
 draft adds its own accounts step between Columns and Instruments, spec 0023): several accounts
-commit through `recordUpload`, not `commitUpload()` shown at Review → Committed, and land on
+also commit through `recordUpload`, shown at Review → Committed, but land on
 `/upload/done` rather than the redirect shown at Committed → `[*]`.
 
 **Where the draft got to is a property of the row, not a status column.** `mapping` is null until the
@@ -1190,7 +1190,7 @@ sequenceDiagram
 ```
 
 **The instrument and classification rows are written at this step; the alias is not.** The answer
-lands on the draft, and `commitUpload` promotes it into vocabulary for the strings the recorded file
+lands on the draft, and `commitUnderLocks` promotes it into vocabulary for the strings the recorded file
 names. Until then it is read by this draft alone, so a wrong match made in an upload nobody finished
 never resolves the next one silently (audit QA-04, issue #291). The cost is deliberate: a file
 corrected and re-uploaded *before* the first attempt was recorded asks its questions again. A
@@ -1201,12 +1201,13 @@ There is deliberately **no skip**. A skipped row is a holding silently missing f
 
 #### Commit: the flow's one write
 
-`commitUpload` is the deepest function in the codebase, three parameters over an entry check, the
-account lock, its guards and a transaction. The order is the design:
+`commitUnderLocks` is the deepest function in the codebase, its guards and a transaction;
+`recordUpload` reaches it after its entry check and account lock (`withAccountLock`). The order is
+the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> A0{"draft still there?<br/>(only to learn which account)"}
+    A["recordUpload(draftId, raw)"] --> A0{"draft still there?<br/>(only to learn which account)"}
     A0 -->|no| R0["404 — swept, or already committed"]
     A0 -->|yes| T["BEGIN, lock the account row<br/>(withAccountLock, §7.2)"]
     T --> A1{"draft still there,<br/>read under the account lock?"}
@@ -1231,15 +1232,15 @@ flowchart TD
     H -->|no| J{"posted baselineSetId ≠ the<br/>diff's; filed behind and<br/>unconfirmed; or majority removed<br/>and unconfirmed?"}
     J -->|any| R7["refuse, naming every applicable<br/>reason — the stale-baseline sentence<br/>fires whenever the baseline moved and<br/>no unconfirmed filed-behind demand is<br/>left to subsume it (#181)"]
     J -->|none| T0["INSERT instrument_alias FROM upload_draft_answer<br/>for the strings the file names — ON CONFLICT: vocabulary wins"]
-    T0 --> T1["DELETE the draft"]
+    T0 --> T5["UPDATE account.external_account_number<br/>only where still null"]
+    T5 --> T1["DELETE the draft"]
     T1 --> T2{"0 rows deleted?"}
-    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT, promotion included"]
+    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT, promotion and number write included"]
     T2 -->|no| T2b{"vocabulary for the file's strings,<br/>read FOR SHARE: any meaning differing<br/>from the diff's, or missing?"}
-    T2b -->|yes| R9["refuse: recorded, repointed or forgotten<br/>under the review; promotion rolled back"]
+    T2b -->|yes| R9["refuse: recorded, repointed or forgotten<br/>under the review; promotion and number write rolled back"]
     T2b -->|no| T3["INSERT position_set"]
     T3 --> T4["INSERT holdings"]
-    T4 --> T5["UPDATE account.external_account_number<br/>only where still null"]
-    T5 --> T6["COMMIT"]
+    T4 --> T6["COMMIT"]
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
@@ -1285,24 +1286,26 @@ These deserve emphasis:
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking every multiplication before storing turns a site-wide outage into one sentence
   about one row.
-- **One helper owns the transaction and its lock order is account → draft → aliases.** The first
-  draft read only finds the account for `withAccountLock`; inside its callback the commit locks and
-  re-reads the draft, then `assembleDiff` resolves through `aliasesFor`. After every refusal passes,
-  it promotes the file's draft answers, deletes the draft, and re-reads vocabulary `FOR SHARE`.
-  That late read must still match the effective map used for Review: it catches another draft's
-  promotion and a Settings repoint or forget landing between the earlier read and this lock. Any
-  difference rolls promotion and deletion back. The promotion stays before deletion because the
-  latter cascades the answers away; zero deleted rows still aborts the transaction.
+- **`commitUnderLocks` owns the transaction and its lock order is account → draft → aliases.** The
+  first draft read only finds the account for `withAccountLock`; inside its callback the commit locks
+  and re-reads the draft, then `assembleDiff` resolves through `aliasesFor`. After every refusal
+  passes, it promotes the file's draft answers, writes the account number, deletes the draft, and
+  re-reads vocabulary `FOR SHARE`. That late read must still match the effective map used for
+  Review: it catches another draft's promotion and a Settings repoint or forget landing between the
+  earlier read and this lock. Any difference rolls promotion, the number write and deletion back.
+  The promotion and number write stay before deletion because the latter cascades the answers away;
+  zero deleted rows still aborts the transaction.
 
 **On this path — an account chosen up front — the account number is only a guard.** A file naming an
 account different from the one the draft targets is refused; it is never silently rerouted to the
-account it names. It is also *captured*, inside the same transaction: when
-the account has no number recorded and the committed file carries one, `commitUploadUnderLock` writes
-it onto the account, guarded by `where external_account_number is null`; the account lock makes a
-concurrent upload impossible, and the predicate stays as the write's own statement of the rule. The
+account it names. It is also *captured*, inside the same transaction: `chosenAccountNumber` reads the
+folded rows, and when the account has no number recorded and the committed file carries one,
+`commitUnderLocks` writes it onto the account, guarded by `where external_account_number is null`;
+the account lock makes a concurrent upload impossible, and the predicate stays as the write's own
+statement of the rule. The
 guard arms itself on the first upload, and every later statement is checked against it. Zero rows
 written refuses (a stored blank): a blank is not none to the guard's `is null` predicate, so
-`recordAccountNumber` (`uploads.server.ts:2096`) treats it as a case Settings must clear first
+`recordAccountNumber` (`uploads.server.ts`) treats it as a case Settings must clear first
 rather than write over silently.
 
 On the other path — no account chosen, "Several accounts" — the same column is the selector instead
@@ -1764,11 +1767,11 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | Two commits of one draft | Both take the account lock; the second re-reads the draft under it, finds it gone, and gets its 404 before deciding anything. Inside the transaction the draft's answers are promoted, then the draft is deleted; the draft row lock prevents the 24-hour sweep from taking it in between, and the zero-row check remains the final defense | `uploads.server.ts` |
 | Two drafts resolving the same string | Each writes its own draft-scoped answer; whichever is recorded first wins the vocabulary row (`insert … on conflict do nothing` at promotion), and a string vocabulary gained mid-draft is read over the draft's answer | `instrument-resolution.server.ts`, `uploads.server.ts` |
 | Two submits of one draft | `select … for update` on the draft row serialises them; the second finds the first's answers, deletes any instrument it created for one, and returns what was there | `instrument-resolution.server.ts` |
-| A Columns save, effective alias change or account-history write landing after Review | Under `withAccountLock`, the commit locks and re-reads the draft, rebuilds the effective alias map and dated diff, then compares the posted review revision before writing. A changed raw file, mapping, draft answer, vocabulary meaning, folded row, date, baseline set, latest-set context or account-wide append watermark refuses; the watermark catches a backdated append that changes neither selected set. Prices are intentionally absent from the revision | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
-| A string recorded, repointed or forgotten after the commit's revision comparison | Promotion uses `on conflict do nothing`, then the commit re-reads vocabulary for the file's strings inside its transaction `for share` and refuses on any difference or absence; the throw takes promotion and draft deletion with it. Promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` (`commitUploadUnderLock`) |
-| A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUploadUnderLock`) |
+| A Columns save, effective alias change or account-history write landing after Review | Under `withAccountLock`, the commit locks and re-reads the draft, rebuilds the effective alias map and dated diff, then compares the posted review revision before writing. A changed raw file, mapping, draft answer, vocabulary meaning, folded row, date, baseline set, latest-set context or account-wide append watermark refuses; the watermark catches a backdated append that changes neither selected set. Prices are intentionally absent from the revision | `uploads.server.ts` (`assembleDiff`, `commitUnderLocks`) |
+| A string recorded, repointed or forgotten after the commit's revision comparison | Promotion uses `on conflict do nothing`, then the commit re-reads vocabulary for the file's strings inside its transaction `for share` and refuses on any difference or absence; the throw takes promotion and draft deletion with it. Promotion inserts in `raw_string` order so two commits sharing strings cannot deadlock | `uploads.server.ts` (`commitUnderLocks`) |
+| A statement's baseline moving between the review's diff and the commit — a date edited after a refusal, or another writer landing a set in the gap (#181) | The confirmation is bound to the set it was drawn against: the commit re-resolves the dated baseline under the account lock and refuses whenever the posted `baselineSetId` disagrees, carrying the fresh diff back for the reader to confirm instead. Compare-and-set on a value read outside the transaction, the same shape as the alias confirm below, not a second lock | `uploads.server.ts` (`assembleDiff`, `commitUnderLocks`) |
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
-| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the **bare** account row, then the account read joined to its owner in a second statement, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). Two statements, because a lock taken through the join re-checks that join on being granted against the person tuple the first scan pinned, so an owner change during the wait dropped the row and 404'd a live account (#332); after the lock, the read is a fresh statement and sees the committed owner. `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `closeAccount` and `recordUpload` — directly for one account (`commitUpload`), or nested per routed account, ascending `compareIds` order, through `withAccountLocks` for several |
+| Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the **bare** account row, then the account read joined to its owner in a second statement, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). Two statements, because a lock taken through the join re-checks that join on being granted against the person tuple the first scan pinned, so an owner change during the wait dropped the row and 404'd a live account (#332); after the lock, the read is a fresh statement and sees the committed owner. `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `closeAccount` and `recordUpload` — directly for one account, or nested per routed account, ascending `compareIds` order, through `withAccountLocks` for several |
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
 | A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
@@ -1776,9 +1779,9 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts:260`; [#311](https://github.com/chethan123/portfolio/issues/311) |
 | An upload captures an account number while its settings form is open | **Unguarded.** The stale form posts the old blank value and `updateAccount` writes it unconditionally, erasing the upload's guard for future statements | `accounts.server.ts:260`; [#312](https://github.com/chethan123/portfolio/issues/312) |
 | Two writers recording one account number on two open accounts, a Settings save or an upload's capture, in any pair | The partial unique index `account_open_number_unique`, not a read first: Settings takes no lock and a commit locks only its own account, so both could pass a read. The later writer's `23505` is caught — under a savepoint when the write runs inside a transaction, as a commit's does; Settings runs outside one in production, so there the error simply propagates — the holder re-read to name it, and the write refused, as a field message from Settings and a `RefusedUpload` from a commit | `accounts.server.ts` (`refusingDuplicateNumber`), `migrations/0015_account_open_number_unique.sql` |
-| Two upload commits over the same account(s), at least one of them several accounts | Both lock every account they touch through `withAccountLock`/`withAccountLocks`, ascending `compareIds` order, so the second queues on whichever shared account the first reached first rather than deadlocking. Once the first commits, the second's own re-read under its locks — the re-parsed draft, the re-routed groups, the re-resolved diff — no longer matches what it posted: a changed review revision refuses it outright, and history the first wrote that leaves the diff's own shape unchanged still moves the affected account's append watermark, which the second's per-account check (decision 9) refuses, naming that account | `accounts.server.ts` (`withAccountLock`, `withAccountLocks`), `uploads.server.ts` (`commitUploadUnderLock`, `commitMultiAccountUnderLocks`) |
-| A multi-account draft's answer naming an account that Settings then records a number on | `updateAccount` takes no lock the draft holds. The router re-reads `account.external_account_number` on every subsequent read of the draft — including the unlocked read `commitMultiAccountUpload` takes only to learn which accounts to lock — so the now-recorded number outranks the stale answer and sends the reader back to the accounts step (`DraftNotReadyError`) rather than routing rows there | `statement-routing.server.ts` (`routeStatement`, the `stale-answer` problem), `uploads.server.ts` (`readyParse`) |
-| A number recorded, cleared or moved to a different open account while a multi-account commit waited on its locks | `commitMultiAccountUpload`'s unlocked read picks which accounts to lock; `commitMultiAccountUnderLocks` re-routes under those locks and refuses when the re-routed rows now name an account `withAccountLocks` did not lock, rather than routing there unlocked — `StaleReviewError` (`"rerouted"`), naming where the rows now go | `uploads.server.ts:1878-1885` (`commitMultiAccountUnderLocks`) |
+| Two upload commits over the same account(s), at least one of them several accounts | Both lock every account they touch through `withAccountLock`/`withAccountLocks`, ascending `compareIds` order, so the second queues on whichever shared account the first reached first rather than deadlocking. Once the first commits, the second's own re-read under its locks — the re-parsed draft, the re-routed groups, the re-resolved diff — no longer matches what it posted: a changed review revision refuses it outright, and history the first wrote that leaves the diff's own shape unchanged still moves the affected account's append watermark, which the second's per-account check (decision 9) refuses, naming that account | `accounts.server.ts` (`withAccountLock`, `withAccountLocks`), `uploads.server.ts` (`commitUnderLocks`) |
+| A multi-account draft's answer naming an account that Settings then records a number on | `updateAccount` takes no lock the draft holds. The router re-reads `account.external_account_number` on every subsequent read of the draft — including the unlocked read `recordUpload` takes only to learn which accounts to lock — so the now-recorded number outranks the stale answer and sends the reader back to the accounts step (`DraftNotReadyError`) rather than routing rows there | `statement-routing.server.ts` (`routeStatement`, the `stale-answer` problem), `uploads.server.ts` (`readyParse`) |
+| A number recorded, cleared or moved to a different open account while a multi-account commit waited on its locks | `recordUpload`'s unlocked read picks which accounts to lock; `commitUnderLocks` re-routes under those locks and refuses when the re-routed rows now name an account `withAccountLocks` did not lock, rather than routing there unlocked — `StaleReviewError` (`"rerouted"`), naming where the rows now go | `uploads.server.ts` (`commitUnderLocks`) |
 | An account closed while a form or draft sat open | Every writer reads `closed_at` under the account lock, before field validation, so one that waited while the account closed refuses rather than appending to a closed account. `closeAccount` runs inside the same lock so that every writer of the row follows one rule and its closing instant is stamped after any in-flight writer commits; its `update` alone would already queue on that row lock | every writer, `accounts.server.ts:345` |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
@@ -2384,7 +2387,7 @@ still live in the current code:
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, `/healthz`'s report, and the transaction-or-reuse branch the test seam forces on writers and readers alike: `inTransaction` for every writer, `inOneSnapshot` for a multi-statement read that needs one snapshot (§7.2) |
 | `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `manualNetWorthAt`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
-| `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `recordUpload`, the ingest flow's one write: `commitUpload` for an account chosen up front, `commitMultiAccountUpload` for a file of several, routed by `statement-routing.server.ts`. Each transaction enters through `withAccountLock`, or nested per routed account through `withAccountLocks`, locks the draft, then promotes and verifies aliases before appending history (§6.1, §7.2). Also `recordedStatements`, the done page's own reader, off `position_set` ids rather than the commit |
+| `uploads.server.ts` | Drafts, multipart reading, the dated diff and its review revision, and `recordUpload`, the ingest flow's one write: `commitUnderLocks` for an account chosen up front or a file of several, routed by `statement-routing.server.ts`. Each transaction enters through `withAccountLock`, or nested per routed account through `withAccountLocks`, locks the draft, then promotes, records the account number and verifies aliases before appending history (§6.1, §7.2). Also `recordedStatements`, the done page's own reader, off `position_set` ids rather than the commit |
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping, scoped by institution or, null, by the multi-account draft alone (ADR-0015) |
@@ -2526,7 +2529,7 @@ also export pure helpers for testing.
 | `0010_price_backfill.sql` | `price_backfill`, one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
 | `0012_lock.sql` | `passkey` and `unlock_grant`, the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
-| `0013_upload_draft_answer.sql` | `upload_draft_answer`, a draft's own answers to its first sightings, keyed like `instrument_alias` and scoped by draft. `commitUpload` promotes the rows the recorded file names into vocabulary, and the draft's delete cascades the rest away (ADR-0013) |
+| `0013_upload_draft_answer.sql` | `upload_draft_answer`, a draft's own answers to its first sightings, keyed like `instrument_alias` and scoped by draft. `commitUnderLocks` promotes the rows the recorded file names into vocabulary, and the draft's delete cascades the rest away (ADR-0013) |
 | `0014_position_set_created_at.sql` | `position_set.created_at` defaults to `statement_timestamp()`, the insert, not `now()`, the `BEGIN`, so a writer that waited for the account lock still sorts after the set it copied (§7.2) |
 | `0015_account_open_number_unique.sql` | `account_open_number_unique`, a partial unique index over open accounts naming an account number: at most one may record any given one (ADR-0015). Trims stored numbers first, a blank to null. Fails naming any duplicates already recorded, rather than choosing between them; its comment supersedes `0001`'s original comment on the column, which called it a guard only |
 | `0016_multi_account_draft_and_mapping.sql` | Drops `not null` from `upload_draft.account_id` (a null row is the multi-account draft) and `column_mapping.institution` (null is the multi-account scope), replacing `column_mapping_one_per_fingerprint` with the two partial indexes above so the two scopes can never find or overwrite each other's mapping for one header |

@@ -9,9 +9,10 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
 import { setBalance } from "~/lib/balances.server";
+import { sectionKey } from "~/lib/review-form";
 import {
   RefusedUpload,
-  commitUpload,
+  recordUpload,
   rememberMapping,
   reviewForDraft,
 } from "~/lib/uploads.server";
@@ -21,6 +22,7 @@ import { loader as accountPage } from "../app/routes/account.tsx";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { args, get } from "./support/routes.ts";
+import { onlyRecorded, onlySection, posted } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { SeededAccount } from "./support/fixtures.ts";
@@ -116,11 +118,7 @@ describe("Review's diff for a statement dated between two existing ones", () => 
       // 1. The first submit is refused, and the message names both dates.
       let refusal: RefusedUpload;
       try {
-        await commitUpload(
-          draftId,
-          { accountId: account.id, reviewRevision: reviewed.reviewRevision ?? "" },
-          db,
-        );
+        await recordUpload(draftId, posted(reviewed), db);
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -133,33 +131,29 @@ describe("Review's diff for a statement dated between two existing ones", () => 
       // so ALP's "before" reads 100 and BET reads as a removal, which is what the refused diff
       // must already show: reading against 2026-09-09 instead would have ALP's "before" at 150,
       // and BET, already absent there, never appear at all.
-      expect(refusal.diff.currentCount).toBe(2);
+      const refusedSection = onlySection(refusal.diff);
+      expect(refusedSection.currentCount).toBe(2);
       expect(
-        refusal.diff.updated.find((row) => row.instrumentId === alpha.id)?.quantityBefore,
+        refusedSection.updated.find((row) => row.instrumentId === alpha.id)?.quantityBefore,
       ).toBe("100.00000000");
-      expect(refusal.diff.removed.some((row) => row.instrumentId === beta.id)).toBe(true);
+      expect(refusedSection.removed.some((row) => row.instrumentId === beta.id)).toBe(true);
 
       // 2. A second submit, carrying the refusal's own baseline and its confirmation, lands.
-      const committed = await commitUpload(
+      const committed = onlyRecorded(await recordUpload(
         draftId,
-        {
-          accountId: account.id,
-          baselineSetId: refusal.diff.baselineSetId ?? "",
-          confirmFiledBehind: "true",
-          reviewRevision: refusal.diff.reviewRevision ?? "",
-        },
+        posted(refusal.diff, { [sectionKey("confirmFiledBehind", account.id)]: "true" }),
         db,
-      );
+      ));
 
       // 3. receipt.counts equals the counts of the diff the refusal carried.
       const page = await accountPage(
         args(get(`/accounts/${account.id}?uploaded=${committed.setId}`), { accountId: account.id }),
       );
       expect(page.receipt?.counts).toEqual({
-        added: refusal.diff.added.length,
-        updated: refusal.diff.updated.length,
-        unchanged: refusal.diff.unchangedCount,
-        removed: refusal.diff.removed.length,
+        added: refusedSection.added.length,
+        updated: refusedSection.updated.length,
+        unchanged: refusedSection.unchangedCount,
+        removed: refusedSection.removed.length,
       });
       // Freshly committed and already filed behind — the receipt gate must say so from the start.
       expect(page.receipt?.isCurrent).toBe(false);
@@ -204,15 +198,7 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
       // before 2026-07-31 means an empty baseline, so there is no majority to ask about.
       let refusal: RefusedUpload;
       try {
-        await commitUpload(
-          draftId,
-          {
-            accountId: account.id,
-            asOf: "2026-07-31",
-            reviewRevision: reviewed.reviewRevision ?? "",
-          },
-          db,
-        );
+        await recordUpload(draftId, posted(reviewed, { asOf: "2026-07-31" }), db);
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -220,22 +206,20 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
       }
       expect(refusal.fieldErrors.form).toMatch(/2026-07-31/);
       expect(refusal.fieldErrors.form).toMatch(/2026-09-15/);
-      expect(refusal.diff.firstStatement).toBe(true);
-      expect(refusal.diff.majorityRemoved).toBe(false);
+      const refusedSection = onlySection(refusal.diff);
+      expect(refusedSection.firstStatement).toBe(true);
+      expect(refusedSection.majorityRemoved).toBe(false);
 
       // 2. A second submit, carrying the refusal's own (empty) baseline and its confirmation,
       // lands with no confirmRemovals — there is nothing at this baseline to confirm removing.
-      const committed = await commitUpload(
+      const committed = onlyRecorded(await recordUpload(
         draftId,
-        {
-          accountId: account.id,
+        posted(refusal.diff, {
           asOf: "2026-07-31",
-          baselineSetId: refusal.diff.baselineSetId ?? "",
-          confirmFiledBehind: "true",
-          reviewRevision: refusal.diff.reviewRevision ?? "",
-        },
+          [sectionKey("confirmFiledBehind", account.id)]: "true",
+        }),
         db,
-      );
+      ));
 
       // 3. receipt.counts and firstStatement agree with the diff the refusal carried.
       const page = await accountPage(
@@ -243,10 +227,10 @@ describe("a majority-removal tick for a removal a backdated upload will never ma
       );
       expect(page.receipt?.firstStatement).toBe(true);
       expect(page.receipt?.counts).toEqual({
-        added: refusal.diff.added.length,
-        updated: refusal.diff.updated.length,
-        unchanged: refusal.diff.unchangedCount,
-        removed: refusal.diff.removed.length,
+        added: refusedSection.added.length,
+        updated: refusedSection.updated.length,
+        unchanged: refusedSection.unchangedCount,
+        removed: refusedSection.removed.length,
       });
       // Freshly committed and already filed behind — the receipt gate must say so from the start.
       expect(page.receipt?.isCurrent).toBe(false);

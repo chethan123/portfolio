@@ -12,6 +12,7 @@ import {
   action as reviewAction,
   loader as reviewLoader,
 } from "../../app/routes/upload/review.tsx";
+import { reviewedFields } from "~/lib/review-form";
 import { STALE_REVIEW_MESSAGE, rememberMapping } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -384,14 +385,7 @@ describe("an answer gone stale before the commit", () => {
 
       await renumber(ctx.db, roth, "R-1");
 
-      const fields: Record<string, string> = {
-        accountId: "",
-        reviewedAsOf: review.diff.asOfInput,
-        reviewRevision: review.diff.reviewRevision ?? "",
-      };
-      for (const section of review.diff.accounts ?? []) {
-        fields[`baselineSetId-${section.accountId}`] = section.baselineSetId ?? "";
-      }
+      const fields = reviewedFields(review.diff);
       expect(
         await redirectTo(() =>
           reviewAction(args(post(`/upload/${draftId}/review`, fields), { draftId })),

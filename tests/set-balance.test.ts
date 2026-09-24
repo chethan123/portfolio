@@ -231,7 +231,7 @@ describe("setBalance", () => {
   it(
     "refuses an account holding securities under a bank label, which the kind alone cannot catch",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // regression (SET-1): a kind change can't reach this state anymore, but an upload still can — commitUpload never reads kind
+      // regression (SET-1): a kind change can't reach this state anymore, but an upload still can — recordUpload never reads kind
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });

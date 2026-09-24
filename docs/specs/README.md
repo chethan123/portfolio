@@ -51,6 +51,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0021](0021-price-health.md) | Pricing health as non-gating `/healthz` data: scheduled pricing armed from middleware rather than the first page render, then live worker reachability and passive scheduler/fetch status without probing Yahoo (implemented) |
 | [0022](0022-chart-grain.md) | A chart range of at most 92 days drawn at a grain from the observation log, on a per-day axis (ADR-0014) |
 | [0023](0023-multi-account-upload.md) | One file covering several accounts, each row routed by its account number; the number becomes the selector there and stays the guard elsewhere (ADR-0015; implemented) |
+| [0024](0024-one-commit-over-routed-sections.md) | One assembler, one commit and one review revision over per-account sections; a chosen account is a routing of one (architecture review 2026-09-24 §2.1) |
 
 ## The ticket directories
 

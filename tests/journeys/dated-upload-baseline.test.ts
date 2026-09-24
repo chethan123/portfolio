@@ -8,9 +8,10 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { ALL_OWNERS } from "~/lib/owner-filter";
 import { revisePosition } from "~/lib/positions.server";
+import { sectionKey } from "~/lib/review-form";
 import {
   RefusedUpload,
-  commitUpload,
+  recordUpload,
   rememberMapping,
   reviewForDraft,
 } from "~/lib/uploads.server";
@@ -20,6 +21,7 @@ import { loader as accountPage } from "../../app/routes/account.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get } from "../support/routes.ts";
+import { onlyRecorded, onlySection, posted } from "../support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { SeededAccount } from "../support/fixtures.ts";
@@ -101,16 +103,7 @@ describe("an upload dated behind the account's current statement", () => {
       const reviewed = await reviewForDraft(draftId, "2026-08-31", db);
       let refusal: RefusedUpload;
       try {
-        await commitUpload(
-          draftId,
-          {
-            accountId: account.id,
-            asOf: "2026-08-31",
-            baselineSetId: reviewed.baselineSetId ?? "",
-            reviewRevision: reviewed.reviewRevision ?? "",
-          },
-          db,
-        );
+        await recordUpload(draftId, posted(reviewed, { asOf: "2026-08-31" }), db);
         throw new Error("Expected the first submit to be refused, and it was not.");
       } catch (error) {
         if (!(error instanceof RefusedUpload)) throw error;
@@ -123,17 +116,15 @@ describe("an upload dated behind the account's current statement", () => {
       expect(refusal.fieldErrors.form).not.toMatch(/recorded history changed/);
 
       // 2. A second submit, carrying the refusal's own baselineSetId and its confirmation, lands.
-      const committed = await commitUpload(
+      const refusedSection = onlySection(refusal.diff);
+      const committed = onlyRecorded(await recordUpload(
         draftId,
-        {
-          accountId: account.id,
+        posted(refusal.diff, {
           asOf: "2026-08-31",
-          baselineSetId: refusal.diff.baselineSetId ?? "",
-          confirmFiledBehind: "true",
-          reviewRevision: refusal.diff.reviewRevision ?? "",
-        },
+          [sectionKey("confirmFiledBehind", account.id)]: "true",
+        }),
         db,
-      );
+      ));
 
       // 3. receipt.counts equals the counts of the diff the refusal carried — the three-way
       // agreement between Review, the commit and the receipt this ticket exists to establish.
@@ -141,10 +132,10 @@ describe("an upload dated behind the account's current statement", () => {
         args(get(`/accounts/${account.id}?uploaded=${committed.setId}`), { accountId: account.id }),
       );
       expect(page.receipt?.counts).toEqual({
-        added: refusal.diff.added.length,
-        updated: refusal.diff.updated.length,
-        unchanged: refusal.diff.unchangedCount,
-        removed: refusal.diff.removed.length,
+        added: refusedSection.added.length,
+        updated: refusedSection.updated.length,
+        unchanged: refusedSection.unchangedCount,
+        removed: refusedSection.removed.length,
       });
       // Freshly committed and already filed behind — the receipt gate must say so from the start.
       expect(page.receipt?.isCurrent).toBe(false);
