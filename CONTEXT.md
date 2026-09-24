@@ -98,6 +98,32 @@ The value at the last plotted point in the chosen chart range. It uses that poin
 and can differ from current net worth, even when the range ends today.
 _Avoid_: current value, latest value, ending balance, final value.
 
+**Change basis**:
+Which history the change chip measured its earlier figure from, at its comparison date: `computed`
+(positions valued there), `manual` (the hand-typed value in force there), `clamped` (the earliest
+date the reading can value), or `none` (nothing recorded). The comparison date is the range's start,
+except under 1D, where it is the day before the session: there the chip asks for a value at the
+previous close, which a household whose history begins on the session itself has none of, however
+many closes the market recorded. The basis date is where that figure was actually taken — the
+comparison date under `computed`, and under `manual` too when a hand-typed point falls on it.
+_Avoid_: baseline (that names what a statement's diff is compared to), start value, reference point.
+
+**Clamped**:
+The change basis used when nothing the reading can value reaches the comparison date: the chip
+measures from the earliest date it can value instead, and says so under the figure. It is read off
+recorded positions and hand-typed points alone, never off stored prices, so a clamp says a value was
+missing there and nothing about the closes. Clamping moves where the change is measured from and
+never what the line plots — under 1D the line draws the whole session while the chip clamps, because
+what is missing is a value at the previous close, not a range start.
+_Avoid_: truncated, capped, adjusted, partial range.
+
+**In force**:
+What a hand-typed net worth point is on its own date and every date after it, until the next one
+replaces it — carried forward like a price, however old it gets. The value in force on a date need
+not be a point the line draws. The hand-typed history is the household's and has no owner, so a
+reading narrowed to an owner has no value in force at all.
+_Avoid_: latest manual value, effective value, interpolated, as-of value.
+
 ### How prices stay fresh
 
 **Refresh cadence**:
