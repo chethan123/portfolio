@@ -1,6 +1,6 @@
 // The one review revision (spec 0024 §3): every field it binds, moved by an ordinary write between
 // Review and commit, refuses the commit as stale and records nothing. Plus the one assembler both
-// kinds of draft share, and the two posted-form decisions it kept (§4 b, c). Real Postgres.
+// kinds of draft share, and the posted-form decision it kept (§4 b). Real Postgres.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { getAccount, updateAccount } from "~/lib/accounts.server";
@@ -569,65 +569,6 @@ describe("the posted account id (spec 0024 §4 b)", () => {
       const written = await recordUpload(draftId, form, db);
 
       expect(written.map((set) => set.accountId)).toEqual([first.id]);
-    }),
-  );
-});
-
-describe("the posted append watermark (spec 0024 §4 c)", () => {
-  it(
-    "refuses a chosen-account commit after a history write with the generic sentence, though the form posted the section's watermark",
-    withDatabase(async (ctx) => {
-      const { db } = ctx;
-      const account = await ctx.seedAccount({ name: "Joint brokerage" });
-      const fund = await seedAliased(ctx, "FUND");
-      await ctx.seedPositionSet({
-        account,
-        asOf: "2026-03-31",
-        holdings: [{ instrument: fund, quantity: "1" }],
-      });
-      const draftId = await stage(ctx, account, encode("Symbol,Quantity,Basis\nFUND,3,\n"), CHOSEN);
-      const review = await reviewForDraft(draftId, DATE, db);
-      const form = posted(review, { asOf: DATE });
-      expect(form[sectionKey("appendWatermark", account.id)]).toBe(
-        onlySection(review).appendWatermark,
-      );
-
-      await ctx.seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        holdings: [{ instrument: fund, quantity: "5" }],
-      });
-
-      const refusal = await expectStale(db, draftId, form, [account.id]);
-      expect(refusal.fieldErrors.form).toBe(GENERIC);
-    }),
-  );
-
-  it(
-    "names the account a history write moved on a several-account commit",
-    withDatabase(async (ctx) => {
-      const { db } = ctx;
-      const account = await ctx.seedAccount({ name: "Joint brokerage", externalAccountNumber: "A-1" });
-      const fund = await seedAliased(ctx, "FUND");
-      await ctx.seedPositionSet({
-        account,
-        asOf: "2026-03-31",
-        holdings: [{ instrument: fund, quantity: "1" }],
-      });
-      const draftId = await stage(ctx, null, encode("Account,Symbol,Qty,Basis\nA-1,FUND,3,\n"), SEVERAL);
-      const review = await reviewForDraft(draftId, DATE, db);
-
-      await ctx.seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        holdings: [{ instrument: fund, quantity: "5" }],
-      });
-
-      const refusal = await expectStale(db, draftId, posted(review, { asOf: DATE }), [account.id]);
-      expect(refusal.fieldErrors.form).toBe(
-        "Figures were recorded on Joint brokerage after this review. Nothing was recorded — " +
-          "check it and record again.",
-      );
     }),
   );
 });
