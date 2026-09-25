@@ -672,3 +672,135 @@ describe("instrument aliases", () => {
     ).toBe("23505");
   });
 });
+
+describe("carrying the provider's annual rate onto the trailing one", () => {
+  // A payer whose rate the provider gave, and a payer it gave nothing for (SGOV and its kind).
+  const HELD_WITH_RATES = `
+    insert into person (name) values ('Dividend Owner');
+    insert into account (name, institution, kind, owner_id, tax_treatment)
+      select 'Dividend Brokerage', 'Schwab', 'brokerage', id, 'taxable'
+      from person where name = 'Dividend Owner';
+    insert into position_set (account_id, as_of_date, source)
+      select id, date '2026-01-31', 'upload' from account where name = 'Dividend Brokerage';
+    insert into instrument (symbol, name, classification_id, price_source)
+      select seeded.symbol, seeded.name, c.id, 'feed'
+      from classification c, (values ('SCHD', 'Schwab US Dividend Equity ETF'),
+                                     ('SGOV', 'iShares 0-3 Month Treasury Bond ETF'))
+                             as seeded (symbol, name)
+      where c.name = 'Cash';
+    insert into holding (position_set_id, instrument_id, quantity)
+      select ps.id, i.id, '100.00000000'
+      from position_set ps
+      join account a on a.id = ps.account_id and a.name = 'Dividend Brokerage',
+           instrument i
+      where i.symbol in ('SCHD', 'SGOV');
+    insert into quote (instrument_id, price, as_of, annual_dividend_per_share)
+      select id, '27.5000', now(), '3.6000' from instrument where symbol = 'SCHD';
+    insert into quote (instrument_id, price, as_of)
+      select id, '100.4000', now() from instrument where symbol = 'SGOV';
+  `;
+
+  /** 0019 over the rows `seed` inserts, as an upgrade meets them: the three columns not yet added. */
+  async function upgradingOver(
+    seed: string,
+    check: (migrate: () => Promise<unknown>, client: PoolClient) => Promise<void>,
+  ): Promise<void> {
+    const before = await readFile(
+      path.join(migrationsDirectory(), "0006_annual_dividend.sql"),
+      "utf8",
+    );
+    const migration = await readFile(
+      path.join(migrationsDirectory(), "0019_trailing_dividend.sql"),
+      "utf8",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // Rewound rather than migrated in a fresh database: 0001-0018 are already in this pool's
+      // ledger, so applyPendingMigrations would apply nothing. 0006's view has 0019's column list,
+      // so the replace is legal; DDL is transactional, and the rollback puts 0019 back.
+      await client.query(before);
+      await client.query(`
+        alter table quote
+          drop column trailing_dividend_per_share,
+          drop column trailing_dividend_as_of,
+          drop column trailing_dividend_outcome
+      `);
+      await client.query(seed);
+      await check(() => client.query(migration), client);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
+  }
+
+  const dividendOf = async (client: PoolClient, symbol: string): Promise<unknown> => {
+    const { rows } = await client.query(
+      "select annual_dividend from holding_valued where symbol = $1",
+      [symbol],
+    );
+    return rows;
+  };
+
+  it("leaves a holding reading the dividend it read before the view changed operand", async () => {
+    await upgradingOver(HELD_WITH_RATES, async (migrate, client) => {
+      expect(await dividendOf(client, "SCHD")).toEqual([{ annual_dividend: "360.0000" }]);
+
+      await migrate();
+
+      expect(await dividendOf(client, "SCHD")).toEqual([{ annual_dividend: "360.0000" }]);
+      const { rows } = await client.query(
+        "select trailing_dividend_per_share from quote q join instrument i on i.id = q.instrument_id where i.symbol = 'SCHD'",
+      );
+      expect(rows).toEqual([{ trailing_dividend_per_share: "3.6000" }]);
+
+      // The carry-over leaves both columns at 3.6000, so the figure above holds even if the view
+      // still read the old one. Moving the new column alone is what says which operand it reads.
+      await client.query("update quote set trailing_dividend_per_share = '1.0000'");
+
+      expect(await dividendOf(client, "SCHD")).toEqual([{ annual_dividend: "100.0000" }]);
+    });
+  });
+
+  it("backdates a carried stamp to exactly the staleness bound, with no outcome beside it", async () => {
+    await upgradingOver(HELD_WITH_RATES, async (migrate, client) => {
+      await migrate();
+
+      // now() is the transaction's own timestamp, so the bound is exact rather than approximate.
+      // Due immediately, and a null outcome is what says the rate was carried, not measured.
+      const { rows } = await client.query(`
+        select q.trailing_dividend_as_of = now() - interval '7 days' as at_the_bound,
+               q.trailing_dividend_outcome as outcome
+        from quote q join instrument i on i.id = q.instrument_id
+        where i.symbol = 'SCHD'
+      `);
+
+      expect(rows).toEqual([{ at_the_bound: true, outcome: null }]);
+    });
+  });
+
+  it("leaves a quote the provider gave no rate for unstamped, so it drains ahead of the carried rows", async () => {
+    await upgradingOver(HELD_WITH_RATES, async (migrate, client) => {
+      await migrate();
+
+      const { rows } = await client.query(`
+        select q.trailing_dividend_per_share as rate, q.trailing_dividend_as_of as as_of
+        from quote q join instrument i on i.id = q.instrument_id
+        where i.symbol = 'SGOV'
+      `);
+
+      expect(rows).toEqual([{ rate: null, as_of: null }]);
+      expect(await dividendOf(client, "SGOV")).toEqual([{ annual_dividend: "0.0000" }]);
+    });
+  });
+
+  it("leaves holding_valued_at executable, the row type it shares with the view unchanged", async () => {
+    // ADR-0001: the function is a separate copy of the row type and 0019 deliberately does not
+    // touch it, so a column added or reordered in the view surfaces only here
+    const result = await sql<{ counted: string }>`
+      select count(*) as counted from holding_valued_at(current_date)
+    `.execute(db);
+
+    expect(result.rows).toHaveLength(1);
+  });
+});

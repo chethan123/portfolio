@@ -115,7 +115,13 @@ describe("the round trip a worker actually answers", () => {
 
       // No committing handle needed: the lock is runRefresh's, not refreshPrices' own, so this calls it directly against the rolled-back transaction.
       try {
-        const report = await refreshPrices(socketProvider(), NEW_YORK, now, { quotes: true }, db);
+        const report = await refreshPrices(
+          socketProvider(),
+          NEW_YORK,
+          now,
+          { quotes: true, dividends: false },
+          db,
+        );
 
         expect(report.quotes).toMatchObject({ requested: 1, priced: 1, providerFailed: false });
         expect(report.backfill.written).toBe(2);

@@ -25,6 +25,14 @@ struck that yield against its own price snapshot rather than the price we stored
 `value × yield` and `quantity × per-share` produce different answers for the same holding. §8.2
 names two figures for one thing as the weakest point in this design; here they would sit in one row.
 
+**Superseded in part** by [dividends/01](dividends/01-trailing-dividend-rate.md) and migration
+`0019_trailing_dividend.sql`: `annual_dividend` no longer reads `annual_dividend_per_share` at all.
+`holding_valued` multiplies `quote.trailing_dividend_per_share` — the trailing twelve months'
+distributions actually paid, summed — because the provider's `dividendRate`/`trailingAnnualDividendRate`
+figure this paragraph describes turned out to be wrong on its own terms: ~26% low for ITOT, and `$0`
+for a fund (SGOV) paying monthly. The two-figures-disagree argument stands unchanged for `yield_pct`
+against the new rate.
+
 **A null payout means three different things.** The provider answering "no dividend fields" for a
 growth ETF, the refresh never asking about a workplace-plan trust that has no symbol, and the
 seeded `USD` row that no provider will ever quote all arrive as the same null. Only the first is

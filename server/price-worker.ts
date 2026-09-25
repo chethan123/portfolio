@@ -1,5 +1,5 @@
 /**
- * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix socket, three endpoints
+ * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix socket, four endpoints
  * answering the library's raw JSON. No database, no domain logic, no wall clock — the rate window
  * slides on `performance.now()`, so a backward step cannot freeze it open and no `TZ` is needed.
  * Every bound here is defensive against the app's own compromise, not against Yahoo.
@@ -23,7 +23,7 @@ const ERROR_TEXT_LIMIT = 1000;
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-const RATE_CAPS = { quotes: 10, history: 20 } as const;
+const RATE_CAPS = { quotes: 10, history: 20, dividends: 20 } as const;
 
 export type WorkerTimeouts = {
   timeout: number;
@@ -52,10 +52,26 @@ const quotesBodySchema = z.object({
   symbols: z.array(symbolField).min(1).max(100),
 });
 
-const historyBodySchema = z.object({
+const chartBodySchema = z.object({
   symbol: symbolField,
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
+
+/**
+ * The whole difference between the two chart routes. `dividends` must stay fine-grained: Yahoo keys
+ * `events.dividends` by the bar bucket, not the ex-date, so a coarser interval collapses every
+ * payment sharing a bucket into one — `interval=3mo` returns 6 of SGOV's 12 monthly distributions
+ * where `1d` returns all 12. A quarterly payer has one per bucket and loses nothing, which is what
+ * makes the coarse interval look safe. Two years of daily bars — the evidence range
+ * `DIVIDEND_EVIDENCE_DAYS` asks for (`app/lib/provider-socket.server.ts`) — is ~90 KB, well inside
+ * the cap.
+ */
+const CHART_REQUESTS = {
+  history: { interval: "1d", events: "split" },
+  dividends: { interval: "1d", events: "div" },
+} as const;
+
+type ChartEndpoint = keyof typeof CHART_REQUESTS;
 
 class BodyTooLargeError extends Error {}
 
@@ -250,22 +266,20 @@ async function handleQuotes(
   }
 }
 
-async function handleHistory(
+async function handleChart(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   yahoo: YahooClient,
   admit: () => boolean,
+  endpoint: ChartEndpoint,
 ): Promise<void> {
-  const endpoint = "history";
-
-  const data = await readAdmittedBody(req, res, endpoint, historyBodySchema, admit);
+  const data = await readAdmittedBody(req, res, endpoint, chartBodySchema, admit);
   if (data === undefined) return;
 
   try {
     const answer = await yahoo.chart(data.symbol, {
       period1: data.from,
-      interval: "1d",
-      events: "split",
+      ...CHART_REQUESTS[endpoint],
     });
     sendJson(res, 200, answer);
   } catch (error) {
@@ -279,6 +293,7 @@ async function handle(
   yahoo: YahooClient,
   admitQuotes: () => boolean,
   admitHistory: () => boolean,
+  admitDividends: () => boolean,
 ): Promise<void> {
   const { method, url } = req;
 
@@ -294,7 +309,12 @@ async function handle(
   }
 
   if (method === "POST" && url === "/history") {
-    await handleHistory(req, res, yahoo, admitHistory);
+    await handleChart(req, res, yahoo, admitHistory, "history");
+    return;
+  }
+
+  if (method === "POST" && url === "/dividends") {
+    await handleChart(req, res, yahoo, admitDividends, "dividends");
     return;
   }
 
@@ -330,6 +350,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
 
   const admitQuotes = makeRateLimiter(RATE_CAPS.quotes);
   const admitHistory = makeRateLimiter(RATE_CAPS.history);
+  const admitDividends = makeRateLimiter(RATE_CAPS.dividends);
 
   // `connectionsCheckingInterval` is constructor-only in @types/node.
   const server = http.createServer(
@@ -339,7 +360,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
       connectionsCheckingInterval: timeouts.connectionsCheckingInterval,
     },
     (req, res) => {
-      handle(req, res, yahoo, admitQuotes, admitHistory).catch((error: unknown) => {
+      handle(req, res, yahoo, admitQuotes, admitHistory, admitDividends).catch((error: unknown) => {
         // A handler bug — provider and validation failures are caught above. No half-written response.
         console.error("Price worker: unhandled request error", error);
         req.socket.destroy();

@@ -906,7 +906,7 @@ function Row({
             />
           )}
         </td>
-        {/* $0, not a dash: `quote` can't tell "pays nothing" from "nobody asked" (§14 limitation 9). Plain `Amount`, not `Delta` — a payout isn't a movement. */}
+        {/* $0, not a dash: `quote.trailing_dividend_outcome` can tell "pays nothing" from "not yet swept", but this cell doesn't read it (§14 limitation 9). Plain `Amount`, not `Delta` — a payout isn't a movement. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
             <PrivateAmount value={holding.annualDividend} />

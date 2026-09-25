@@ -413,7 +413,9 @@ describe("the projection a past date will not make", () => {
           holdings: [{ instrument: fund, quantity: "10.50000000" }],
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "27.5000" });
-        await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+        // the rate `holding_valued` actually reads since 0019 — seeding the retired
+        // annual_dividend_per_share would make the premise false and the assertion vacuous
+        await seedQuote({ instrument: fund, price: "27.5000", trailingDividendPerShare: "3.6000" });
 
         const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 

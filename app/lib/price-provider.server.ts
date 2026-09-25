@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 
+import { addDays } from "./chart-range.ts";
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
 import { matchKey } from "./prices.server.ts";
@@ -44,6 +45,29 @@ export type ProviderHistory =
   | { status: "non-usd"; currency: string }
   | { status: "split-unresolved" };
 
+/**
+ * Refusals map one-to-one onto `DIVIDEND_OUTCOMES`; a non-payer whose chart carries an events block
+ * is `ok` with a zero rate, never a refusal.
+ */
+export type ProviderDividends =
+  | { status: "ok"; perShare: string }
+  | { status: "no-data" }
+  | { status: "non-usd"; currency: string }
+  | { status: "unreadable" };
+
+/**
+ * The trailing year {@link toProviderDividends} sums. Lives here, not in the sweep that subtracts
+ * it: the parser derives the core bound from it.
+ */
+export const TRAILING_WINDOW_DAYS = 365;
+
+/**
+ * How far past the year to look when the year holds nothing — an annual payer whose ex-date has
+ * drifted this much later still reports last year's payment instead of $0. Never widens a year
+ * that has something in it.
+ */
+export const DRIFT_EXTENSION_DAYS = 21;
+
 /** `getQuotes` batches — why Yahoo was chosen. History has no batch form: one symbol per call. */
 export type PriceProvider = {
   getQuotes(symbols: string[]): Promise<ProviderQuote[]>;
@@ -52,6 +76,11 @@ export type PriceProvider = {
     range: HistoryRange,
     marketTimeZone: string,
   ): Promise<ProviderHistory>;
+  getTrailingDividend(
+    symbol: string,
+    since: IsoDate,
+    marketTimeZone: string,
+  ): Promise<ProviderDividends>;
 };
 
 /** No answer to be had. `backfillCloses` skips the ledger: ledgering would defer a batch a day each. */
@@ -86,7 +115,7 @@ function decimal(value: unknown, scale: number): string | null {
 /** `quote.yield_pct` is `numeric(10,6)` — 9999.999999%. */
 const YIELD_CEILING = 10000;
 
-/** `quote.annual_dividend_per_share` is `numeric(20,4)`. A figure this big is not a rate. */
+/** `quote.annual_dividend_per_share` and `quote.trailing_dividend_per_share` are `numeric(20,4)`. A figure this big is not a rate. */
 const RATE_CEILING = 10 ** 16;
 
 /** `price_daily.close` is `numeric(20,4)`. Bounds the product too; `toFixed` goes exponential at 1e21. */
@@ -94,6 +123,12 @@ const CLOSE_CEILING = 10 ** 16;
 
 /** `quote.price` is `numeric(20,4)`. The `quantity × price` product is guarded in `positions.server.ts`. */
 const PRICE_CEILING = 10 ** 16;
+
+/**
+ * Finer than `MONEY_SCALE` so {@link toProviderDividends} rounds to money scale once: twelve events
+ * of 0.00005 sum to 0.0006, where rounding each to money scale first reads 0.0012.
+ */
+const EVENT_SCALE = 8;
 
 /** Overflow aborts the refresh transaction — one bad symbol would cost the household its refresh. */
 function inRange(value: string | null, ceiling: number): string | null {
@@ -165,8 +200,8 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
 
   const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
 
-  // Bounded like the yield; `quantity × rate` is checked where the quantity is chosen. A null rate
-  // reads as $0, a labelled lower bound (§14 limitation 9), where a clamped one would read as real.
+  // Bounded like the yield. Stored beside the provider's own figure for comparison; nothing values
+  // from it since 0019 — `holding_valued` reads `trailing_dividend_per_share`.
   const annualDividendPerShare = inRange(decimal(perShare, 4), RATE_CEILING);
 
   const yieldPct =
@@ -200,6 +235,11 @@ const yahooChart = z.object({
 /** Own parse: an unreadable events block may hide a split, and an unadjusted close is the wrong figure. */
 const yahooEvents = z.object({
   splits: z.array(z.object({}).passthrough()).nullish(),
+});
+
+/** An array on the library's `return: "array"` default, built outside validation (`modules/chart.js`), so `validateResult: false` does not change it. */
+const yahooDividends = z.object({
+  dividends: z.array(z.object({}).passthrough()).nullish(),
 });
 
 type Split = { date: IsoDate; numerator: bigint; denominator: bigint };
@@ -308,6 +348,91 @@ export function toProviderHistory(
   if (closes.length === 0) return { status: "no-history" };
 
   return { status: "ok", closes };
+}
+
+/**
+ * The trailing year's distributions summed, as the projection for the coming year (`CONTEXT.md`).
+ * Never throws: every refusal is a status the sweep records against the instrument.
+ */
+export function toProviderDividends(
+  raw: unknown,
+  since: IsoDate,
+  marketTimeZone: string,
+): ProviderDividends {
+  const parsed = yahooChart.safeParse(raw);
+  if (!parsed.success) return { status: "no-data" };
+
+  const chart = parsed.data;
+
+  const currency = chart.meta?.currency;
+  if (typeof currency === "string" && currency.toUpperCase() !== USD) {
+    return { status: "non-usd", currency: currency.toUpperCase() };
+  }
+
+  // An empty chart is not evidence of a non-payer — a delisted ticker answers the same way — and a
+  // stored zero would be indistinguishable from a measured one.
+  if (chart.quotes.length === 0) return { status: "no-data" };
+
+  // An events block at all is the evidence that this instrument's chart carries events. Yahoo omits
+  // the key for money-market funds paying 4-5% (VMFXX, SWVXX) exactly as it does for a genuine
+  // non-payer, so absence cannot be read as a measured zero — it would wipe the yield under an `ok`
+  // the outcome column then reports as healthy. Refusing advances the stamp and leaves the last rate
+  // standing, and costs nothing: `ok` and `no_data` retry on the same tier.
+  if (chart.events === undefined || chart.events === null) return { status: "no-data" };
+
+  const events = yahooDividends.safeParse(chart.events).data;
+  if (events === undefined) return { status: "unreadable" };
+
+  // All or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number. A
+  // readable block that lists no dividend — splits only, or an empty array — is a real zero, and
+  // the sum below is what stores it.
+  const paid: Array<{ date: IsoDate; units: bigint }> = [];
+  for (const dividend of events.dividends ?? []) {
+    // `date` crosses the worker socket as an ISO string, whatever the library coerced it to.
+    const instant = parseInstant(dividend.date);
+    // No split arithmetic, deliberately: Yahoo back-adjusts amounts through later splits — NVDA's
+    // pre-10:1 dividends return as 0.004, not the 0.04 paid — so they are already in today's share
+    // terms, the basis `quantity × rate` needs. `unadjusted()` here would adjust a second time.
+    //
+    // Bounded per event and before `toUnits`, as `toProviderHistory` bounds a close: `toFixed`
+    // returns "1e+21" past 1e21 and `BigInt` throws on that, out of a parser that never throws.
+    const amount = inRange(decimal(dividend.amount, EVENT_SCALE), RATE_CEILING);
+
+    if (instant === null || amount === null) return { status: "unreadable" };
+
+    // A negative distribution is corruption, not a shape Yahoo uses: summed it stores a negative
+    // rate and a negative `annual_dividend`. Zero stays — a payment of nothing is data, and
+    // refusing it would drop the eleven real ones beside it.
+    const units = toUnits(amount, EVENT_SCALE);
+    if (units < 0n) return { status: "unreadable" };
+
+    paid.push({ date: marketDateOf(instant, marketTimeZone), units });
+  }
+
+  // `since` arrives as the wider bound — the caller subtracts `TRAILING_WINDOW_DAYS +
+  // DRIFT_EXTENSION_DAYS` — so the core year is that bound plus the extension. Market dates, as
+  // `toProviderHistory` dates its bars: the edge must not move with time of day.
+  const core = paid.filter((event) => event.date > addDays(since, DRIFT_EXTENSION_DAYS));
+
+  // The extension rescues an empty year and nothing else: a drifted annual ex-date reports last
+  // year's payment rather than $0, and a payer that stopped still reads $0 at 386 days. Summing the
+  // plain year costs a transient artifact — five quarterly ex-dates in 365 days sum to five — and an
+  // anniversary cutoff off the newest payment bought that back by deleting real payments from
+  // anything spaced under 28 days: 5.7% of a weekly payer's year, permanently (docs/specs/dividends/01).
+  const kept = core.length > 0 ? core : paid.filter((event) => event.date > since);
+
+  // `money.ts` units at `EVENT_SCALE`, rounding to money scale once at the end: rounding each event
+  // to `MONEY_SCALE` first would round twelve times for a monthly payer (ARCHITECTURE.md §5.6).
+  let units = 0n;
+  for (const event of kept) {
+    units += event.units;
+  }
+
+  const rate = divide(units, 10n ** BigInt(EVENT_SCALE - MONEY_SCALE), 0);
+  const perShare = inRange(render(rate, MONEY_SCALE), RATE_CEILING);
+  if (perShare === null) return { status: "unreadable" };
+
+  return { status: "ok", perShare };
 }
 
 /** What one probe can say — a closed set, because the caller's three answers are fixed by the spec. */

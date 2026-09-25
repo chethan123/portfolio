@@ -141,6 +141,9 @@ quote (
   price                       numeric(20,4),
   yield_pct                   numeric(10,6),
   annual_dividend_per_share   numeric(20,4),
+  trailing_dividend_per_share numeric(20,4),  -- the rate holding_valued actually reads
+  trailing_dividend_as_of     timestamptz,    -- the sweep's own retry clock, distinct from as_of
+  trailing_dividend_outcome   text,           -- ok | no_data | non_usd | unreadable | provider_failed
   as_of,
   is_stale boolean
 )
@@ -454,6 +457,7 @@ masked regardless of an older cookie.
 interface PriceProvider {
   getQuotes(symbols: string[]): Promise<Quote[]>                  // price, currency, yield, annual dividend
   getDailyCloses(symbol: string, range, tz: string): Promise<History>  // one symbol's finished days, un-adjusted for splits
+  getTrailingDividend(symbol: string, since: IsoDate, tz: string): Promise<ProviderDividends>  // trailing-year distributions summed
 }
 ```
 
@@ -504,7 +508,7 @@ Three tiers, deliberately separate:
 
 ```
 price_observation  (instrument_id, as_of, market_date, price, fetched_at, payload)  -- append-only log
-quote              (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten
+quote              (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten; trailing_dividend is not — the sweep's own retry clock
 price_daily        (instrument_id, date, close)                                     -- daily prices; live refresh may update existing rows
 ```
 
@@ -1554,12 +1558,20 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    decision about whether a negative is meaningful, not a change to the storage rule. The schema
    already holds a negative quantity against any account.
 9. **A holding with no dividend rate counts as paying nothing.** The projected annual dividend
-   (§8.1, Income) is `quantity × annual_dividend_per_share`, and a null rate contributes `$0` rather
-   than an unknown. Three unlike things produce that null: a provider answering "no dividend
-   fields" for a growth ETF, which is genuinely zero; a workplace-plan trust the refresh never asks
-   about, because it has no symbol; and the seeded `USD` row, which no provider will ever quote. The
-   projection omits unquoted income and borrowing costs. Missing positive payments lower it;
-   missing loan interest can overstate net income. This is the one place the codebase departs from §8.2's "sum what is known and label the
+   (§8.1, Income) is `quantity × trailing_dividend_per_share`, the trailing year's distributions
+   summed. A swept non-payer now reads a real `$0`, not an approximation of one. What still
+   contributes `$0` or a stale figure instead of a fresh measurement: an instrument not yet
+   swept — newly created, or mid-drain just after the column was added — carries the old rate or
+   `$0` until its next tick, self-correcting within a bounded number of them; a refusal (`no_data`,
+   `unreadable`, `non_usd`, `provider_failed`) keeps the last measured rate rather than zeroing it,
+   which can go stale but is never invented; and a workplace-plan trust the refresh never asks about,
+   because it has no symbol, or the seeded `USD` row, which no provider will ever quote, stay
+   permanently unquoted rather than unswept. A further residual, in the other direction: the sum
+   counts whatever went ex inside the year, so a payer whose ex-dates put five quarterly payments in
+   365 days reads high for the few days that lasts — the standard trailing-twelve-month artifact,
+   transient and self-correcting. The projection omits unquoted income and borrowing
+   costs. Missing positive payments lower it; missing loan interest can overstate net income. This
+   is the one place the codebase departs from §8.2's "sum what is known and label the
    coverage". Applied literally here, a portfolio where most holdings correctly pay nothing would
    report "based on 4 of 23 holdings", and a caption that cries wolf on two-thirds of a table is one
    nobody reads. The UI labels it a **lower bound**, but that label is not a mathematical guarantee when

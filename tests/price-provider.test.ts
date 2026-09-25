@@ -5,12 +5,16 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { addDays } from "~/lib/chart-range";
+import { marketDateOf } from "~/lib/market-hours";
 import {
   CurrencyRefused,
   probeVerdicts,
+  toProviderDividends,
   toProviderHistory,
   toProviderQuote,
   type HistoryRange,
+  type ProviderDividends,
 } from "~/lib/price-provider.server";
 import { socketProbe, socketProvider } from "~/lib/provider-socket.server";
 
@@ -472,13 +476,28 @@ const split = (date: string, numerator: number, denominator: number) => ({
   splitRatio: `${numerator}:${denominator}`,
 });
 
+// 13:30Z for the same reason a bar carries it: an ex-date is a market date, dated in the market zone
+const dividend = (date: string, amount: number | null) => ({
+  date: new Date(`${date}T13:30:00Z`),
+  amount,
+});
+
 const chartOf = (payload: {
   currency?: string;
   splits?: ReturnType<typeof split>[];
+  dividends?: ReturnType<typeof dividend>[];
   quotes: ReturnType<typeof bar>[];
 }) => ({
   meta: { currency: payload.currency ?? "USD" },
-  ...(payload.splits === undefined ? {} : { events: { splits: payload.splits } }),
+  // No `events` key at all where neither is stated — how a chart carrying no events answers
+  ...(payload.splits === undefined && payload.dividends === undefined
+    ? {}
+    : {
+        events: {
+          ...(payload.splits === undefined ? {} : { splits: payload.splits }),
+          ...(payload.dividends === undefined ? {} : { dividends: payload.dividends }),
+        },
+      }),
   quotes: payload.quotes,
 });
 
@@ -789,11 +808,11 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 });
 
-describe("asking the worker for one symbol's history", () => {
-  const clientCharting = (
-    chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
-  ): YahooClient => ({ quote: async () => [], chart });
+const clientCharting = (
+  chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
+): YahooClient => ({ quote: async () => [], chart });
 
+describe("asking the worker for one symbol's history", () => {
   it("sends one symbol per call, upper-cased, over the range's start", async () => {
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
 
@@ -866,6 +885,384 @@ describe("asking the worker for one symbol's history", () => {
     );
 
     await expect(socketProvider().getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
+      "429 Too Many Requests",
+    );
+  });
+});
+
+// The bound refreshTrailingDividends forms for a sweep on 2026-09-25: 365 + 21 days back. The parser
+// derives its 365-day core from it — 2025-09-25 — and only falls back to this one when that is empty.
+const SINCE = "2025-09-04";
+
+// The evidence range `getTrailingDividend` opens instead: two years from today's market date, so a
+// payer that stopped inside the last two years still has its final payment in the payload. It is a
+// different question from the 386-day bound above, which is what the payload is then summed over.
+const TODAY = marketDateOf(new Date(), NEW_YORK);
+const EVIDENCE_FROM = addDays(TODAY, -730);
+
+const daysBack = (date: string): number =>
+  Math.round((Date.parse(`${TODAY}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86_400_000);
+
+// One bar, because a chart with none is a delisted ticker rather than a non-payer.
+const A_BAR = [bar("2026-09-22", 100)];
+
+const dividendsOf = (
+  dividends: ReturnType<typeof dividend>[] | undefined,
+  since = SINCE,
+): ProviderDividends => toProviderDividends(chartOf({ dividends, quotes: A_BAR }), since, NEW_YORK);
+
+function perShareOf(dividends: ReturnType<typeof dividend>[], since = SINCE): string {
+  const result = dividendsOf(dividends, since);
+  if (result.status !== "ok") throw new Error(`expected a rate, got ${result.status}`);
+  return result.perShare;
+}
+
+// The 15th of thirteen consecutive months, oldest first: twelve fill the window and the thirteenth
+// is a year older than the newest.
+const MONTHLY = [
+  "2025-09-15",
+  "2025-10-15",
+  "2025-11-15",
+  "2025-12-15",
+  "2026-01-15",
+  "2026-02-15",
+  "2026-03-15",
+  "2026-04-15",
+  "2026-05-15",
+  "2026-06-15",
+  "2026-07-15",
+  "2026-08-15",
+  "2026-09-15",
+];
+
+// Generated: 53 literal ex-dates would bury the rule under a wall of strings.
+const everyNDays = (first: string, step: number, count: number): string[] =>
+  Array.from({ length: count }, (_, index) => addDays(first, index * step));
+
+// 2025-09-26 through 2026-09-25 — the 364 days ending on the sweep's own date, so every one of them
+// is inside the trailing year and none is in the 21-day extension.
+const WEEKLY = everyNDays("2025-09-26", 7, 53);
+const BIWEEKLY = everyNDays("2025-09-26", 14, 27);
+
+describe("summing the trailing year of distributions", () => {
+  it("answers no-data for a chart with no events key at all, rather than a measured zero", () => {
+    // VMFXX and SWVXX pay 4-5% and answer with bars and no `events` key, exactly as BRK-B does:
+    // absence cannot tell a real zero from a chart that carries no events, and a stored zero would
+    // wipe a money-market fund's yield under an `ok` the outcome column reports as healthy
+    expect(dividendsOf(undefined)).toEqual({ status: "no-data" });
+  });
+
+  it("stores a zero rate for an events block that is present and lists no dividend", () => {
+    // a readable block naming no payment is the evidence an absent block cannot give
+    expect(dividendsOf([])).toEqual({ status: "ok", perShare: "0.0000" });
+  });
+
+  it("stores a zero rate for an events block carrying splits and no dividends key", () => {
+    expect(
+      toProviderDividends(
+        chartOf({ splits: [split("2026-06-10", 4, 1)], quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "0.0000" });
+  });
+
+  it("answers no-data for a chart carrying no bars, which is not evidence of a non-payer", () => {
+    // a delisted ticker answers this way too; a stored zero would be indistinguishable from a measured one
+    expect(
+      toProviderDividends(
+        chartOf({ dividends: [dividend("2026-06-15", 1)], quotes: [] }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "no-data" });
+  });
+
+  it("excludes an event dated exactly the window's start and keeps one a day later", () => {
+    expect(perShareOf([dividend(SINCE, 5), dividend("2025-09-05", 0.25)])).toBe("0.2500");
+  });
+
+  it("excludes an event dated exactly the trailing year's edge and keeps one a day later", () => {
+    // 2025-09-25 is `since` plus the extension — the 365-day core's own bound. Strictly later, or
+    // the core stretches to 366 days and an extension payment sums on top of a full year
+    expect(perShareOf([dividend("2025-09-25", 9.99), dividend("2025-09-26", 0.1)])).toBe("0.1000");
+  });
+
+  it("reads a zero for a payer whose last distribution was 400 days ago, past the extension too", () => {
+    // still trading, stopped paying: the two-year evidence range is what puts that last payment in
+    // the payload at all, so the events block is present and the zero is measured rather than
+    // assumed — the trailing year is empty and so is the extension it falls back to (§14)
+    expect(perShareOf([dividend("2025-08-21", 1)])).toBe("0.0000");
+  });
+
+  it("sums all five when a quarterly payer's ex-dates put five inside the trailing year", () => {
+    // The accepted artifact of counting the plain year: +25% for the few days a year five ex-dates
+    // fit in 365, self-correcting when the oldest ages out. It is the trailing-twelve-month figure
+    // every provider publishes, and the anniversary rule it replaces cost weekly payers 5.7% forever.
+    expect(
+      perShareOf([
+        dividend("2025-09-26", 1),
+        dividend("2025-12-26", 1),
+        dividend("2026-03-26", 1),
+        dividend("2026-06-26", 1),
+        dividend("2026-09-22", 1),
+      ]),
+    ).toBe("5.0000");
+  });
+
+  it("excludes a quarterly payment older than the trailing year while the four inside it sum", () => {
+    // 9.99 marks the one out: 2025-09-15 is 375 days back, inside the extension and not the year,
+    // and the extension is never read while the year has something in it
+    expect(
+      perShareOf([
+        dividend("2025-09-15", 9.99),
+        dividend("2025-12-15", 1),
+        dividend("2026-03-15", 1),
+        dividend("2026-06-15", 1),
+        dividend("2026-09-15", 1),
+      ]),
+    ).toBe("4.0000");
+  });
+
+  it("counts an annual payer's two payments exactly 365 days apart as one", () => {
+    // the older one lands on the core's bound, 2025-09-25, and the bound is exclusive
+    expect(perShareOf([dividend("2025-09-25", 2.5), dividend("2026-09-25", 3)])).toBe("3.0000");
+  });
+
+  it("sums both when an annual ex-date drifts earlier and lands two inside the trailing year", () => {
+    // 2025-09-29 is 361 days back: both payments are in the year, so both count. Transient — a
+    // fortnight until the older ages out — where the anniversary rule that suppressed it understated
+    // every weekly and biweekly payer permanently
+    expect(perShareOf([dividend("2025-09-29", 2.5), dividend("2026-09-15", 3)])).toBe("5.5000");
+  });
+
+  it("reports last year's payment for an annual payer that has not yet paid this year", () => {
+    // 2025-09-10 is 380 days back, so the trailing year holds nothing and the 21-day extension is
+    // what is summed: a plain 365-day window reads $0 for the days the ex-date has drifted
+    expect(perShareOf([dividend("2025-09-10", 2.5)])).toBe("2.5000");
+  });
+
+  it("keeps all twelve of a monthly payer's payments", () => {
+    expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.1)))).toBe("1.2000");
+  });
+
+  it("ignores a thirteenth monthly payment that falls in the extension rather than the year", () => {
+    const thirteen = MONTHLY.map((date, index) => dividend(date, index === 0 ? 9.99 : 0.1));
+
+    expect(perShareOf(thirteen)).toBe("1.2000");
+  });
+
+  it("sums all 53 of a weekly payer's payments inside the trailing year", () => {
+    // The bug the anniversary rule caused: dropping everything 344 days older than the newest cut
+    // the first three weeks and read 5.0000, a permanent 5.7% understatement of a real fund class
+    expect(perShareOf(WEEKLY.map((date) => dividend(date, 0.1)))).toBe("5.3000");
+  });
+
+  it("sums all 27 of a biweekly payer's payments inside the trailing year", () => {
+    // the same cut took two of these and read 2.5000, 7.4% low
+    expect(perShareOf(BIWEEKLY.map((date) => dividend(date, 0.1)))).toBe("2.7000");
+  });
+
+  it("counts every distribution paid inside one calendar quarter", () => {
+    // Three in one quarter, all summed. The bucket collapse that makes the fetch interval matter
+    // happens in Yahoo's response, not here, so the guard for that is in tests/price-worker.ts.
+    expect(
+      perShareOf([
+        dividend("2026-07-15", 0.4),
+        dividend("2026-08-15", 0.4),
+        dividend("2026-09-15", 0.4),
+      ]),
+    ).toBe("1.2000");
+  });
+
+  it("rounds the sum once at the end, not every event on the way in", () => {
+    // per-event toFixed(4) rounds each 0.00005 up to 0.0001 and reads 0.0012, double the truth
+    expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.00005)))).toBe("0.0006");
+  });
+
+  it("rounds the summed rate half away from zero, never towards it", () => {
+    // 3 x 0.12345 sums to 0.37035 at event scale; truncating to money scale would read "0.3703"
+    expect(
+      perShareOf([
+        dividend("2026-03-15", 0.12345),
+        dividend("2026-06-15", 0.12345),
+        dividend("2026-09-15", 0.12345),
+      ]),
+    ).toBe("0.3704");
+  });
+
+  it("applies no split ratio to an amount, which Yahoo has already back-adjusted", () => {
+    // NVDA's pre-10:1 dividends come back as 0.004, not the 0.04 paid: already in today's share
+    // terms, so unadjusted()'s arithmetic here would adjust a second time
+    const dividends = [dividend("2026-03-15", 0.004), dividend("2026-06-15", 0.004)];
+
+    expect(perShareOf(dividends)).toBe("0.0080");
+    expect(
+      toProviderDividends(
+        chartOf({ splits: [split("2026-06-10", 10, 1)], dividends, quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "0.0080" });
+  });
+
+  it("reads a date that crossed the worker socket as an ISO string", () => {
+    // JSON has no Date: whatever the library coerced it to arrives here as a string
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: {
+            dividends: [
+              { date: new Date("2025-12-19T13:30:00Z").toISOString(), amount: 2.5 },
+              { date: new Date("2026-03-19T13:30:00Z").toISOString(), amount: 0.5 },
+            ],
+          },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "3.0000" });
+  });
+
+  it("refuses the whole response when one event's date cannot be read", () => {
+    // all or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: {
+            dividends: [
+              { date: "not a date", amount: 0.5 },
+              { date: new Date("2026-06-15T13:30:00Z"), amount: 0.5 },
+            ],
+          },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses the whole response when an amount is not a finite number", () => {
+    expect(dividendsOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", null)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("refuses an events block keyed by epoch second, which may hide a payment", () => {
+    // the raw endpoint's return:"object" shape — reading it as no payments is the silent zero
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: { dividends: { "1750000000": { date: 1750000000, amount: 0.5 } } },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses a sum too large for the column it is bound for", () => {
+    // each amount fits; the sum does not, and an overflow would abort the sweep's own update
+    expect(dividendsOf([dividend("2026-06-15", 6e15), dividend("2026-09-15", 6e15)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("refuses one amount too large for the column, rather than throwing on it", () => {
+    // `toFixed` goes exponential at 1e21 and `toUnits` would raise a SyntaxError on "1e+21";
+    // every refusal here is a status the sweep records
+    expect(dividendsOf([dividend("2026-09-15", 1e21)])).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses a negative amount, which would sum to a negative rate", () => {
+    // no sign check would store a negative annual_dividend against the holding
+    expect(dividendsOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", -5)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("keeps a zero amount, a distribution of nothing rather than a missing one", () => {
+    // Yahoo emits 0.0; refusing it would drop the real payments beside it
+    expect(perShareOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", 0)])).toBe("0.5000");
+  });
+
+  it("refuses a chart quoted in a currency this instance cannot hold", () => {
+    expect(
+      toProviderDividends(
+        chartOf({ currency: "GBP", dividends: [dividend("2026-06-15", 1)], quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "non-usd", currency: "GBP" });
+  });
+});
+
+describe("asking the worker for one symbol's distributions", () => {
+  it("asks for daily bars and dividend events, over a period1 two years back", async () => {
+    const seen: Array<{ symbol: string; options: ChartRequest }> = [];
+
+    await start(
+      clientCharting(async (symbol, options) => {
+        seen.push({ symbol, options });
+        return chartOf({ dividends: [dividend("2026-09-15", 1.5)], quotes: A_BAR });
+      }),
+    );
+
+    const result = await socketProvider().getTrailingDividend(" itot ", SINCE, NEW_YORK);
+
+    expect(seen).toEqual([
+      { symbol: "ITOT", options: { period1: EVIDENCE_FROM, interval: "1d", events: "div" } },
+    ]);
+    expect(result).toEqual({ status: "ok", perShare: "1.5000" });
+  });
+
+  it("asks over two years of events while `since` still bounds the year that is summed", async () => {
+    // the two ranges answer different questions: Yahoo returns only the events inside `period1`, so
+    // a range that barely covered the summed year would leave a payer that stopped 400 days ago with
+    // bars and no events block — a refusal keeping its last rate, indistinguishable from VMFXX
+    const seen: ChartRequest[] = [];
+
+    await start(
+      clientCharting(async (_symbol, options) => {
+        seen.push(options);
+        // one payment, 400 days old: in the payload because of the evidence range, out of the sum
+        return chartOf({ dividends: [dividend("2025-08-21", 1)], quotes: A_BAR });
+      }),
+    );
+
+    const result = await socketProvider().getTrailingDividend("STOPPED", SINCE, NEW_YORK);
+
+    // two years of evidence, not the 393 days the summed year needs
+    expect(daysBack(seen[0]?.period1 ?? TODAY)).toBe(730);
+    expect(result).toEqual({ status: "ok", perShare: "0.0000" });
+  });
+
+  it("answers no-data for the error a delisted symbol throws, so the last rate is kept", async () => {
+    await start(
+      clientCharting(async () => {
+        throw new Error("No data found, symbol may be delisted");
+      }),
+    );
+
+    expect(await socketProvider().getTrailingDividend("GONE", SINCE, NEW_YORK)).toEqual({
+      status: "no-data",
+    });
+  });
+
+  it("propagates any other failure, which the sweep records against the instrument", async () => {
+    await start(
+      clientCharting(async () => {
+        throw new Error("429 Too Many Requests");
+      }),
+    );
+
+    await expect(socketProvider().getTrailingDividend("ITOT", SINCE, NEW_YORK)).rejects.toThrow(
       "429 Too Many Requests",
     );
   });
