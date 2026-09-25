@@ -5,11 +5,11 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
 
-import { ValidationError } from "~/lib/input.server";
 import { changeAlias, listAliases } from "~/lib/instrument-aliases.server";
 import { unresolvedStrings } from "~/lib/instrument-resolution.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 import type { TestContext } from "./support/database.ts";
 
@@ -25,17 +25,6 @@ async function meaningOf(rawString: string, db: TestContext["db"]): Promise<stri
     .where("raw_string", "=", rawString)
     .executeTakeFirst();
   return row?.instrument_id ?? null;
-}
-
-/** The refusal a call produced, or a failure if it did not refuse. */
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the change to be refused, and it was not.");
 }
 
 /** The audit's shape: QAALIAS matched to VTI, held in one account, named by one recorded file. */

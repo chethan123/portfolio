@@ -10,6 +10,7 @@ import {
   type AmountShape,
 } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
+import { FieldError } from "~/components/error-message";
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import {
   NarrowedTo,
@@ -936,11 +937,7 @@ function Row({
               <div>
                 {!canEdit ? (
                   <>
-                    {errors?.form === undefined ? null : (
-                      <p id="revise-error-form" className="field-error" role="alert">
-                        {errors.form}
-                      </p>
-                    )}
+                    <FieldError id="revise-error-form" message={errors?.form} />
                     <p className="form-note">
                       Use <b>Show amounts</b> in the navigation to reveal and edit this position.
                     </p>
@@ -952,14 +949,7 @@ function Row({
                     </p>
                     {messages.length > 0 ? (
                       messages.map(([field, message]) => (
-                        <p
-                          key={field}
-                          id={`revise-error-${field}`}
-                          className="field-error"
-                          role="alert"
-                        >
-                          {message}
-                        </p>
+                        <FieldError key={field} id={`revise-error-${field}`} message={message} />
                       ))
                     ) : (
                       // Said before the click — "Save" files a whole new statement, not a single overwrite.

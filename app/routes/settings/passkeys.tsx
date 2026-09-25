@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { data, useFetcher, useRevalidator } from "react-router";
 
+import { FieldError, FormError } from "~/components/error-message";
 import { formatDate, formatDateLocal } from "~/lib/format";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { CHALLENGE_TTL_MS, LABEL_MAX_LENGTH } from "~/lib/lock";
@@ -483,11 +484,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
           </label>
         ) : null}
 
-        {note ? (
-          <p className="form-error" role="alert">
-            {note}
-          </p>
-        ) : null}
+        <FormError message={note} />
 
         {!canUseAPasskey ? (
           <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>
@@ -784,11 +781,7 @@ function PasskeyRow({
         </div>
       </div>
 
-      {note ? (
-        <p className="field-error" role="alert">
-          {note}
-        </p>
-      ) : null}
+      <FieldError message={note} />
     </li>
   );
 }

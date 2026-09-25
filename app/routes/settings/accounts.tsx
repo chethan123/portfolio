@@ -2,9 +2,10 @@ import { Form, Link } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
 import { AccountNumberTail } from "~/components/account-number-tail";
+import { FormError } from "~/components/error-message";
 import { numberTail } from "~/lib/account-label";
 import { createAccount, listAccounts } from "~/lib/accounts.server";
-import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
 import { listPeople } from "~/lib/people.server";
 
 import type { Route } from "./+types/accounts";
@@ -33,7 +34,7 @@ export async function action({ request }: Route.ActionArgs) {
     await createAccount(values);
     return null;
   } catch (error) {
-    if (error instanceof ValidationError) return { errors: error.fieldErrors, values };
+    if (error instanceof ValidationError) return refused(error, values);
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
   }
@@ -120,6 +121,8 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
           </header>
 
           <Form method="post" className="panel-form">
+            <FormError message={actionData?.formError} />
+
             <AccountFields
               people={people}
               values={actionData?.values}

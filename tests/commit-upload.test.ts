@@ -26,6 +26,7 @@ import { accountHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { onlyRecorded, onlySection, posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
@@ -35,17 +36,6 @@ import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 afterAll(closeTestDatabase);
 
 const encode = (text: string) => new TextEncoder().encode(text);
-
-/** The refusal a call produced, or a failure if it did not refuse. */
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the write to be refused, and it was not.");
-}
 
 const BASE_MAPPING: StatementMapping = {
   headerRow: 0,

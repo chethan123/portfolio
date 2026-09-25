@@ -1,12 +1,13 @@
 import { Form, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
+import { FieldError, FormError } from "~/components/error-message";
 import { ASSET_CLASSES } from "~/lib/account-options";
 import {
-  FORM_ERROR,
   NotFoundError,
   ValidationError,
   formFields,
+  refused,
 } from "~/lib/input.server";
 import { describeInstrument } from "~/lib/format";
 import {
@@ -105,9 +106,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${draft.id}/review${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      return refused(error, values);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -120,13 +119,6 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
   const errors = actionData?.errors;
   // Typed wins over default on a refusal; `actionData` present means a refused submit.
   const values = actionData?.values;
-
-  const fieldError = (name: string) =>
-    errors?.[name] ? (
-      <p className="field-error" role="alert">
-        {errors[name]}
-      </p>
-    ) : null;
 
   const invalid = (name: string): true | undefined =>
     errors?.[name] !== undefined ? true : undefined;
@@ -146,17 +138,9 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
           upload abandoned before then teaches the next one no names.
         </p>
 
-        {staleReviewMessage ? (
-          <p className="form-error" role="alert">
-            {staleReviewMessage}
-          </p>
-        ) : null}
+        <FormError message={staleReviewMessage} />
 
-        {actionData?.formError ? (
-          <p className="form-error" role="alert">
-            {actionData.formError}
-          </p>
-        ) : null}
+        <FormError message={actionData?.formError} />
       </div>
 
       {/* No skip: a skipped string would go missing from the statement, and §5.2 reads a missing row as sold. */}
@@ -182,7 +166,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                 units
               </p>
 
-              {fieldError(`kind-${index}`)}
+              <FieldError message={errors?.[`kind-${index}`]} />
 
               {/* Both branches always render — greying the unchosen one needs JavaScript; its fields are ignored on submit. */}
               <label className="choice">
@@ -213,7 +197,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       ))}
                     </select>
                   </label>
-                  {fieldError(`instrumentId-${index}`)}
+                  <FieldError message={errors?.[`instrumentId-${index}`]} />
                 </div>
               </div>
 
@@ -240,7 +224,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     />
                   </label>
                   <p className="field-note">Leave empty for an instrument with no public ticker.</p>
-                  {fieldError(`symbol-${index}`)}
+                  <FieldError message={errors?.[`symbol-${index}`]} />
                 </div>
 
                 <div>
@@ -259,7 +243,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       autoComplete="off"
                     />
                   </label>
-                  {fieldError(`name-${index}`)}
+                  <FieldError message={errors?.[`name-${index}`]} />
                 </div>
 
                 <fieldset>
@@ -286,7 +270,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     A manual price is typed from the statement and carries forward until it is
                     changed.
                   </p>
-                  {fieldError(`priceSource-${index}`)}
+                  <FieldError message={errors?.[`priceSource-${index}`]} />
                 </fieldset>
 
                 <div>
@@ -307,7 +291,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       <option value={newClassification}>New classification…</option>
                     </select>
                   </label>
-                  {fieldError(`classificationId-${index}`)}
+                  <FieldError message={errors?.[`classificationId-${index}`]} />
                 </div>
 
                 <div>
@@ -322,7 +306,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     />
                   </label>
                   <p className="field-note">Used only when "New classification…" is chosen.</p>
-                  {fieldError(`newClassificationName-${index}`)}
+                  <FieldError message={errors?.[`newClassificationName-${index}`]} />
                 </div>
 
                 <div>
@@ -342,7 +326,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       ))}
                     </select>
                   </label>
-                  {fieldError(`newClassificationAssetClass-${index}`)}
+                  <FieldError message={errors?.[`newClassificationAssetClass-${index}`]} />
                 </div>
               </div>
             </div>

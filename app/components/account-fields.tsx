@@ -1,3 +1,4 @@
+import { FieldError } from "~/components/error-message";
 import { ACCOUNT_KINDS, TAX_TREATMENTS } from "~/lib/account-options";
 
 import type { FieldErrors } from "~/lib/input.server";
@@ -25,13 +26,6 @@ export function AccountFields({
 }) {
   const field = (name: string) => `${idPrefix}-${name}`;
 
-  const Error_ = ({ name }: { name: string }) =>
-    errors?.[name] ? (
-      <p className="field-error" role="alert">
-        {errors[name]}
-      </p>
-    ) : null;
-
   return (
     <>
       <div>
@@ -45,7 +39,7 @@ export function AccountFields({
             autoComplete="off"
           />
         </label>
-        <Error_ name="name" />
+        <FieldError message={errors?.name} />
       </div>
 
       <div>
@@ -60,7 +54,7 @@ export function AccountFields({
             autoComplete="off"
           />
         </label>
-        <Error_ name="institution" />
+        <FieldError message={errors?.institution} />
       </div>
 
       <div>
@@ -80,7 +74,7 @@ export function AccountFields({
             ))}
           </select>
         </label>
-        <Error_ name="kind" />
+        <FieldError message={errors?.kind} />
       </div>
 
       <div>
@@ -100,7 +94,7 @@ export function AccountFields({
             ))}
           </select>
         </label>
-        <Error_ name="ownerId" />
+        <FieldError message={errors?.ownerId} />
       </div>
 
       <div>
@@ -120,7 +114,7 @@ export function AccountFields({
             ))}
           </select>
         </label>
-        <Error_ name="taxTreatment" />
+        <FieldError message={errors?.taxTreatment} />
         <p className="field-note">
           A workplace plan holding both Traditional and Roth money is two accounts at the same
           institution, one of each treatment.
@@ -138,7 +132,7 @@ export function AccountFields({
             autoComplete="off"
           />
         </label>
-        <Error_ name="externalAccountNumber" />
+        <FieldError message={errors?.externalAccountNumber} />
         <p className="field-note">
           Optional, and a check rather than a chooser: it never picks the account for an
           upload, but a statement naming a different number than the one recorded here is

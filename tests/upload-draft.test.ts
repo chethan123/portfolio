@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
 
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { resolveAll, unresolvedStrings } from "~/lib/instrument-resolution.server";
 import {
@@ -15,22 +15,13 @@ import {
 } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 
 afterAll(closeTestDatabase);
 
 const CSV = new TextEncoder().encode("Symbol,Quantity\nVTI,100\n");
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the write to be refused, and it was not.");
-}
 
 describe("createDraft", () => {
   it(

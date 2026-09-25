@@ -5,7 +5,7 @@
 // once per created feed instrument" is a rule, not an implementation detail.
 import { afterAll, describe, expect, it } from "vitest";
 
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import {
   NEW_CLASSIFICATION,
   aliasesFor,
@@ -18,6 +18,7 @@ import {
 import { sameRawStrings } from "~/lib/raw-string";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 import type { TestContext } from "./support/database.ts";
 import type { ProbeSymbols } from "~/lib/price-provider.server";
@@ -65,17 +66,6 @@ const createFields = (overrides: Partial<ResolutionFields> = {}): ResolutionFiel
 /** The draft an answer belongs to — every resolution is one draft's own until its statement is recorded. */
 async function aDraft(ctx: Pick<TestContext, "seedAccount" | "seedUploadDraft">): Promise<string> {
   return (await ctx.seedUploadDraft({ account: await ctx.seedAccount() })).id;
-}
-
-/** The refusal a call produced, or a failure if it did not refuse. */
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the resolution to be refused, and it was not.");
 }
 
 describe("resolveAll — pointing at an existing instrument", () => {

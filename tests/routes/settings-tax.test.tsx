@@ -18,9 +18,7 @@ describe("a refused capital gains rate without JavaScript", () => {
       const refused = await action(args(post(path, { capitalGainsRate: "1,5" })));
       const markup = renderRoute(Tax, path, await loader(), { actionData: refused });
 
-      expect(markup).toContain(
-        '<p id="capital-gains-rate-error" class="field-error" role="alert">',
-      );
+      expect(markup).toContain('id="capital-gains-rate-error"');
       expect(markup).toMatch(
         /<input(?=[^>]*id="capital-gains-rate")(?=[^>]*aria-describedby="[^"]*capital-gains-rate-error[^"]*")(?=[^>]*aria-invalid="true")[^>]*>/,
       );

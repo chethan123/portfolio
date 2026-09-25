@@ -9,7 +9,7 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { redirect, useRevalidator, useSubmit } from "react-router";
 
 import { LockIcon, SpinnerIcon } from "~/components/icons";
-import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
+import { ValidationError, formFields, refused } from "~/lib/input.server";
 import { RETURN_PARAM } from "~/lib/lock";
 import { isLocked, lockCookie, readGrant, readLockCookie, unlockOptions, verifyUnlock } from "~/lib/lock.server";
 import { requestAssertion, supportsPasskeys } from "~/lib/unlock-ceremony";
@@ -80,7 +80,7 @@ export async function action({ request }: Route.ActionArgs) {
     });
   } catch (error) {
     if (error instanceof ValidationError) {
-      return { formError: error.fieldErrors[FORM_ERROR] ?? null };
+      return { formError: refused(error, fields).formError };
     }
     throw error;
   }
