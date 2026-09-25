@@ -13,7 +13,8 @@ Terms are added when one is actually resolved, not preemptively.
 
 **Annual dividend**:
 What a holding is projected to pay over the coming year, from the quantity held and the instrument's
-current per-share rate. The annual dividend is forward-looking and current-only, so there is no such
+current per-share rate. The rate is the trailing year's distributions summed, used as the projection
+for the coming year. The annual dividend is forward-looking and current-only, so there is no such
 figure for a past date.
 _Avoid_: dividend income, payout, projected income, distribution.
 

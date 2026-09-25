@@ -1129,6 +1129,14 @@ owns the wording:
   stem, not the level. **Absent when there was nothing to fill**, the ordinary case on an instance
   whose spine covers everything held, so a silence here is usually not a fault. What each attempt
   came to is a `price_backfill` row and a sentence at Settings → Prices.
+- **One line per dividend sweep a tick ran that attempted or failed something**, stem
+  `Price dividends`: instruments attempted, rates written, refused, and how many calls failed.
+  Informational when nothing failed, a warning otherwise, and preceded by `Price dividends batch
+  failed` when the batch could not go on, at error level, or a warning when the provider was
+  unreachable. Grep the stem, not the level. **Absent when every candidate's stamp is still
+  fresh**, the ordinary case once an instance has swept every instrument at least once, so a
+  silence here is usually not a fault. What each attempt came to is the three
+  `trailing_dividend_*` columns on that instrument's `quote` row.
 - **A provider outage** at error level, stem `Price provider failed`. Every selected instrument
   is marked stale and the last known prices are kept. Since the fetch moved behind the worker's
   socket, the same stem is also where an unreachable worker shows up: the text reads `no worker
@@ -1193,7 +1201,8 @@ Only the last is a fault:
 1. **Outside the scheduled quote window.** A tick outside the window around regular market hours asks for no quotes, so it writes no
    `Price refresh` line and no `price_poll` row. It no longer returns before doing anything. It
    still reads the cadence, still asks which spines have a gap, and may write a `Price backfill`
-   line and spend a request on one (ADR-0011).
+   line and spend a request on one (ADR-0011). The dividend sweep runs every tick regardless of the
+   window too, and may write its own `Price dividends` line.
 2. **Another refresh was already running or held the lock.** A tick that lands while one is still
    going, or while another process holds the advisory lock, is dropped silently and never queued.
 3. **The poller failed to start.** That one *does* log, once, at error level.
@@ -1201,7 +1210,9 @@ Only the last is a fault:
 A *successful* **Refresh now** press writes no `Price refresh` line, because its outcome is reported
 on the screen that pressed it. It writes no `Price backfill` line either, though it runs a batch,
 because that line belongs to the tick. The attempt still lands a `price_poll` row and the batch still
-lands its `price_backfill` rows, and a currency refusal along the way still logs `Price refused`.
+lands its `price_backfill` rows, and a currency refusal along the way still logs `Price refused`. It
+runs no dividend sweep at all, so it never writes a `Price dividends` line and touches no
+`trailing_dividend_*` column; a scheduled tick, at most one cadence away, does that instead.
 
 There is also a quiet period by design. The first tick is one full interval after boot, with
 no immediate poll, so a freshly recreated container is silent for up to the refresh cadence whether

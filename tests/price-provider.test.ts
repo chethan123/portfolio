@@ -8,9 +8,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CurrencyRefused,
   probeVerdicts,
+  toProviderDividends,
   toProviderHistory,
   toProviderQuote,
   type HistoryRange,
+  type ProviderDividends,
 } from "~/lib/price-provider.server";
 import { socketProbe, socketProvider } from "~/lib/provider-socket.server";
 
@@ -472,13 +474,28 @@ const split = (date: string, numerator: number, denominator: number) => ({
   splitRatio: `${numerator}:${denominator}`,
 });
 
+// 13:30Z for the same reason a bar carries it: an ex-date is a market date, dated in the market zone
+const dividend = (date: string, amount: number | null) => ({
+  date: new Date(`${date}T13:30:00Z`),
+  amount,
+});
+
 const chartOf = (payload: {
   currency?: string;
   splits?: ReturnType<typeof split>[];
+  dividends?: ReturnType<typeof dividend>[];
   quotes: ReturnType<typeof bar>[];
 }) => ({
   meta: { currency: payload.currency ?? "USD" },
-  ...(payload.splits === undefined ? {} : { events: { splits: payload.splits } }),
+  // No `events` key at all where neither is stated — how an instrument that pays nothing answers
+  ...(payload.splits === undefined && payload.dividends === undefined
+    ? {}
+    : {
+        events: {
+          ...(payload.splits === undefined ? {} : { splits: payload.splits }),
+          ...(payload.dividends === undefined ? {} : { dividends: payload.dividends }),
+        },
+      }),
   quotes: payload.quotes,
 });
 
@@ -789,11 +806,11 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 });
 
-describe("asking the worker for one symbol's history", () => {
-  const clientCharting = (
-    chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
-  ): YahooClient => ({ quote: async () => [], chart });
+const clientCharting = (
+  chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
+): YahooClient => ({ quote: async () => [], chart });
 
+describe("asking the worker for one symbol's history", () => {
   it("sends one symbol per call, upper-cased, over the range's start", async () => {
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
 
@@ -866,6 +883,244 @@ describe("asking the worker for one symbol's history", () => {
     );
 
     await expect(socketProvider().getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
+      "429 Too Many Requests",
+    );
+  });
+});
+
+// The window refreshTrailingDividends forms for a sweep on 2026-09-25: 365 + 21 days back.
+const SINCE = "2025-09-04";
+
+// One bar, because a chart with none is a delisted ticker rather than a non-payer.
+const A_BAR = [bar("2026-09-22", 100)];
+
+const dividendsOf = (
+  dividends: ReturnType<typeof dividend>[] | undefined,
+  since = SINCE,
+): ProviderDividends => toProviderDividends(chartOf({ dividends, quotes: A_BAR }), since, NEW_YORK);
+
+function perShareOf(dividends: ReturnType<typeof dividend>[], since = SINCE): string {
+  const result = dividendsOf(dividends, since);
+  if (result.status !== "ok") throw new Error(`expected a rate, got ${result.status}`);
+  return result.perShare;
+}
+
+// The 15th of thirteen consecutive months, oldest first: twelve fill the window and the thirteenth
+// is a year older than the newest.
+const MONTHLY = [
+  "2025-09-15",
+  "2025-10-15",
+  "2025-11-15",
+  "2025-12-15",
+  "2026-01-15",
+  "2026-02-15",
+  "2026-03-15",
+  "2026-04-15",
+  "2026-05-15",
+  "2026-06-15",
+  "2026-07-15",
+  "2026-08-15",
+  "2026-09-15",
+];
+
+describe("summing the trailing year of distributions", () => {
+  it("stores a zero rate for an instrument with no events key beside real bars", () => {
+    // BRK-B: Yahoo omits `events` entirely for a payer of nothing, which is a real zero
+    expect(dividendsOf(undefined)).toEqual({ status: "ok", perShare: "0.0000" });
+  });
+
+  it("answers no-data for a chart carrying no bars, which is not evidence of a non-payer", () => {
+    // a delisted ticker answers this way too; a stored zero would be indistinguishable from a measured one
+    expect(
+      toProviderDividends(
+        chartOf({ dividends: [dividend("2026-06-15", 1)], quotes: [] }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "no-data" });
+  });
+
+  it("excludes an event dated exactly the window's start and keeps one a day later", () => {
+    expect(perShareOf([dividend(SINCE, 5), dividend("2025-09-05", 0.25)])).toBe("0.2500");
+  });
+
+  it("reads a zero for a payer whose last distribution has fallen out of the window", () => {
+    // still trading, stopped paying: a real zero about three weeks later than a plain window (§14)
+    expect(perShareOf([dividend("2025-08-20", 1)])).toBe("0.0000");
+  });
+
+  it("drops the oldest of five quarterly payments inside 365 days, the newest's own year-ago slot", () => {
+    // 9.99 marks the slot that must go: a plain 365-day window counts it and reads +25%
+    expect(
+      perShareOf([
+        dividend("2025-09-15", 9.99),
+        dividend("2025-12-15", 1),
+        dividend("2026-03-15", 1),
+        dividend("2026-06-15", 1),
+        dividend("2026-09-15", 1),
+      ]),
+    ).toBe("4.0000");
+  });
+
+  it("counts an annual payer's two payments exactly 365 days apart as one", () => {
+    expect(perShareOf([dividend("2025-09-15", 2.5), dividend("2026-09-15", 3)])).toBe("3.0000");
+  });
+
+  it("counts one payment when an annual ex-date lands fourteen days earlier than last year's", () => {
+    // the direction that pins the tolerance: at 7 both are inside the cutoff and the rate doubles
+    expect(perShareOf([dividend("2025-09-29", 2.5), dividend("2026-09-15", 3)])).toBe("3.0000");
+  });
+
+  it("reports last year's payment for an annual payer that has not yet paid this year", () => {
+    // the window is wider than a year for exactly this: a plain one reads $0 for the drift
+    expect(perShareOf([dividend("2025-12-19", 2.5)])).toBe("2.5000");
+  });
+
+  it("keeps all twelve of a monthly payer's payments", () => {
+    expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.1)))).toBe("1.2000");
+  });
+
+  it("drops a thirteenth monthly payment inside the window", () => {
+    const thirteen = MONTHLY.map((date, index) => dividend(date, index === 0 ? 9.99 : 0.1));
+
+    expect(perShareOf(thirteen)).toBe("1.2000");
+  });
+
+  it("applies no split ratio to an amount, which Yahoo has already back-adjusted", () => {
+    // NVDA's pre-10:1 dividends come back as 0.004, not the 0.04 paid: already in today's share
+    // terms, so unadjusted()'s arithmetic here would adjust a second time
+    const dividends = [dividend("2026-03-15", 0.004), dividend("2026-06-15", 0.004)];
+
+    expect(perShareOf(dividends)).toBe("0.0080");
+    expect(
+      toProviderDividends(
+        chartOf({ splits: [split("2026-06-10", 10, 1)], dividends, quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "0.0080" });
+  });
+
+  it("reads a date that crossed the worker socket as an ISO string", () => {
+    // JSON has no Date: whatever the library coerced it to arrives here as a string
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: {
+            dividends: [
+              { date: new Date("2025-12-19T13:30:00Z").toISOString(), amount: 2.5 },
+              { date: new Date("2026-03-19T13:30:00Z").toISOString(), amount: 0.5 },
+            ],
+          },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "3.0000" });
+  });
+
+  it("refuses the whole response when one event's date cannot be read", () => {
+    // all or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: {
+            dividends: [
+              { date: "not a date", amount: 0.5 },
+              { date: new Date("2026-06-15T13:30:00Z"), amount: 0.5 },
+            ],
+          },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses the whole response when an amount is not a finite number", () => {
+    expect(dividendsOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", null)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("refuses an events block keyed by epoch second, which may hide a payment", () => {
+    // the raw endpoint's return:"object" shape — reading it as no payments is the silent zero
+    expect(
+      toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: { dividends: { "1750000000": { date: 1750000000, amount: 0.5 } } },
+          quotes: A_BAR,
+        },
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses a sum too large for the column it is bound for", () => {
+    // each amount fits; the sum does not, and an overflow would abort the sweep's own update
+    expect(dividendsOf([dividend("2026-06-15", 6e15), dividend("2026-09-15", 6e15)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("refuses a chart quoted in a currency this instance cannot hold", () => {
+    expect(
+      toProviderDividends(
+        chartOf({ currency: "GBP", dividends: [dividend("2026-06-15", 1)], quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "non-usd", currency: "GBP" });
+  });
+});
+
+describe("asking the worker for one symbol's distributions", () => {
+  it("asks for quarterly bars and dividend events, over a period1 widened past the window", async () => {
+    // widened by the fetch lead only: an event dated exactly `since` has to be in the payload for
+    // the parser to be the thing that excludes it
+    const seen: Array<{ symbol: string; options: ChartRequest }> = [];
+
+    await start(
+      clientCharting(async (symbol, options) => {
+        seen.push({ symbol, options });
+        return chartOf({ dividends: [dividend("2026-09-15", 1.5)], quotes: A_BAR });
+      }),
+    );
+
+    const result = await socketProvider().getTrailingDividend(" itot ", SINCE, NEW_YORK);
+
+    expect(seen).toEqual([
+      { symbol: "ITOT", options: { period1: "2025-08-28", interval: "3mo", events: "div" } },
+    ]);
+    expect(result).toEqual({ status: "ok", perShare: "1.5000" });
+  });
+
+  it("answers no-data for the error a delisted symbol throws, so the last rate is kept", async () => {
+    await start(
+      clientCharting(async () => {
+        throw new Error("No data found, symbol may be delisted");
+      }),
+    );
+
+    expect(await socketProvider().getTrailingDividend("GONE", SINCE, NEW_YORK)).toEqual({
+      status: "no-data",
+    });
+  });
+
+  it("propagates any other failure, which the sweep records against the instrument", async () => {
+    await start(
+      clientCharting(async () => {
+        throw new Error("429 Too Many Requests");
+      }),
+    );
+
+    await expect(socketProvider().getTrailingDividend("ITOT", SINCE, NEW_YORK)).rejects.toThrow(
       "429 Too Many Requests",
     );
   });

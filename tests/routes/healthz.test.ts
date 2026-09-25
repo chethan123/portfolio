@@ -38,7 +38,7 @@ afterEach(() => {
   stopPricePoller();
 });
 
-/** A provider that answers no quotes and no history — these tests never let a tick reach a real one. */
+/** A provider that answers nothing at all — these tests never let a tick reach a real one. */
 function silentProvider(): PriceProvider {
   return {
     async getQuotes() {
@@ -46,6 +46,9 @@ function silentProvider(): PriceProvider {
     },
     async getDailyCloses() {
       return { status: "no-history" };
+    },
+    async getTrailingDividend() {
+      return { status: "no-data" };
     },
   };
 }

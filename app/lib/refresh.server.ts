@@ -32,7 +32,7 @@ export type RefreshOutcome =
    */
   | { status: "error" };
 
-/** `report.quotes` is null unless quotes were asked for. */
+/** `report.quotes` and `report.dividends` are each null unless that step was asked for. */
 export type RefreshRun =
   | { status: "done"; report: RefreshPricesReport }
   | { status: "busy" }
@@ -47,13 +47,13 @@ export type RefreshRun =
  * must never throw (`provider-socket.server.ts` keeps that constraint).
  */
 export async function runRefresh(
-  { quotes }: { quotes: boolean },
+  options: { quotes: boolean; dividends: boolean },
   now: Date,
   provider: PriceProvider = socketProvider(),
 ): Promise<RefreshRun> {
   try {
     const result = await withRefreshLock(() =>
-      refreshPrices(provider, getConfig().MARKET_TIMEZONE, now, { quotes }, getDb()),
+      refreshPrices(provider, getConfig().MARKET_TIMEZONE, now, options, getDb()),
     );
 
     if (result === null) return { status: "busy" };

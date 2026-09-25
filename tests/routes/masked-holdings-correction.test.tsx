@@ -138,7 +138,7 @@ describe("a correction on masked Holdings", () => {
       await ctx.seedQuote({
         instrument: gain,
         price: "200.0000",
-        annualDividendPerShare: "10.0000",
+        trailingDividendPerShare: "10.0000",
       });
       await ctx.seedQuote({ instrument: loss, price: "100.0000" });
       await ctx.seedQuote({ instrument: flat, price: "50.0000" });

@@ -13,8 +13,10 @@ import type { Route } from "./+types/refresh";
 export async function action({ request }: Route.ActionArgs): Promise<RefreshOutcome | Response> {
   const form = await request.formData();
 
-  // A press runs the backfill batch too (ADR-0011); it reports the quotes.
-  const outcome = outcomeOf(await runRefresh({ quotes: true }, new Date()));
+  // A press runs the backfill batch too (ADR-0011); it reports the quotes. No dividend sweep: the
+  // press already waits for quotes plus up to 5x35s of backfill, and another 5x35s would make it a
+  // six-minute POST. A scheduled tick, which does sweep, is 15 minutes away.
+  const outcome = outcomeOf(await runRefresh({ quotes: true, dividends: false }, new Date()));
 
   // Document POST (`Sec-Fetch-Mode` is browser-set, unspoofable): no fetcher waiting, so redirect
   // rather than render a bare payload. A fetch omitting the header counts as scripted.

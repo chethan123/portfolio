@@ -101,12 +101,13 @@ no longer reaches Yahoo at all. `app` crosses a unix socket to `worker` for ever
 Yahoo only through `egress-proxy`, which admits a `CONNECT` to five hosts and checks the TLS server
 name inside the tunnel against the host it was opened to (§3.1, §7.5,
 [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). Yahoo
-is reached three ways, over two endpoints: the poller's batched *quote* fetch and the per-symbol
-*chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the request path
-entirely, and `socketProbe`, a currency check over every symbol one submission creates, run *inside*
-the form submission that creates them (§6.1). The last is the only place a third party can make a
-person wait. All three go through the one interface in §7.5, precisely because the endpoint is
-unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
+is reached three ways, over three endpoints: the poller's batched *quote* fetch and the per-symbol
+*chart* fetch the backfill batch and the dividend sweep each make on the same refresh (ADR-0011),
+both off the request path entirely, and `socketProbe`, a currency check over every symbol one
+submission creates, run *inside* the form submission that creates them (§6.1). The last is the only
+place a third party can make a person wait. All three go through the one interface in §7.5,
+precisely because the endpoint is unofficial and expected to break. **Google** is the `gate`
+service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token in one
 call, to `www.googleapis.com:443`. Both happen outside the app process entirely. That seam is what
 keeps "an identity provider" out of the application's dependency list while the instance still has
@@ -567,6 +568,7 @@ rather than a number to notice.
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes, a new set |
 | Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `upload_draft_answer` (the draft's own answer, never `instrument_alias`) | Yes, with one compensating delete: an instrument created for a string that vocabulary gained meanwhile, or that the same draft's earlier submit already answered, is removed rather than left as a duplicate |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No. The intraday tier is overwritten by design |
+| Sweep dividends | `prices.server.ts` → `refreshTrailingDividends` | `quote` (update: `trailing_dividend_per_share`, `trailing_dividend_as_of`, `trailing_dividend_outcome`) | No. A refusal or a throw still advances the stamp, leaving the last measured rate standing |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes. It fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
 The first three, the writers of history, run inside `withAccountLock` (§4.2, §7.2), and
@@ -702,6 +704,9 @@ erDiagram
         numeric price "numeric(20,4)"
         numeric yield_pct "numeric(10,6), nullable"
         numeric annual_dividend_per_share "nullable"
+        numeric trailing_dividend_per_share "nullable; the rate holding_valued reads"
+        timestamptz trailing_dividend_as_of "nullable; the sweep's own retry clock"
+        text trailing_dividend_outcome "nullable; ok | no_data | non_usd | unreadable | provider_failed"
         timestamptz as_of "the provider's own instant"
         boolean is_stale
     }
@@ -1391,6 +1396,14 @@ sequenceDiagram
     end
 ```
 
+Then, still the same tick and lock, the dividend sweep: up to five instruments, oldest
+`trailing_dividend_as_of` first, one `getTrailingDividend(symbol, since, tz)` call per candidate
+against the worker's `/dividends` endpoint. An `ok` result writes `trailing_dividend_per_share`,
+`trailing_dividend_as_of` and `trailing_dividend_outcome` on `quote`; a refusal or a throw writes the
+stamp and outcome only, leaving the last measured rate standing. It too runs regardless of the quote
+window and reports separately (`Price dividends`, `price-poller.server.ts`) — only a person's own
+"Refresh now" press skips it.
+
 A refresh writes the three tiers below, plus `price_poll`, plus `instrument.quote_type` when the
 provider names one, plus `price_backfill` and a second pass over `price_daily` for the batch that
 follows the quotes. The `quote_type` write is what keeps the Analysis screen's stocks-versus-funds
@@ -1864,11 +1877,12 @@ hand right after any change to the host's engine or container runtime.
 ### 7.5 The provider seam
 
 ```
-        ┌────────────────────────────────────────────────────────────────────────────┐
-        │  PriceProvider                                                             │
-        │    getQuotes(symbols: string[]): Promise<ProviderQuote[]>                  │
-        │    getDailyCloses(symbol: string, range, tz: string): Promise<History>     │
-        └───────────────────────┬────────────────────────────────────────────────────┘
+        ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+        │  PriceProvider                                                                                 │
+        │    getQuotes(symbols: string[]): Promise<ProviderQuote[]>                                      │
+        │    getDailyCloses(symbol: string, range, tz: string): Promise<History>                         │
+        │    getTrailingDividend(symbol: string, since: IsoDate, tz: string): Promise<ProviderDividends> │
+        └───────────────────────┬────────────────────────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
         socketProvider()               the tests' fake
@@ -2535,6 +2549,7 @@ also export pure helpers for testing.
 | `0016_multi_account_draft_and_mapping.sql` | Drops `not null` from `upload_draft.account_id` (a null row is the multi-account draft) and `column_mapping.institution` (null is the multi-account scope), replacing `column_mapping_one_per_fingerprint` with the two partial indexes above so the two scopes can never find or overwrite each other's mapping for one header |
 | `0017_upload_draft_account_answer.sql` | `upload_draft_account_answer`, a multi-account draft's own answers to account numbers no open account records, keyed by draft and number (`collate "C"`, byte-exact), a null `account_id` a skip. `upload_draft_account_answer_account_unique` holds one number per account per draft, and `upload_draft_account_answer_account_id_idx` (`account_id`) serves the account cascade. `recordUpload`'s multi-account path writes an answered number onto its account before the draft's delete cascades the rest away (ADR-0015) |
 | `0018_account_number_line_breaks.sql` | Takes the line breaks out of account numbers captured before `statement.ts` stripped them, so the column spells a number the way the parser and the form now do (#312). `0015` trims the ends only, so an interior break survives it into `account_open_number_unique`; folding it could make two indexed numbers one, so this fails first, naming the folded number and the open accounts holding it, as `0015` names duplicates |
+| `0019_trailing_dividend.sql` | `quote.trailing_dividend_per_share`, `trailing_dividend_as_of` and `trailing_dividend_outcome` (a `check`, kept in step by hand with `DIVIDEND_OUTCOMES`), the one-time carry-over from `annual_dividend_per_share`, and `holding_valued` repointed at the new column |
 
 ### `public/`
 

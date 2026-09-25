@@ -9,11 +9,16 @@ import { sql } from "kysely";
 import { addDays } from "./chart-range.ts";
 import { getDb, getPool, inTransaction, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
-import { ProviderUnreachable } from "./price-provider.server.ts";
+import {
+  ANNIVERSARY_TOLERANCE_DAYS,
+  ProviderUnreachable,
+  TRAILING_WINDOW_DAYS,
+} from "./price-provider.server.ts";
 import type {
   HistoryRange,
   PriceProvider,
   ProviderDailyClose,
+  ProviderDividends,
   ProviderHistory,
   ProviderQuote,
 } from "./price-provider.server.ts";
@@ -35,6 +40,22 @@ const BACKFILL_RANGE_LEAD_DAYS = 7;
 
 /** How far a quote's market date may sit from `now`'s before {@link writeDailyClose} refuses it. */
 const CLOSE_WINDOW_DAYS = 7;
+
+/** The sweep's pacing, as {@link BACKFILL_BATCH_SIZE} is the backfill's: no queue, resumed next tick. */
+const DIVIDEND_BATCH_SIZE = 5;
+
+/**
+ * Re-measure interval. A day count, not an interval string — the bound is computed here and bound as
+ * a `Date`. `0019_trailing_dividend.sql`'s backdated `interval '7 days'` is this same 7, kept in
+ * step by hand.
+ */
+const DIVIDEND_STALE_DAYS = 7;
+
+/**
+ * Retry after a failed call, matching {@link BACKFILL_RETRY_INTERVAL}: without it one 429 parks an
+ * instrument for a week, and a newly priced one reads $0 for that week.
+ */
+const DIVIDEND_RETRY_DAYS = 1;
 
 /** `null` if a refresh is already running. Dedicated connection — the lock is the session's. */
 export async function withRefreshLock<T>(body: () => Promise<T>): Promise<T | null> {
@@ -98,6 +119,17 @@ export const BACKFILL_OUTCOMES = {
 } as const;
 
 export type BackfillOutcome = (typeof BACKFILL_OUTCOMES)[keyof typeof BACKFILL_OUTCOMES];
+
+/** Kept in step by hand with `quote_trailing_dividend_outcome_valid` in `0019_trailing_dividend.sql`. */
+export const DIVIDEND_OUTCOMES = {
+  ok: "ok",
+  noData: "no_data",
+  nonUsd: "non_usd",
+  unreadable: "unreadable",
+  providerFailed: "provider_failed",
+} as const;
+
+export type DividendOutcome = (typeof DIVIDEND_OUTCOMES)[keyof typeof DIVIDEND_OUTCOMES];
 
 /**
  * The coverage gap, stated once for both readers so they cannot drift. A `having` predicate: reads
@@ -259,15 +291,21 @@ const LEDGER_OUTCOME: Record<Exclude<ProviderHistory["status"], "ok">, BackfillO
   "split-unresolved": BACKFILL_OUTCOMES.splitUnresolved,
 };
 
-/** Carries the counts past the throw: the batch's log line is its only surface. */
-class BackfillBatchFailed extends Error {
-  override readonly name = "BackfillBatchFailed";
-  readonly report: BackfillReport;
+/** Every batch report: {@link settle} turns a throw into one of these with the flag set. */
+type BatchReport = { batchFailed: boolean };
 
-  constructor(cause: unknown, report: BackfillReport) {
+/** Carries the counts past the throw: the batch's log line is its only surface. */
+class BatchFailed<R extends BatchReport> extends Error {
+  readonly report: R;
+
+  constructor(cause: unknown, report: R) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.report = report;
   }
+}
+
+class BackfillBatchFailed extends BatchFailed<BackfillReport> {
+  override readonly name = "BackfillBatchFailed";
 }
 
 const emptyBackfillReport = (): BackfillReport => ({
@@ -379,47 +417,255 @@ export async function backfillCloses(
   return report;
 }
 
-export type RefreshPricesReport = {
-  quotes: RefreshReport | null;
-  backfill: BackfillReport;
+export type DividendCandidate = {
+  id: string;
+  /** As stored. The adapter upper-cases it to send; nothing here rewrites it. */
+  symbol: string;
 };
 
 /**
- * One refresh: quotes, then one bounded backfill batch. Does not take the lock — every caller
- * wraps it in {@link withRefreshLock}. A backfill failure is caught and logged here, never thrown:
- * once `refreshQuotes` has committed, "the figures above are unchanged" would be false.
+ * Next batch: **currently held** feed instruments with a symbol, whose rate is unmeasured or due.
+ * Driven from `holding_valued`, which already owns the latest-position-set rule and excludes closed
+ * accounts (`0006:56`), so "no longer held" and "closed" fall out for free — where
+ * {@link selectBackfillCandidates}'s `holding`/`position_set` join is "ever held", which would cost
+ * a request a week forever for a position sold in 2019. Not a valuation read: `priceFreshness`
+ * already reads the view from this module, in this shape (§4.2 names `valuation.server.ts` the only
+ * *valuation* reader). Inner joined to `quote` so the write always lands on a row.
+ *
+ * `holding_valued` is one row per account x instrument, so the `groupBy` is what makes `limit` bound
+ * instruments: without it an ETF held in three accounts takes three slots and is fetched three
+ * times in one tick.
+ */
+export async function selectDividendCandidates(
+  db: Kysely<Database>,
+  now: Date,
+): Promise<DividendCandidate[]> {
+  // Bound as `Date`s, not `${now} - interval '7 days'`: an untyped parameter minus an interval is
+  // ambiguous across two Postgres type categories and fails with "operator is not unique".
+  const staleBefore = new Date(now.getTime() - DIVIDEND_STALE_DAYS * 86_400_000);
+  const failedBefore = new Date(now.getTime() - DIVIDEND_RETRY_DAYS * 86_400_000);
+
+  const rows = await db
+    .selectFrom("holding_valued")
+    .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
+    .where("holding_valued.price_source", "=", "feed")
+    .where("holding_valued.symbol", "is not", null)
+    // Two tiers: a failed call is retried tomorrow, every answer re-measured in a week. `is
+    // distinct from` puts a null outcome — a rate the migration carried over — in the second.
+    .where((eb) =>
+      eb.or([
+        eb("quote.trailing_dividend_as_of", "is", null),
+        eb.and([
+          eb("quote.trailing_dividend_outcome", "=", DIVIDEND_OUTCOMES.providerFailed),
+          eb("quote.trailing_dividend_as_of", "<=", failedBefore),
+        ]),
+        eb.and([
+          eb(
+            "quote.trailing_dividend_outcome",
+            "is distinct from",
+            DIVIDEND_OUTCOMES.providerFailed,
+          ),
+          eb("quote.trailing_dividend_as_of", "<=", staleBefore),
+        ]),
+      ]),
+    )
+    .groupBy([
+      "holding_valued.instrument_id",
+      "holding_valued.symbol",
+      "quote.trailing_dividend_as_of",
+    ])
+    .select(["holding_valued.instrument_id", "holding_valued.symbol"])
+    // Round-robin by oldest stamp, never `(as_of is null) desc, id`: at weekly capacity below the
+    // instrument count that never converges — low ids re-stale and are re-picked, high ids never run.
+    .orderBy("quote.trailing_dividend_as_of", (ob) => ob.asc().nullsFirst())
+    .orderBy("holding_valued.instrument_id")
+    .limit(DIVIDEND_BATCH_SIZE)
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.instrument_id),
+    // Narrowing only: the query refuses null symbols, which TS cannot see through a `where`.
+    symbol: row.symbol as string,
+  }));
+}
+
+export type DividendReport = {
+  attempted: number;
+  /** Rates replaced. A refusal is not one: it leaves the last measured rate standing. */
+  written: number;
+  refused: number;
+  /** Calls that failed, which the provider answers for in {@link DIVIDEND_OUTCOMES.providerFailed}. */
+  failed: number;
+  /** A database error partway through. Always false out of {@link refreshTrailingDividends}. */
+  batchFailed: boolean;
+};
+
+class DividendBatchFailed extends BatchFailed<DividendReport> {
+  override readonly name = "DividendBatchFailed";
+}
+
+const emptyDividendReport = (): DividendReport => ({
+  attempted: 0,
+  written: 0,
+  refused: 0,
+  failed: 0,
+  batchFailed: false,
+});
+
+/** {@link ProviderDividends} plus the one outcome only the caller can see: the call threw. */
+type DividendResult = ProviderDividends | { status: "provider-failed" };
+
+const DIVIDEND_OUTCOME: Record<Exclude<DividendResult["status"], "ok">, DividendOutcome> = {
+  "no-data": DIVIDEND_OUTCOMES.noData,
+  "non-usd": DIVIDEND_OUTCOMES.nonUsd,
+  unreadable: DIVIDEND_OUTCOMES.unreadable,
+  "provider-failed": DIVIDEND_OUTCOMES.providerFailed,
+};
+
+/**
+ * Measure the trailing year's distributions for a bounded batch. Sequential, as
+ * {@link backfillCloses} is: a queue against an unofficial endpoint is how an instance gets rate
+ * limited. `ProviderUnreachable` escapes before any write; **every other outcome, a throw included,
+ * writes the stamp** — a symbol that throws every tick would otherwise hold the head of a
+ * nulls-first queue forever and starve the sweep. A database failure is not caught here.
+ */
+export async function refreshTrailingDividends(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  now: Date,
+  db: Kysely<Database> = getDb(),
+): Promise<DividendReport> {
+  // The widened window; `toProviderDividends` applies the anniversary cutoff within it.
+  const since = addDays(
+    marketDateOf(now, marketTimeZone),
+    -(TRAILING_WINDOW_DAYS + ANNIVERSARY_TOLERANCE_DAYS),
+  );
+  const candidates = await selectDividendCandidates(db, now);
+
+  const report = emptyDividendReport();
+
+  try {
+    for (const candidate of candidates) {
+      let result: DividendResult;
+      try {
+        result = await provider.getTrailingDividend(candidate.symbol, since, marketTimeZone);
+      } catch (error) {
+        // Before anything is written; the outer catch wraps it once.
+        if (error instanceof ProviderUnreachable) throw error;
+
+        result = { status: "provider-failed" };
+      }
+
+      await writeTrailingDividend(db, candidate.id, result, now);
+
+      report.attempted += 1;
+      if (result.status === "ok") report.written += 1;
+      else if (result.status === "provider-failed") report.failed += 1;
+      else report.refused += 1;
+    }
+  } catch (error) {
+    // Wrapped only so the counts reach the composition's log line.
+    throw new DividendBatchFailed(error, report);
+  }
+
+  return report;
+}
+
+/**
+ * One `update` per instrument, never one transaction over the batch: a statement is atomic on its
+ * own, and a batch would let one bad row roll back four good ones. A refusal writes the stamp and
+ * the outcome only — the last measured rate stands, and the outcome, not the value, is what tells a
+ * measured rate from a carried one.
+ */
+async function writeTrailingDividend(
+  db: Kysely<Database>,
+  instrumentId: string,
+  result: DividendResult,
+  now: Date,
+): Promise<void> {
+  await db
+    .updateTable("quote")
+    .set(
+      result.status === "ok"
+        ? {
+            trailing_dividend_per_share: result.perShare,
+            trailing_dividend_as_of: now,
+            trailing_dividend_outcome: DIVIDEND_OUTCOMES.ok,
+          }
+        : {
+            trailing_dividend_as_of: now,
+            trailing_dividend_outcome: DIVIDEND_OUTCOME[result.status],
+          },
+    )
+    .where("instrument_id", "=", instrumentId)
+    .execute();
+}
+
+export type RefreshPricesReport = {
+  quotes: RefreshReport | null;
+  backfill: BackfillReport;
+  /** Null when the sweep did not run, as `quotes` is null when quotes are skipped. */
+  dividends: DividendReport | null;
+};
+
+/**
+ * One step after the quotes, reported rather than thrown: once `refreshQuotes` has committed, "the
+ * figures above are unchanged" would be false. A carried report keeps the counts from what the
+ * batch did get through; `carrier` is a parameter so they come back typed.
+ */
+async function settle<R extends BatchReport>(
+  label: string,
+  carrier: new (cause: unknown, report: R) => BatchFailed<R>,
+  empty: R,
+  step: () => Promise<R>,
+): Promise<R> {
+  try {
+    return await step();
+  } catch (error) {
+    const stopped = error instanceof carrier ? error : null;
+    const cause = stopped === null ? error : stopped.cause;
+
+    if (cause instanceof ProviderUnreachable) {
+      console.warn(`${label} batch failed; the provider was unreachable:`, cause.message);
+    } else {
+      console.error(`${label} batch failed; the quotes it ran beside are unaffected:`, cause);
+    }
+
+    const report = stopped === null ? empty : stopped.report;
+    report.batchFailed = true;
+    return report;
+  }
+}
+
+/**
+ * One refresh: quotes, then one bounded backfill batch, then one bounded dividend sweep. Does not
+ * take the lock — every caller wraps it in {@link withRefreshLock}. Each step after the quotes is
+ * {@link settle}d separately, not both under one `try`: one would let a backfill failure skip the
+ * sweep and lose which step failed. `dividends` is never defaulted, so a new caller must say
+ * whether it waits for the sweep.
  */
 export async function refreshPrices(
   provider: PriceProvider,
   marketTimeZone: string,
   now: Date,
-  { quotes }: { quotes: boolean },
+  { quotes, dividends }: { quotes: boolean; dividends: boolean },
   db: Kysely<Database> = getDb(),
 ): Promise<RefreshPricesReport> {
   const quotesReport = quotes ? await refreshQuotes(provider, marketTimeZone, now, db) : null;
 
-  try {
-    return {
-      quotes: quotesReport,
-      backfill: await backfillCloses(provider, marketTimeZone, now, db),
-    };
-  } catch (error) {
-    const stopped = error instanceof BackfillBatchFailed;
-    const cause = stopped ? error.cause : undefined;
+  const backfill = await settle("Price backfill", BackfillBatchFailed, emptyBackfillReport(), () =>
+    backfillCloses(provider, marketTimeZone, now, db),
+  );
 
-    if (cause instanceof ProviderUnreachable) {
-      console.warn("Price backfill batch failed; the provider was unreachable:", cause.message);
-    } else {
-      console.error(
-        "Price backfill batch failed; the quotes it ran beside are unaffected:",
-        stopped ? error.cause : error,
-      );
-    }
-
-    const report = stopped ? error.report : emptyBackfillReport();
-
-    return { quotes: quotesReport, backfill: { ...report, batchFailed: true } };
-  }
+  return {
+    quotes: quotesReport,
+    backfill,
+    dividends: dividends
+      ? await settle("Price dividends", DividendBatchFailed, emptyDividendReport(), () =>
+          refreshTrailingDividends(provider, marketTimeZone, now, db),
+        )
+      : null,
+  };
 }
 
 /** A map to a *list*: `instrument.symbol` has no unique constraint (§4.1). */
@@ -536,7 +782,11 @@ export async function refreshQuotes(
   });
 }
 
-/** Intraday tier, overwritten. A successful write is the only thing that clears `is_stale`. */
+/**
+ * Intraday tier, overwritten. A successful write is the only thing that clears `is_stale`.
+ * The five named columns are load-bearing: a `doUpdateSet(values)` covering every column would
+ * reset `trailing_dividend_as_of` on every poll and dismantle the sweep's retry clock.
+ */
 async function writeQuote(
   db: Kysely<Database>,
   instrumentId: string,

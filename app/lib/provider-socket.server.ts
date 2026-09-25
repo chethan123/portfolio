@@ -8,16 +8,20 @@
 import { getConfig } from "../../server/config.ts";
 import { isWellFormedSymbol } from "../../server/symbol-pattern.ts";
 
+import { addDays } from "./chart-range.ts";
+import type { IsoDate } from "./market-hours.ts";
 import {
   CurrencyRefused,
   isMissingHistory,
   probeVerdicts,
   ProviderUnreachable,
+  toProviderDividends,
   toProviderHistory,
   toProviderQuote,
   type HistoryRange,
   type PriceProvider,
   type ProbeSymbols,
+  type ProviderDividends,
   type ProviderHistory,
   type ProviderQuote,
   type SymbolProbe,
@@ -25,25 +29,30 @@ import {
 import { matchKey } from "./prices.server.ts";
 import { socketRequest } from "./socket-transport.server.ts";
 
-type AskKind = "quotes" | "history";
+type AskKind = "quotes" | "history" | "dividends";
 
-/** `quotes`: a slow quote is stale on arrival. `history`: past the worker's own 30 s watchdog, so the app reads its `504`. */
+/** `quotes`: a slow quote is stale on arrival. The chart kinds: past the worker's own 30 s watchdog, so the app reads its `504`. */
 const BUDGET_MS: Record<AskKind, number> = {
   quotes: 15_000,
   history: 35_000,
+  dividends: 35_000,
 };
 
 /** Shorter than quotes: a cold worker pays a three-fetch crumb handshake, and the lost `non-usd` verdict returns next refresh. */
 const PROBE_BUDGET_MS = 10_000;
 
-/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB. */
+/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB; `3mo` bars over a year are a handful. */
 const BODY_CAP_BYTES: Record<AskKind, number> = {
   quotes: 512 * 1024,
   history: 2 * 1024 * 1024,
+  dividends: 512 * 1024,
 };
 
 /** Spec §3.5's own cap on one `/quotes` body. */
 const BATCH_SIZE = 100;
+
+/** Widens `period1` only, never the arithmetic: an event dated exactly `since` has to be in the payload for {@link toProviderDividends} to exclude it. Kept in step with the sweep's own copy. */
+const DIVIDEND_FETCH_LEAD_DAYS = 7;
 
 /** Mirrors the worker's own `ERROR_TEXT_LIMIT` (`server/price-worker.ts`). */
 const ERROR_TEXT_LIMIT = 1000;
@@ -160,6 +169,18 @@ function wellFormedSymbols(symbols: string[]): string[] {
 }
 
 /**
+ * Raw payload or a throw, never a status literal: both callers discriminate the same missing-history
+ * throw, and each names it differently (`no-history`, `no-data`).
+ */
+async function askChart(
+  kind: "history" | "dividends",
+  symbol: string,
+  from: IsoDate,
+): Promise<unknown> {
+  return ask(kind, { symbol: matchKey(symbol), from });
+}
+
+/**
  * **Must not throw when built, only when called**: it is `runRefresh`'s default parameter, evaluated
  * before that function's `try`, so a throw here would reach the route's error boundary.
  */
@@ -197,10 +218,30 @@ export function socketProvider(): PriceProvider {
       marketTimeZone: string,
     ): Promise<ProviderHistory> {
       try {
-        const raw = await ask("history", { symbol: matchKey(symbol), from: range.from });
+        const raw = await askChart("history", symbol, range.from);
         return toProviderHistory(raw, range, marketTimeZone);
       } catch (error) {
         if (isMissingHistory(error)) return { status: "no-history" };
+        throw error;
+      }
+    },
+
+    async getTrailingDividend(
+      symbol: string,
+      since: IsoDate,
+      marketTimeZone: string,
+    ): Promise<ProviderDividends> {
+      try {
+        const raw = await askChart(
+          "dividends",
+          symbol,
+          addDays(since, -DIVIDEND_FETCH_LEAD_DAYS),
+        );
+        return toProviderDividends(raw, since, marketTimeZone);
+      } catch (error) {
+        // A delisted ticker answers "No data found", which is a refusal: the last measured rate is
+        // kept rather than zeroed.
+        if (isMissingHistory(error)) return { status: "no-data" };
         throw error;
       }
     },

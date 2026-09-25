@@ -3,6 +3,8 @@
 // decimal strings at stored scale — toBeCloseTo would hide the driver-coercion regression this slice prevents.
 import { afterAll, describe, expect, it } from "vitest";
 
+import { holdingYield } from "~/lib/holdings-view";
+import { toProviderDividends } from "~/lib/price-provider.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -393,7 +395,7 @@ describe("what a holding is projected to pay", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const account = await seedAccount();
       const fund = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity ETF" });
-      await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+      await seedQuote({ instrument: fund, price: "27.5000", trailingDividendPerShare: "3.6000" });
 
       // Scale 8 × scale 4 = 12 before the view casts back to money scale (4).
       await seedPositionSet({
@@ -452,7 +454,7 @@ describe("what a holding is projected to pay", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const loan = await seedAccount({ name: "Margin loan", kind: "liability" });
       const note = await seedInstrument({ symbol: "NOTE", name: "A note carrying a rate" });
-      await seedQuote({ instrument: note, price: "100.0000", annualDividendPerShare: "5.0000" });
+      await seedQuote({ instrument: note, price: "100.0000", trailingDividendPerShare: "5.0000" });
 
       await seedPositionSet({
         account: loan,
@@ -471,7 +473,7 @@ describe("what a holding is projected to pay", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
       const usd = await usdInstrument();
       const fund = await seedInstrument({ symbol: "SCHD" });
-      await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+      await seedQuote({ instrument: fund, price: "27.5000", trailingDividendPerShare: "3.6000" });
 
       const first = await seedAccount({ name: "A brokerage" });
       const second = await seedAccount({ name: "B brokerage" });
@@ -491,6 +493,90 @@ describe("what a holding is projected to pay", () => {
       });
 
       expect(await currentHoldings(ALL_OWNERS, db)).toHaveLength(3);
+    }),
+  );
+
+  it(
+    "projects ITOT's four trailing distributions, where the provider's own annual rate read 26% low",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      const account = await seedAccount();
+      const itot = await seedInstrument({
+        symbol: "ITOT",
+        name: "iShares Core S&P Total US Stock Market ETF",
+      });
+
+      // The distributions Yahoo's own events.dividends carried on 2026-09-25, summed by the parser
+      // the sweep uses: 0.487 + 0.327 + 0.419 + 0.453.
+      const measured = toProviderDividends(
+        {
+          meta: { currency: "USD" },
+          events: {
+            dividends: [
+              { date: new Date("2025-12-22T13:30:00Z"), amount: 0.487 },
+              { date: new Date("2026-03-23T13:30:00Z"), amount: 0.327 },
+              { date: new Date("2026-06-22T13:30:00Z"), amount: 0.419 },
+              { date: new Date("2026-09-22T13:30:00Z"), amount: 0.453 },
+            ],
+          },
+          quotes: [{ date: new Date("2026-09-22T13:30:00Z"), close: 167.73 }],
+        },
+        "2025-09-04",
+        "America/New_York",
+      );
+      if (measured.status !== "ok") throw new Error(`expected a rate, got ${measured.status}`);
+
+      expect(measured.perShare).toBe("1.6860");
+
+      await seedQuote({
+        instrument: itot,
+        price: "167.7300",
+        // What the view read before this change: Yahoo's trailingAnnualDividendRate for the same
+        // instrument on the same day, which gave 1.246 / 167.73 = 0.7% against a real 1.0%.
+        annualDividendPerShare: "1.2460",
+        trailingDividendPerShare: measured.perShare,
+        trailingDividendAsOf: new Date("2026-09-25T20:00:00Z"),
+        trailingDividendOutcome: "ok",
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-25",
+        holdings: [{ instrument: itot, quantity: "1.00000000" }],
+      });
+
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
+      if (holding === undefined) throw new Error("the seeded holding did not come back");
+
+      expect(holding).toMatchObject({ value: "167.7300", annualDividend: "1.6860" });
+      // A SHARE_SCALE ratio, not the route's rendering: the defect printed 0.7% from "0.007428".
+      expect(holdingYield(holding)).toBe("0.010052");
+    }),
+  );
+
+  it(
+    "reads a swept non-payer as $0, where the rate the provider carried over would still have counted",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      const account = await seedAccount();
+      const fund = await seedInstrument({ symbol: "BRK-B", name: "A payer of nothing" });
+
+      await seedQuote({
+        instrument: fund,
+        price: "500.0000",
+        annualDividendPerShare: "3.6000",
+        trailingDividendPerShare: "0.0000",
+        trailingDividendAsOf: new Date("2026-09-25T20:00:00Z"),
+        trailingDividendOutcome: "ok",
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-25",
+        holdings: [{ instrument: fund, quantity: "10.00000000" }],
+      });
+
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
+
+      // A measured zero, not the unmeasured one of the case above: the outcome column is what
+      // tells them apart, and the view reads one operand either way.
+      expect(holding).toMatchObject({ annualDividend: "0.0000" });
     }),
   );
 });

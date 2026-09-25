@@ -189,7 +189,7 @@ function readRawUntilClose(socket: net.Socket): Promise<string> {
   });
 }
 
-describe("the three endpoints", () => {
+describe("the four endpoints", () => {
   it("answers /healthz with 200 { ok: true }, the fake untouched", async () => {
     const quote = vi.fn(async () => []);
     const chart = vi.fn(async () => ({}));
@@ -245,6 +245,28 @@ describe("the three endpoints", () => {
       events: "split",
     });
     expect(res.json).toEqual({ meta: { currency: "USD" }, quotes: [] });
+  });
+
+  it("charts quarterly bars with dividend events for /dividends, daily bars with splits for /history", async () => {
+    // the two literals are the whole difference between the routes; one handler serves both
+    const chart = vi.fn(async () => ({ meta: { currency: "USD" }, events: {}, quotes: [] }));
+    await start(fakeYahoo({ chart }));
+
+    const history = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "ITOT",
+      from: "2025-08-28",
+    });
+    const dividends = await requestJson(currentSocketPath, "POST", "/dividends", {
+      symbol: "ITOT",
+      from: "2025-08-28",
+    });
+
+    expect([history.status, dividends.status]).toEqual([200, 200]);
+    expect(chart.mock.calls).toEqual([
+      ["ITOT", { period1: "2025-08-28", interval: "1d", events: "split" }],
+      ["ITOT", { period1: "2025-08-28", interval: "3mo", events: "div" }],
+    ]);
+    expect(dividends.json).toEqual({ meta: { currency: "USD" }, events: {}, quotes: [] });
   });
 });
 
@@ -776,6 +798,33 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
 
     expect(twentyFirst.status).toBe(429);
     expect(chart).toHaveBeenCalledTimes(20);
+  });
+
+  it("answers 429 for the twenty-first dividends call within a minute, /history's budget untouched", async () => {
+    // one limiter per endpoint: a sweep that exhausts its own cap must not park the backfill too
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ chart }));
+
+    for (let i = 0; i < 20; i++) {
+      const res = await requestJson(currentSocketPath, "POST", "/dividends", {
+        symbol: "ITOT",
+        from: "2025-08-28",
+      });
+      expect(res.status).toBe(200);
+    }
+
+    const twentyFirst = await requestJson(currentSocketPath, "POST", "/dividends", {
+      symbol: "ITOT",
+      from: "2025-08-28",
+    });
+    const history = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "ITOT",
+      from: "2025-08-28",
+    });
+
+    expect(twentyFirst.status).toBe(429);
+    expect(history.status).toBe(200);
+    expect(chart).toHaveBeenCalledTimes(21);
   });
 
   it("admits an eleventh quotes call once the window has slid a minute past the first", async () => {

@@ -13,9 +13,9 @@
 export type ChartRequest = {
   /** Plain string, not `IsoDate` — that type lives under `app/`. */
   period1: string;
-  interval: "1d";
-  /** `"split"` only; the library default is `"div|split|earn"`. */
-  events: "split";
+  interval: "1d" | "3mo";
+  /** One block per call, never the library default `"div|split|earn"`. */
+  events: "split" | "div";
 };
 
 /** Both `unknown`: `validateResult: false` means raw JSON, the caller's Zod is the only gate. */

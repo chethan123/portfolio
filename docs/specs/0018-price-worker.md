@@ -260,13 +260,14 @@ looks like.
 worker, `http.request({ socketPath, method, path, agent: false })` in the app — with JSON bodies and
 one request per connection: `agent: false` because Node 24's global agent keeps sockets alive and
 would leave idle app sockets in the worker's eight slots (research §8.9), and `maxRequestsPerSocket
-= 1` on the worker, which then answers `Connection: close` itself. Three endpoints, mirroring the
+= 1` on the worker, which then answers `Connection: close` itself. Four endpoints, mirroring the
 seam exactly:
 
 | Request | Body | Answer |
 |---|---|---|
 | `POST /quotes` | `{ symbols: string[] }` — one to a hundred, each matching the pattern | `200`, the array the library's `quote()` returned |
 | `POST /history` | `{ symbol: string, from: "YYYY-MM-DD" }` | `200`, the object the library's `chart()` returned |
+| `POST /dividends` | `{ symbol: string, from: "YYYY-MM-DD" }` | `200`, the object the library's `chart()` returned, called with `interval "3mo", events "div"` |
 | `GET /healthz` | — | `200 { ok: true }` — no Yahoo call, no database: "the worker accepts requests" |
 
 Every other answer is a refusal carrying `{ error: <text> }`: **`400`** for a body that does not
@@ -457,13 +458,14 @@ Yahoo is inactive on the socket; a body read to 16 KB and the socket destroyed p
 bodies narrowed by Zod schemas in the module, `symbols` element by element against the pattern from
 `server/symbol-pattern.ts` before any URL — no imports, the only copy, shared with the app from
 ticket 06: the binding check of §2.1 — and `from` against `^\d{4}-\d{2}-\d{2}$`, since `IsoDate`
-lives under `app/`. Per-endpoint rate caps — **quotes ten calls a minute, history twenty** — are
-answered `429` with one log line, because the worker is the honest component when the app is not
-and a runaway app must not earn the household a Yahoo ban; the cap's assumption, stated: a tick
-costs ⌈feed instruments / 100⌉ quotes calls and at most five histories, so 300 feed instruments at
-the one-minute cadence floor (`REFRESH_CADENCE_BOUNDS`, `app/lib/settings.server.ts:138`) plus a
-press approach the quotes cap — honest households are far below. Every library call runs under the
-client's fixed 30 s signal, its expiry answered `504`; any other throw is `502` with the message and
+lives under `app/`. Per-endpoint rate caps — **quotes ten calls a minute, history twenty, dividends
+twenty** — are answered `429` with one log line, because the worker is the honest component when
+the app is not and a runaway app must not earn the household a Yahoo ban; the cap's assumption,
+stated: a tick costs ⌈feed instruments / 100⌉ quotes calls and at most five histories, so 300 feed
+instruments at the one-minute cadence floor (`REFRESH_CADENCE_BOUNDS`,
+`app/lib/settings.server.ts:138`) plus a press approach the quotes cap — honest households are far
+below. Every library call runs under the client's fixed 30 s signal, its expiry answered `504`; any
+other throw is `502` with the message and
 its `cause` appended, cut to 1000 characters, since undici says `fetch failed` for every network
 failure and keeps the detail there. One log line per non-`200` answer, stem `Price worker`; a
 startup line naming the socket path; nothing per successful call; a failed unlink or listen exits

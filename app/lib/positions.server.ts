@@ -39,8 +39,9 @@ export type CurrentPosition = {
   asOf: IsoDate;
   // The other operand of a multiplication the view performs — revisePosition checks fitsTheMoneyColumn before storing.
   price: string | null;
-  // Since migration 0006, the third operand holding_valued multiplies the quantity by.
-  annualDividendPerShare: string | null;
+  // Since migration 0019, the third operand holding_valued multiplies the quantity by —
+  // quote.trailing_dividend_per_share, not the provider's own annual rate.
+  trailingDividendPerShare: string | null;
   // 'fixed' = the seeded USD row only. Needed so revisePosition can tell a share count from a sum
   // of money (§2: a cash balance is a quantity of fixed-price currency).
   priceSource: Selectable<Database["instrument"]>["price_source"];
@@ -74,7 +75,7 @@ export async function currentPosition(
     cost_basis_per_share: string | null;
     as_of_date: string;
     price: string | null;
-    annual_dividend_per_share: string | null;
+    trailing_dividend_per_share: string | null;
     price_source: string;
   }>`
     select
@@ -83,7 +84,7 @@ export async function currentPosition(
       h.cost_basis_per_share        as cost_basis_per_share,
       ps.as_of_date                 as as_of_date,
       q.price                       as price,
-      q.annual_dividend_per_share   as annual_dividend_per_share,
+      q.trailing_dividend_per_share as trailing_dividend_per_share,
       i.price_source                as price_source
     from position_set ps
     join holding h    on h.position_set_id = ps.id
@@ -105,7 +106,7 @@ export async function currentPosition(
     costBasisPerShare: row.cost_basis_per_share,
     asOf: row.as_of_date,
     price: row.price,
-    annualDividendPerShare: row.annual_dividend_per_share,
+    trailingDividendPerShare: row.trailing_dividend_per_share,
     priceSource: row.price_source,
   };
 }
@@ -218,7 +219,7 @@ async function revisePositionUnderLock(
     });
   }
 
-  if (!fitsTheMoneyColumn(input.quantity, before.annualDividendPerShare)) {
+  if (!fitsTheMoneyColumn(input.quantity, before.trailingDividendPerShare)) {
     throw new ValidationError({
       quantity:
         `That quantity at ${before.instrumentName}'s dividend rate projects a larger annual ` +

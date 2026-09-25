@@ -992,7 +992,7 @@ type FileRow = {
   costBasisPerShare: string | null;
   accountNumber: string | null;
   price: string | null;
-  annualDividendPerShare: string | null;
+  trailingDividendPerShare: string | null;
   lineCount: number;
 };
 
@@ -1128,7 +1128,7 @@ async function compareAccount(
 
   const combinedByRaw = new Map(combined.map((c) => [c.instrument, c.rowCount]));
 
-  type FoldedRow = Omit<FileRow, "name" | "price" | "annualDividendPerShare">;
+  type FoldedRow = Omit<FileRow, "name" | "price" | "trailingDividendPerShare">;
   const folded: FoldedRow[] = [];
 
   for (const [instrumentId, group] of groups) {
@@ -1200,7 +1200,7 @@ async function compareAccount(
             "instrument.name as name",
             "classification.asset_class as assetClass",
             "quote.price as price",
-            "quote.annual_dividend_per_share as annualDividendPerShare",
+            "quote.trailing_dividend_per_share as trailingDividendPerShare",
             "quote.is_stale as isStale",
           ])
           .where("instrument.id", "in", ids)
@@ -1221,7 +1221,7 @@ async function compareAccount(
       ...row,
       name: fact.name,
       price: fact.price,
-      annualDividendPerShare: fact.annualDividendPerShare,
+      trailingDividendPerShare: fact.trailingDividendPerShare,
     });
     inFile.add(row.instrumentId);
 
@@ -2053,7 +2053,7 @@ function reasonsToRefuse(
         refused,
       );
     }
-    if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
+    if (!fitsTheMoneyColumn(row.quantity, row.trailingDividendPerShare)) {
       throw new RefusedUpload(
         say(
           `${row.name}'s quantity at its current dividend rate projects a larger annual ` +

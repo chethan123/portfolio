@@ -866,6 +866,8 @@ async function seed(
   const quoteDividends: (string | null)[] = [];
   const quoteAsOf: Date[] = [];
   const quoteStale: boolean[] = [];
+  // Every seeded row is measured fresh, never carried — holding_valued reads only this column now.
+  const quoteTrailingOutcome: string[] = [];
   const nowMs = Date.now();
 
   for (const instrument of INSTRUMENTS) {
@@ -888,12 +890,26 @@ async function seed(
       new Date(nowMs - (instrument.stale === true ? STALE_QUOTE_DAYS * DAY_MS : 12 * 60 * 1000)),
     );
     quoteStale.push(instrument.stale === true);
+    quoteTrailingOutcome.push("ok");
   }
   await client.query(
-    `insert into quote (instrument_id, price, yield_pct, annual_dividend_per_share, as_of, is_stale)
+    `insert into quote (instrument_id, price, yield_pct, annual_dividend_per_share, as_of, is_stale,
+                         trailing_dividend_per_share, trailing_dividend_as_of, trailing_dividend_outcome)
      select * from unnest($1::bigint[], $2::numeric[], $3::numeric[], $4::numeric[],
-                          $5::timestamptz[], $6::boolean[])`,
-    [quoteIds, quotePrices, quoteYields, quoteDividends, quoteAsOf, quoteStale],
+                          $5::timestamptz[], $6::boolean[], $7::numeric[], $8::timestamptz[], $9::text[])`,
+    [
+      quoteIds,
+      quotePrices,
+      quoteYields,
+      quoteDividends,
+      quoteAsOf,
+      quoteStale,
+      // holding_valued's annual_dividend now reads trailing_dividend_per_share exclusively; the
+      // same per-share figure and as_of stamp keep the demo's dividends non-zero.
+      quoteDividends,
+      quoteAsOf,
+      quoteTrailingOutcome,
+    ],
   );
   written.push({ table: "quote", rows: quoteIds.length });
 

@@ -103,6 +103,9 @@ export type Fixtures = {
     asOf?: Date | string;
     yieldPct?: string;
     annualDividendPerShare?: string;
+    trailingDividendPerShare?: string;
+    trailingDividendAsOf?: Date | string;
+    trailingDividendOutcome?: string;
   }): Promise<void>;
 
   /** Immutable daily spine. Weekend/holiday = absent row (DESIGN.md §6.2) — seed Friday for a Saturday ask. */
@@ -423,6 +426,9 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     asOf = new Date(),
     yieldPct,
     annualDividendPerShare,
+    trailingDividendPerShare,
+    trailingDividendAsOf,
+    trailingDividendOutcome,
   }) => {
     const values = {
       instrument_id: instrument.id,
@@ -431,6 +437,9 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       as_of: asOf,
       yield_pct: yieldPct ?? null,
       annual_dividend_per_share: annualDividendPerShare ?? null,
+      trailing_dividend_per_share: trailingDividendPerShare ?? null,
+      trailing_dividend_as_of: trailingDividendAsOf ?? null,
+      trailing_dividend_outcome: trailingDividendOutcome ?? null,
     };
 
     await db
