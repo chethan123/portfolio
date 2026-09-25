@@ -4,6 +4,7 @@ import { Form, Link, redirect } from "react-router";
 import { Amount } from "~/components/amount";
 import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
+import { FieldError, FormError } from "~/components/error-message";
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import { moneyMagnitudeRule } from "~/lib/decimal-input";
 import {
@@ -49,6 +50,7 @@ import {
   earliestRecordableDate,
   formFields,
   latestRecordableDate,
+  refused,
 } from "~/lib/input.server";
 import { accountHoldings, accountTotal, type AccountKind } from "~/lib/valuation.server";
 
@@ -169,7 +171,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw redirect(`/accounts/${params.accountId}?${receipt.toString()}`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      return { errors: error.fieldErrors, values };
+      return refused(error, values);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -431,11 +433,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         </section>
       )}
 
-      {actionData?.errors?.form ? (
-        <p className="form-error" role="alert">
-          {actionData.errors.form}
-        </p>
-      ) : null}
+      <FormError message={actionData?.formError} />
 
       {takesBalance ? (
         <SetBalance
@@ -557,10 +555,8 @@ function SetBalance({
             serverErrorId={errors?.amount ? "set-balance-amount-error" : undefined}
             shape="money"
           />
-          {errors?.amount && amountErrorActive ? (
-            <p id="set-balance-amount-error" className="field-error" role="alert">
-              {errors.amount}
-            </p>
+          {amountErrorActive ? (
+            <FieldError id="set-balance-amount-error" message={errors?.amount} />
           ) : null}
         </div>
 
@@ -578,9 +574,7 @@ function SetBalance({
             />
           </label>
           {errors?.asOf ? (
-            <p className="field-error" role="alert">
-              {errors.asOf}
-            </p>
+            <FieldError message={errors.asOf} />
           ) : (
             <p className="form-note">
               {recorded === null

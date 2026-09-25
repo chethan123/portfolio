@@ -1,26 +1,17 @@
 // revisePosition — one-off correction as an appended position_set (DESIGN.md §5.4), against real Postgres
 import { afterAll, describe, expect, it } from "vitest";
 
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { accountTotal, currentHoldings, netWorth, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
 const today = (): string => new Date().toISOString().slice(0, 10);
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the write to be refused, and it was not.");
-}
 
 describe("revisePosition", () => {
   it(

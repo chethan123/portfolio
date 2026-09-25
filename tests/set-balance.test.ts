@@ -1,24 +1,15 @@
 // setBalance for a single-position account (DESIGN.md §5.2), against real Postgres — sign, numeric exactness, tie-break all live there
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ValidationError, NotFoundError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import { lastRecorded, setBalance } from "~/lib/balances.server";
 import { accountTotal, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the write to be refused, and it was not.");
-}
 
 describe("setBalance", () => {
   it(

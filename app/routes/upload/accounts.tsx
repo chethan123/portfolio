@@ -1,6 +1,7 @@
 import { Form, Link, redirect } from "react-router";
 
-import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { FieldError, FormError } from "~/components/error-message";
+import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
 import {
   SKIP_NUMBER,
   STALE_REVIEW_MESSAGE,
@@ -63,9 +64,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${params.draftId}/${nextStep}${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      return refused(error, values);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -106,17 +105,9 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
           </p>
         ) : null}
 
-        {staleReviewMessage ? (
-          <p className="form-error" role="alert">
-            {staleReviewMessage}
-          </p>
-        ) : null}
+        <FormError message={staleReviewMessage} />
 
-        {actionData?.formError ? (
-          <p className="form-error" role="alert">
-            {actionData.formError}
-          </p>
-        ) : null}
+        <FormError message={actionData?.formError} />
       </div>
 
       <Form method="post">
@@ -136,11 +127,7 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
                 {question.instruments.length > 4 ? ", …" : ""}
               </p>
 
-              {question.stale !== null ? (
-                <p className="field-error" role="alert">
-                  {question.stale}
-                </p>
-              ) : null}
+              <FieldError message={question.stale} />
 
               <div className="panel-form">
                 <div>
@@ -165,11 +152,7 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
                       <option value={skip}>Skip these rows</option>
                     </select>
                   </label>
-                  {errors?.[field] ? (
-                    <p className="field-error" role="alert">
-                      {errors[field]}
-                    </p>
-                  ) : null}
+                  <FieldError message={errors?.[field]} />
                 </div>
               </div>
             </div>

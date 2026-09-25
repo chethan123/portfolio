@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Form, redirect, useRevalidator } from "react-router";
 
-import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
+import { FieldError, FormError } from "~/components/error-message";
+import { ValidationError, formFields, refused } from "~/lib/input.server";
 import {
   MASKING_POLICIES,
   MASKING_ENHANCED_FIELD,
@@ -48,11 +49,8 @@ export async function action({ request }: Route.ActionArgs) {
     return { saved: true as const, intent, errors: {}, formError: null, values };
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-
       // No `Set-Cookie` on a refusal — nothing changed for the reader to see.
-      return { saved: false as const, errors: fieldErrors, formError: formError ?? null, values };
+      return { saved: false as const, ...refused(error, values) };
     }
     throw error;
   }
@@ -119,11 +117,7 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
         >
           <input type="hidden" name={MASKING_ENHANCED_FIELD} defaultValue="" />
           <input type="hidden" name="maskingIntent" defaultValue="" />
-          {actionData?.formError ? (
-            <p className="form-error" role="alert">
-              {actionData.formError}
-            </p>
-          ) : null}
+          <FormError message={actionData?.formError} />
 
           {/* Radios, not a select — each option needs a sentence a select would hide. */}
           <fieldset>
@@ -151,11 +145,7 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
               and it keeps nobody out: whoever can open a masked screen can unmask it.
             </p>
 
-            {error ? (
-              <p className="field-error" role="alert">
-                {error}
-              </p>
-            ) : null}
+            <FieldError message={error} />
           </fieldset>
 
           <button type="submit" className="button">

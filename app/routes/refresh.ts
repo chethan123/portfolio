@@ -14,7 +14,7 @@ export async function action({ request }: Route.ActionArgs): Promise<RefreshOutc
   const form = await request.formData();
 
   // A press runs the backfill batch too (ADR-0011); it reports the quotes.
-  const outcome = outcomeOf(await runRefresh({ quotes: true }));
+  const outcome = outcomeOf(await runRefresh({ quotes: true }, new Date()));
 
   // Document POST (`Sec-Fetch-Mode` is browser-set, unspoofable): no fetcher waiting, so redirect
   // rather than render a bare payload. A fetch omitting the header counts as scripted.

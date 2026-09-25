@@ -9,11 +9,12 @@ import {
   listAccounts,
   updateAccount,
 } from "~/lib/accounts.server";
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import { createPerson, listPeople, removePerson } from "~/lib/people.server";
 import { netWorth, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 import type { AccountKind } from "~/lib/valuation.server";
 import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
@@ -29,16 +30,6 @@ const validInput = (ownerId: string) => ({
   taxTreatment: "taxable",
   externalAccountNumber: "Z12-345678",
 });
-
-async function refusalOf(action: Promise<unknown>): Promise<Record<string, string>> {
-  try {
-    await action;
-  } catch (error) {
-    if (error instanceof ValidationError) return { ...error.fieldErrors };
-    throw error;
-  }
-  throw new Error("expected the input to be refused");
-}
 
 describe("recording accounts", () => {
   it(
@@ -133,9 +124,9 @@ describe("refusing bad input", () => {
   it(
     "requires a kind, a tax treatment and an owner",
     withDatabase(async ({ db }) => {
-      const errors = await refusalOf(
-        createAccount({ name: "Something", institution: "Somewhere" }, db),
-      );
+      const errors = (
+        await refusalOf(() => createAccount({ name: "Something", institution: "Somewhere" }, db))
+      ).fieldErrors;
 
       expect(errors.kind).toMatch(/kind/i);
       expect(errors.taxTreatment).toMatch(/tax treatment/i);
@@ -146,7 +137,7 @@ describe("refusing bad input", () => {
   it(
     "reports every bad field at once, rather than one per attempt",
     withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createAccount({}, db));
+      const errors = (await refusalOf(() => createAccount({}, db))).fieldErrors;
 
       expect(Object.keys(errors).sort()).toEqual(["kind", "name", "ownerId", "taxTreatment"]);
     }),
@@ -155,7 +146,7 @@ describe("refusing bad input", () => {
   it(
     "refuses an owner who does not exist, as a message rather than a constraint violation",
     withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createAccount(validInput("999999"), db));
+      const errors = (await refusalOf(() => createAccount(validInput("999999"), db))).fieldErrors;
 
       expect(errors.ownerId).toMatch(/owner/i);
     }),
@@ -165,9 +156,9 @@ describe("refusing bad input", () => {
     "refuses an owner id that is not an id at all",
     withDatabase(async ({ db }) => {
       // Malformed bigint would 500 in Postgres rather than fail as a form message.
-      expect((await refusalOf(createAccount(validInput("not-an-id"), db))).ownerId).toMatch(
-        /owner/i,
-      );
+      expect(
+        (await refusalOf(() => createAccount(validInput("not-an-id"), db))).fieldErrors.ownerId,
+      ).toMatch(/owner/i);
     }),
   );
 
@@ -177,7 +168,8 @@ describe("refusing bad input", () => {
       const alice = await createPerson({ name: "Alice" }, db);
 
       expect(
-        (await refusalOf(createAccount({ ...validInput(alice.id), kind: "crypto" }, db))).kind,
+        (await refusalOf(() => createAccount({ ...validInput(alice.id), kind: "crypto" }, db)))
+          .fieldErrors.kind,
       ).toMatch(/kind/i);
     }),
   );
@@ -260,7 +252,7 @@ describe("editing an account", () => {
       const alice = await createPerson({ name: "Alice" }, db);
       const account = await createAccount(validInput(alice.id), db);
 
-      await refusalOf(updateAccount(account.id, { ...validInput(alice.id), name: "" }, db));
+      await refusalOf(() => updateAccount(account.id, { ...validInput(alice.id), name: "" }, db));
 
       expect((await getAccount(account.id, db)).name).toBe("Fidelity Taxable");
     }),
@@ -286,12 +278,18 @@ describe("one open account per account number", () => {
       const alice = await createPerson({ name: "Alice" }, db);
       await createAccount(validInput(alice.id), db);
 
-      const errors = await refusalOf(
-        createAccount(
-          { ...validInput(alice.id), name: "Fidelity Roth", externalAccountNumber: " Z12-345678 " },
-          db,
-        ),
-      );
+      const errors = (
+        await refusalOf(() =>
+          createAccount(
+            {
+              ...validInput(alice.id),
+              name: "Fidelity Roth",
+              externalAccountNumber: " Z12-345678 ",
+            },
+            db,
+          ),
+        )
+      ).fieldErrors;
 
       expect(errors.externalAccountNumber).toMatch(
         /already recorded on Fidelity Taxable, owned by Alice\./,
@@ -312,18 +310,20 @@ describe("one open account per account number", () => {
         db,
       );
 
-      const errors = await refusalOf(
-        updateAccount(
-          roth.id,
-          // Drawn with the number it records, as Settings draws it, so the index decides (#312).
-          {
-            ...validInput(alice.id),
-            name: "Fidelity Roth",
-            fromExternalAccountNumber: "Z12-999999",
-          },
-          db,
-        ),
-      );
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(
+            roth.id,
+            // Drawn with the number it records, as Settings draws it, so the index decides (#312).
+            {
+              ...validInput(alice.id),
+              name: "Fidelity Roth",
+              fromExternalAccountNumber: "Z12-999999",
+            },
+            db,
+          ),
+        )
+      ).fieldErrors;
 
       expect(errors.externalAccountNumber).toMatch(
         /already recorded on Fidelity Taxable, owned by Alice\./,
@@ -415,18 +415,20 @@ describe("an account number saved against the form's own copy", () => {
       const account = await seedAccount({ name: "Fidelity Taxable", owner: alice });
       await updateAccount(account.id, recordNumber(alice.id, "Z-999"), db);
 
-      const errors = await refusalOf(
-        updateAccount(
-          account.id,
-          {
-            ...validInput(alice.id),
-            name: "Renamed",
-            externalAccountNumber: "A-111",
-            fromExternalAccountNumber: "",
-          },
-          db,
-        ),
-      );
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(
+            account.id,
+            {
+              ...validInput(alice.id),
+              name: "Renamed",
+              externalAccountNumber: "A-111",
+              fromExternalAccountNumber: "",
+            },
+            db,
+          ),
+        )
+      ).fieldErrors;
 
       // Must land under the box: settings route renders fieldErrors as-is, no form-level key.
       expect(errors.externalAccountNumber).toMatch(/"Z-999"/);
@@ -528,9 +530,11 @@ describe("an account number saved against the form's own copy", () => {
       // A page drawn before the form carried its own copy: an emptied box and an untouched one
       // are the same submission, so keeping the number and reporting a save would report a
       // clear that did not happen.
-      const errors = await refusalOf(
-        updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "" }, db),
-      );
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "" }, db),
+        )
+      ).fieldErrors;
 
       expect(errors.externalAccountNumber).toBe(
         `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
@@ -555,9 +559,11 @@ describe("an account number saved against the form's own copy", () => {
       // Nothing moved under this page. It never said which number its box was drawn with, which
       // reads the same as a save against a number recorded since — so the refusal says that,
       // rather than sending the reader hunting for another writer.
-      const errors = await refusalOf(
-        updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "A-111" }, db),
-      );
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "A-111" }, db),
+        )
+      ).fieldErrors;
 
       expect(errors.externalAccountNumber).toBe(
         `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
@@ -594,9 +600,11 @@ describe("changing an account's kind", () => {
         holdings: [{ instrument: vti, quantity: "100.00000000" }],
       });
 
-      const errors = await refusalOf(updateAccount(account.id, kindChange(account, "bank"), db));
+      const errors = (
+        await refusalOf(() => updateAccount(account.id, kindChange(account, "bank"), db))
+      ).fieldErrors;
 
-      // Must land under `kind`: settings route renders fieldErrors as-is, no form-level key.
+      // Must land under `kind`, beside the box: a form-level key would print atop the form instead.
       expect(errors.kind).toMatch(/Vanguard Total Stock Market/);
       expect(errors.form).toBeUndefined();
 
@@ -624,7 +632,9 @@ describe("changing an account's kind", () => {
       });
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
-      const errors = await refusalOf(updateAccount(account.id, kindChange(account, "bank"), db));
+      const errors = (
+        await refusalOf(() => updateAccount(account.id, kindChange(account, "bank"), db))
+      ).fieldErrors;
 
       expect(errors.kind).toMatch(/Vanguard Total Stock Market/);
 
@@ -651,9 +661,9 @@ describe("changing an account's kind", () => {
         holdings: [{ instrument: await usdInstrument(), quantity: "42000.00000000" }],
       });
 
-      const errors = await refusalOf(
-        updateAccount(savings.id, kindChange(savings, "liability"), db),
-      );
+      const errors = (
+        await refusalOf(() => updateAccount(savings.id, kindChange(savings, "liability"), db))
+      ).fieldErrors;
 
       expect(errors.kind).toMatch(/money held/);
       expect((await getAccount(savings.id, db)).kind).toBe("bank");
@@ -675,7 +685,9 @@ describe("changing an account's kind", () => {
         holdings: [{ instrument: await usdInstrument(), quantity: "-14500.00000000" }],
       });
 
-      const errors = await refusalOf(updateAccount(loan.id, kindChange(loan, "bank"), db));
+      const errors = (
+        await refusalOf(() => updateAccount(loan.id, kindChange(loan, "bank"), db))
+      ).fieldErrors;
 
       expect(errors.kind).toMatch(/money owed/);
       expect((await getAccount(loan.id, db)).kind).toBe("liability");
@@ -698,9 +710,9 @@ describe("changing an account's kind", () => {
       });
       await closeAccount(savings.id, { confirmClose: "true" }, db);
 
-      const errors = await refusalOf(
-        updateAccount(savings.id, kindChange(savings, "liability"), db),
-      );
+      const errors = (
+        await refusalOf(() => updateAccount(savings.id, kindChange(savings, "liability"), db))
+      ).fieldErrors;
 
       expect(errors.kind).toMatch(/does not change/);
       expect(errors.kind).not.toMatch(/on Holdings/);
@@ -727,7 +739,9 @@ describe("changing an account's kind", () => {
       const hopped = await updateAccount(loan.id, kindChange(loan, "brokerage"), db);
       expect(hopped.kind).toBe("brokerage");
 
-      const errors = await refusalOf(updateAccount(loan.id, kindChange(loan, "bank"), db));
+      const errors = (
+        await refusalOf(() => updateAccount(loan.id, kindChange(loan, "bank"), db))
+      ).fieldErrors;
 
       // Sign lives in quantity (DESIGN.md §2) — relabel alone would turn debt into savings.
       expect(errors.kind).toMatch(/money owed/);
@@ -837,7 +851,8 @@ describe("closing an account", () => {
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
       const account = await seedAccount({ name: "Old Brokerage", owner: await seedPerson() });
 
-      const message = (await refusalOf(closeAccount(account.id, {}, db))).form ?? "";
+      const message =
+        (await refusalOf(() => closeAccount(account.id, {}, db))).fieldErrors.form ?? "";
 
       expect(message).toContain("Old Brokerage");
       expect(message).toContain("one-way");
@@ -877,7 +892,7 @@ describe("removing a person who owns accounts", () => {
       await seedAccount({ name: "Fidelity Taxable", owner: alice });
       await seedAccount({ name: "Checking", owner: alice });
 
-      const errors = await refusalOf(removePerson(alice.id, db));
+      const errors = (await refusalOf(() => removePerson(alice.id, db))).fieldErrors;
       const message = errors.form ?? "";
 
       expect(message).toContain("Alice");
@@ -897,7 +912,7 @@ describe("removing a person who owns accounts", () => {
       const account = await seedAccount({ name: "Old Brokerage", owner: alice });
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
-      const message = (await refusalOf(removePerson(alice.id, db))).form ?? "";
+      const message = (await refusalOf(() => removePerson(alice.id, db))).fieldErrors.form ?? "";
 
       expect(message).toContain("Old Brokerage");
       expect(message).toContain("closed");

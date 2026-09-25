@@ -2,7 +2,7 @@
  * protects that the module every screen writes through keeps one rule for all callers. */
 import { afterAll, describe, expect, it } from "vitest";
 
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import {
   ALL_OWNERS,
 } from "~/lib/owner-filter";
@@ -15,19 +15,9 @@ import {
 } from "~/lib/people.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 afterAll(closeTestDatabase);
-
-// field messages from a refusal, or a failure if it wasn't refused
-async function refusalOf(action: Promise<unknown>): Promise<Record<string, string>> {
-  try {
-    await action;
-  } catch (error) {
-    if (error instanceof ValidationError) return { ...error.fieldErrors };
-    throw error;
-  }
-  throw new Error("expected the input to be refused");
-}
 
 describe("recording people", () => {
   it(
@@ -99,7 +89,7 @@ describe("refusing bad input", () => {
     ["a name too long to be one", { name: "a".repeat(121) }, /120 characters/],
   ])("refuses %s", (_case, input, message) =>
     withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createPerson(input, db));
+      const errors = (await refusalOf(() => createPerson(input, db))).fieldErrors;
 
       expect(errors.name).toMatch(message);
       // only under `name` — lets the form put the message beside the box, not atop the page
@@ -111,7 +101,7 @@ describe("refusing bad input", () => {
     "writes nobody when it refuses",
     withDatabase(async ({ db }) => {
       // guards against a refusal that still inserts a row nobody typed
-      await refusalOf(createPerson({ name: "" }, db));
+      await refusalOf(() => createPerson({ name: "" }, db));
 
       expect(await listPeople(db)).toEqual([]);
     }),

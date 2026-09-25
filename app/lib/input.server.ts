@@ -83,6 +83,17 @@ export function parseInput<Schema extends z.ZodType>(
   throw new ValidationError(fieldErrors);
 }
 
+// The split, done once: an element can't pick `form` out itself, since `FORM_ERROR` is a `.server`
+// value. Actions are stripped from the client bundle, so this is the right side of the line.
+// Spread onto, never conformed to: action payloads don't share one shape (2026-08-23 review §4.5).
+export function refused(
+  error: ValidationError,
+  values: Record<string, string>,
+): { errors: FieldErrors; formError: string | null; values: Record<string, string> } {
+  const { [FORM_ERROR]: formError, ...errors } = error.fieldErrors;
+  return { errors, formError: formError ?? null, values };
+}
+
 // File parts dropped, never stringified ("[object File]" helps nobody). Upload reads its file
 // from FormData directly.
 export function formFields(form: FormData): Record<string, string> {

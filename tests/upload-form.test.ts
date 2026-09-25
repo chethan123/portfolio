@@ -6,9 +6,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { ValidationError } from "~/lib/input.server";
 import { parseUploadForm, readUploadForm } from "~/lib/uploads.server";
 import { getConfig } from "../server/config.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { chunked } from "./support/routes.ts";
 
 // getConfig reads the environment once; the guards only need MAX_UPLOAD_MB, but the parse
@@ -16,17 +16,6 @@ import { chunked } from "./support/routes.ts";
 process.env.DATABASE_URL ??= "postgres://portfolio:portfolio@db:5432/portfolio";
 
 const CAP_BYTES = getConfig().MAX_UPLOAD_MB * 1024 * 1024;
-
-// the refusal a call produced, or a failure if it did not refuse
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the form to be refused, and it was not.");
-}
 
 // a drop-screen submission: an account and, usually, a file
 function submission(file?: File): FormData {

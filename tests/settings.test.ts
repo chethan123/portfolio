@@ -5,7 +5,6 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ValidationError } from "~/lib/input.server";
 import {
   readCapitalGainsRate,
   readMaskingPolicy,
@@ -16,19 +15,9 @@ import {
 } from "~/lib/settings.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { refusalOf } from "./support/refusal.ts";
 
 afterAll(closeTestDatabase);
-
-// field messages from a refusal, or a failure if it wasn't refused
-async function refusalOf(action: Promise<unknown>): Promise<Record<string, string>> {
-  try {
-    await action;
-  } catch (error) {
-    if (error instanceof ValidationError) return { ...error.fieldErrors };
-    throw error;
-  }
-  throw new Error("expected the input to be refused");
-}
 
 describe("the capital gains rate", () => {
   it(
@@ -53,7 +42,9 @@ describe("the capital gains rate", () => {
       // rules themselves are percentRate's, pinned in rate-input.test.ts — only this call site shows
       // the message arrives under capitalGainsRate, the Tax form's field name; filed wrong it renders
       // nowhere. Asserted on the message, not just the key's presence.
-      const refusal = await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "101" }, db));
+      const refusal = (
+        await refusalOf(() => saveCapitalGainsRate({ capitalGainsRate: "101" }, db))
+      ).fieldErrors;
 
       expect(refusal.capitalGainsRate).toMatch(/more than 100/);
     }),
@@ -62,9 +53,11 @@ describe("the capital gains rate", () => {
   it(
     "leaves the stored rate alone when it refuses",
     withDatabase(async ({ db }) => {
-      await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "500" }, db));
+      await refusalOf(() => saveCapitalGainsRate({ capitalGainsRate: "500" }, db));
       for (const capitalGainsRate of ["1,5", "1,00,0"]) {
-        const ambiguous = await refusalOf(saveCapitalGainsRate({ capitalGainsRate }, db));
+        const ambiguous = (
+          await refusalOf(() => saveCapitalGainsRate({ capitalGainsRate }, db))
+        ).fieldErrors;
         expect(ambiguous.capitalGainsRate).toMatch(/ambiguous or invalid/);
       }
       expect(await readCapitalGainsRate(db)).toBe("23.800000");
@@ -104,7 +97,9 @@ describe("the masking policy", () => {
     "files a refusal under the name this form's field actually has",
     withDatabase(async ({ db }) => {
       // same rule saveCapitalGainsRate is held to above — filed wrong the Display tab refuses in silence
-      const refusal = await refusalOf(saveMaskingPolicy({ maskingPolicy: "sometimes" }, db));
+      const refusal = (
+        await refusalOf(() => saveMaskingPolicy({ maskingPolicy: "sometimes" }, db))
+      ).fieldErrors;
 
       expect(refusal.maskingPolicy).toMatch(/masking policy/i);
     }),
@@ -114,7 +109,7 @@ describe("the masking policy", () => {
     "leaves the stored policy alone when it refuses",
     withDatabase(async ({ db }) => {
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
-      await refusalOf(saveMaskingPolicy({ maskingPolicy: "" }, db));
+      await refusalOf(() => saveMaskingPolicy({ maskingPolicy: "" }, db));
 
       expect(await readMaskingPolicy(db)).toBe("unmasked");
     }),
@@ -154,7 +149,9 @@ describe("the refresh cadence", () => {
     "refuses a cadence outside a minute and a day, under the name the form's field has",
     withDatabase(async ({ db }) => {
       // filed wrong, the Prices tab would refuse in silence — same rule the writers above are held to
-      const refusal = await refusalOf(saveRefreshCadence({ refreshCadenceMinutes: "0" }, db));
+      const refusal = (
+        await refusalOf(() => saveRefreshCadence({ refreshCadenceMinutes: "0" }, db))
+      ).fieldErrors;
 
       expect(refusal.refreshCadenceMinutes).toMatch(/between 1 and 1440/);
     }),
@@ -163,9 +160,9 @@ describe("the refresh cadence", () => {
   it(
     "refuses a cadence that is not a whole number of minutes",
     withDatabase(async ({ db }) => {
-      const refusal = await refusalOf(
-        saveRefreshCadence({ refreshCadenceMinutes: "7.5" }, db),
-      );
+      const refusal = (
+        await refusalOf(() => saveRefreshCadence({ refreshCadenceMinutes: "7.5" }, db))
+      ).fieldErrors;
 
       expect(refusal.refreshCadenceMinutes).toMatch(/whole number/);
     }),
@@ -174,7 +171,7 @@ describe("the refresh cadence", () => {
   it(
     "leaves the stored cadence alone when it refuses",
     withDatabase(async ({ db }) => {
-      await refusalOf(saveRefreshCadence({ refreshCadenceMinutes: "1441" }, db));
+      await refusalOf(() => saveRefreshCadence({ refreshCadenceMinutes: "1441" }, db));
 
       expect(await readRefreshCadence(db)).toBe(15);
     }),

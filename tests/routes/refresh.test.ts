@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { withDb } from "~/lib/db.server";
-import { marketDateOf } from "~/lib/market-hours.ts";
 import { refreshPrices } from "~/lib/prices.server";
 import { socketProvider } from "~/lib/provider-socket.server";
 
@@ -83,18 +82,14 @@ describe("the round trip a worker actually answers", () => {
   it(
     "writes the quote, the closes and a backfilled figure the split un-adjusted, all through one refreshPrices call",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // Real calendar days, not fixed ones — backfillCloses' until is marketDateOf(new Date(), tz), so a fixed-past fixture
-      // would age out of range. 13:30Z is session open (as tests/price-provider.test.ts's bar() stamps it) — clear of any UTC/NY day boundary either side of DST.
-      const now = new Date();
-      const isoDaysAgo = (n: number) =>
-        new Date(now.getTime() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const barAt = (n: number) => new Date(`${isoDaysAgo(n)}T13:30:00Z`);
+      // 13:30Z is session open (as tests/price-provider.test.ts's bar() stamps it) — clear of any UTC/NY day boundary.
+      const now = new Date("2026-06-15T13:30:00Z");
 
       const account = await seedAccount();
       const instrument = await seedInstrument({ symbol: "NVDA", priceSource: "feed" });
       await seedPositionSet({
         account,
-        asOf: isoDaysAgo(20),
+        asOf: "2026-05-26",
         holdings: [{ instrument, quantity: "10.00000000" }],
       });
 
@@ -106,11 +101,13 @@ describe("the round trip a worker actually answers", () => {
         ],
         chart: async () => ({
           meta: { currency: "USD" },
-          // 2-for-1 split 10 days ago: the 15-day bar precedes it (must come back un-adjusted ×2); the 5-day bar follows (already post-split).
-          events: { splits: [{ date: barAt(10), numerator: 2, denominator: 1 }] },
+          // 2-for-1 split on 06-05: the 06-01 bar precedes it (must come back un-adjusted ×2); the 06-10 bar follows (already post-split).
+          events: {
+            splits: [{ date: new Date("2026-06-05T13:30:00Z"), numerator: 2, denominator: 1 }],
+          },
           quotes: [
-            { date: barAt(15), close: 100 },
-            { date: barAt(5), close: 60 },
+            { date: new Date("2026-06-01T13:30:00Z"), close: 100 },
+            { date: new Date("2026-06-10T13:30:00Z"), close: 60 },
           ],
         }),
       };
@@ -118,11 +115,9 @@ describe("the round trip a worker actually answers", () => {
 
       // No committing handle needed: the lock is runRefresh's, not refreshPrices' own, so this calls it directly against the rolled-back transaction.
       try {
-        const report = await refreshPrices(socketProvider(), NEW_YORK, { quotes: true }, db);
+        const report = await refreshPrices(socketProvider(), NEW_YORK, now, { quotes: true }, db);
 
-        expect(report.quotes.requested).toBe(1);
-        expect(report.quotes.priced).toBe(1);
-        expect(report.quotes.providerFailed).toBe(false);
+        expect(report.quotes).toMatchObject({ requested: 1, priced: 1, providerFailed: false });
         expect(report.backfill.written).toBe(2);
       } finally {
         await new Promise<void>((resolve) => worker.close(() => resolve()));
@@ -142,10 +137,10 @@ describe("the round trip a worker actually answers", () => {
         .execute();
       const closeOn = new Map(closes.map((row) => [row.date, row.close]));
 
-      expect(closeOn.get(marketDateOf(now, NEW_YORK))).toBe("65.5000"); // the quote's own write
+      expect(closeOn.get("2026-06-15")).toBe("65.5000"); // the quote's own write
       // Backfilled: pre-split bar un-adjusted by the 2:1 split, post-split bar untouched — toProviderHistory's arithmetic, over the socket (ticket 06).
-      expect(closeOn.get(isoDaysAgo(15))).toBe("200.0000");
-      expect(closeOn.get(isoDaysAgo(5))).toBe("60.0000");
+      expect(closeOn.get("2026-06-01")).toBe("200.0000");
+      expect(closeOn.get("2026-06-10")).toBe("60.0000");
     }),
   );
 });

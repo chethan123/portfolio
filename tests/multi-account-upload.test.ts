@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { closeAccount, getAccount } from "~/lib/accounts.server";
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { NotFoundError } from "~/lib/input.server";
 import { resolveAll } from "~/lib/instrument-resolution.server";
 import { sectionKey } from "~/lib/review-form";
 import {
@@ -25,6 +25,7 @@ import {
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { renumber } from "./support/fixtures.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
@@ -105,16 +106,6 @@ async function stage(
     throw new Error(outcome.problems.map((problem) => problem.message).join(" "));
   }
   return draft.id;
-}
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the upload to be refused, and it was not.");
 }
 
 async function setsOf(db: TestContext["db"], accountId: string) {

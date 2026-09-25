@@ -1,5 +1,6 @@
 import { Form, redirect } from "react-router";
 
+import { FieldError, FormError } from "~/components/error-message";
 import {
   NOT_IN_FILE,
   findMapping,
@@ -9,10 +10,10 @@ import {
 } from "~/lib/column-mapping.server";
 import { defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
 import {
-  FORM_ERROR,
   NotFoundError,
   ValidationError,
   formFields,
+  refused,
 } from "~/lib/input.server";
 import { statementMapping } from "~/lib/statement";
 import {
@@ -239,12 +240,8 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${draft.id}/${outcome.nextStep}${stale}`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return {
-        errors: fieldErrors,
-        formError: formError ?? null,
-        values,
+        ...refused(error, values),
         problems: [] as string[],
         problemFields: [] as string[],
       };
@@ -311,11 +308,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
             ))}
         </select>
       </label>
-      {errors?.[field] ? (
-        <p className="field-error" role="alert">
-          {errors[field]}
-        </p>
-      ) : null}
+      <FieldError message={errors?.[field]} />
     </div>
   );
 
@@ -336,11 +329,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
           )}
         </p>
 
-        {staleReviewMessage ? (
-          <p className="form-error" role="alert">
-            {staleReviewMessage}
-          </p>
-        ) : null}
+        <FormError message={staleReviewMessage} />
 
         {fromEarlierUpload ? (
           <p>
@@ -407,15 +396,9 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
 
       {problems.length > 0 || actionData?.formError ? (
         <div className="panel-body form-intro">
-          {actionData?.formError ? (
-            <p className="form-error" role="alert">
-              {actionData.formError}
-            </p>
-          ) : null}
+          <FormError message={actionData?.formError} />
           {problems.map((message, index) => (
-            <p key={index} className="field-error" role="alert">
-              {message}
-            </p>
+            <FieldError key={index} message={message} />
           ))}
         </div>
       ) : null}
@@ -447,11 +430,7 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
             Total for the position
           </label>
           <p className="field-note">Applies only when a cost basis column is mapped.</p>
-          {errors?.costBasisIs ? (
-            <p className="field-error" role="alert">
-              {errors.costBasisIs}
-            </p>
-          ) : null}
+          <FieldError message={errors?.costBasisIs} />
         </fieldset>
 
         {/* Unticked keeps the file's own sign — how an overdraft records (DESIGN.md §14.8). */}

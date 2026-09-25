@@ -2,13 +2,14 @@ import { Form, Link, data, redirect, redirectDocument } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
+import { FieldError, FormError } from "~/components/error-message";
 import {
-  FORM_ERROR,
   NotFoundError,
   ValidationError,
   earliestRecordableDate,
   formFields,
   latestRecordableDate,
+  refused,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
 import {
@@ -152,18 +153,13 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw redirect(`/accounts/${only.accountId}?uploaded=${only.setId}`);
   } catch (error) {
     if (error instanceof StaleReviewError) {
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return {
-        errors: fieldErrors,
-        formError: formError ?? null,
-        values: withoutTicks(values),
+        ...refused(error, withoutTicks(values)),
         diff: error.diff,
         confirmationReset: crypto.randomUUID(),
       };
     }
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       // Carries the diff the refusal was decided against (#181) — the loader's earlier read can
       // predate the account state the commit just refused against.
       let diff: UploadDiff;
@@ -193,9 +189,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         }
       }
       return {
-        errors: fieldErrors,
-        formError: formError ?? null,
-        values: withoutTicks(values),
+        ...refused(error, withoutTicks(values)),
         diff,
         confirmationReset: crypto.randomUUID(),
       };
@@ -510,17 +504,13 @@ function RecordControls({
     <>
       {staleReviewMessage ? (
         <div className="panel-body form-intro">
-          <p className="form-error" role="alert">
-            {staleReviewMessage}
-          </p>
+          <FormError message={staleReviewMessage} />
         </div>
       ) : null}
 
       {formError ? (
         <div className="panel-body form-intro">
-          <p className="form-error" role="alert">
-            {formError}
-          </p>
+          <FormError message={formError} />
         </div>
       ) : null}
 
@@ -549,9 +539,7 @@ function RecordControls({
               />
             </label>
             {errors?.asOf ?? diff.asOfError ? (
-              <p className="field-error" role="alert">
-                {errors?.asOf ?? diff.asOfError}
-              </p>
+              <FieldError message={errors?.asOf ?? diff.asOfError} />
             ) : (
               <p className="form-note">
                 This file does not date itself. Review a changed date before recording it.
@@ -683,13 +671,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
             )}
           </p>
           {blocked.problems.map((problem, index) => (
-            <p
+            <FormError
               key={`${problem.row ?? "mapping"}-${problem.column ?? "mapping"}-${index}`}
-              className="form-error"
-              role="alert"
-            >
-              {problem.message}
-            </p>
+              message={problem.message}
+            />
           ))}
           {blocked.problems.some((problem) => problem.code === "blank-instrument") ? (
             <p>

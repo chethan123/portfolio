@@ -432,7 +432,7 @@ the index below.
 |---|---|---|---|
 | `id` | `bigint` identity | no | primary key |
 | `instrument_id` | `bigint` → `instrument` | no | the instrument attempted; `ON DELETE CASCADE` |
-| `started_at` | `timestamptz` | no | when the fetch began, not when the row committed |
+| `started_at` | `timestamptz` | no | when the refresh that attempted it began, never when the provider answered or the row committed |
 | `range_from` | `date` | no | the range asked for (CHECK `range_from < range_until`) |
 | `range_until` | `date` | no | exclusive. Today's market date, so today's row stays the poller's |
 | `written` | `integer` | no | closes the spine did not already hold, counted from the insert's `RETURNING` (≥ 0, CHECK) |

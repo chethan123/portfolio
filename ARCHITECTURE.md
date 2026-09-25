@@ -413,7 +413,7 @@ table with a single grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:775` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:765` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -713,7 +713,7 @@ erDiagram
     PRICE_BACKFILL {
         bigint id PK
         bigint instrument_id FK "the instrument attempted"
-        timestamptz started_at "when the fetch began, not when the row committed"
+        timestamptz started_at "when the refresh that attempted it began, never when the provider answered or the row committed"
         date range_from "the range asked for"
         date range_until "exclusive"
         integer written "closes the spine did not already hold"
@@ -1488,7 +1488,7 @@ itself is `withRefreshLock` in `prices.server.ts`):
 
 | Hazard | Guard |
 |---|---|
-| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
+| Two timers in one process, because `react-router dev` re-executes the module graph on every edit | The instance holding the handle is pinned to `globalThis`, which Vite does not reset, and disposed on hot update |
 | Two timers in two processes, a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
 | A tick outliving its interval, because the provider is slow | Serialised by a flag; an overlapping tick is **dropped, not queued**, because a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
 
@@ -1811,7 +1811,7 @@ raises no serialization failure for a transaction that only reads.
 | Operation | Idempotent? | Mechanism |
 |---|---|---|
 | Applying migrations | Yes | The `schema_migrations` ledger; re-running skips what is recorded |
-| `startPricePoller()` | Yes | After the first call it is a property lookup on `globalThis` |
+| `startPricePoller()` | Yes | After the first call it is a property lookup on `globalThis`, where the one built poller is pinned |
 | A quote refresh | Yes | Upserts keyed on `instrument_id` and `(instrument_id, date)` |
 | Re-POSTing a commit | **No, and deliberately so** | The draft is gone, so the second POST is a 404 rather than a second position set |
 | Re-uploading the same statement | No | It appends a new set. Uploads append, never mutate (DESIGN.md §5.2), and the tie-break decides which speaks |
@@ -2333,13 +2333,12 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
-  `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
-  keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
-  still there. Latent rather than live.
 - **Logic stranded in route module bodies**, `describe(filters)` in `holdings.tsx` among it,
   untestable where it currently sits (§9.3).
-- **`<FieldError>` is open-coded at roughly fifteen sites.**
+
+The review's §2.5 (two settings routes never rendering a form-level refusal) and §2.6 (the
+open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-round-trip.md): one
+`refused()` split, one element pair, and both routes rendering the refusal.
 
 **Found while writing this document**, not from the review:
 
@@ -2400,7 +2399,7 @@ still live in the current code:
 | `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03): the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
 | `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
-| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. Its `globalThis` slot also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by `readPollerSnapshot` and turned into the published categories by `price-health.ts` |
+| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. `createPricePoller` builds it as an instance (clock, cadence read, refresh and log injected, its `tick()` promise the completion signal); `startPricePoller` pins one on `globalThis` (spec 0025). The instance also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by its `snapshot()`, through `readPollerSnapshot`, and turned into the published categories by `price-health.ts` |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
 | `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
 | `accounts.server.ts` | Accounts, and `withAccountLock`, the row lock every position-set writer and `closeAccount` run inside (§7.2). Nothing is ever deleted, and `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
@@ -2416,7 +2415,7 @@ still live in the current code:
 | `account-label.ts` | The upload picker's labels, grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
-| `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
+| `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, `refused()` — the one split of a refusal into per-field messages and the form-level one, which every action spreads its own fields onto — and the one phrase-builder the refusals that name a list share |
 | `decimal-input.ts` | The browser-safe exact-string rules shared by every typed financial field and its live interpretation: grouping, sign, scale, storage width and percentage range are decided once without floating point; commas and non-line-breaking whitespace group thousands only in threes, while the legacy leading `+` and trailing point remain valid |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
@@ -2510,6 +2509,7 @@ also export pure helpers for testing.
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
 | `price-freshness.tsx` | How old this page's figures are, and the control that changes it, one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
 | `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
+| `error-message.tsx` | The refusal paragraphs' markup, once: `FieldError` (with the `id` an input's `aria-describedby` names, where it has one) and `FormError`. Browser-safe and handed a string rather than a `ValidationError`, because the `form` split happens server-side in `refused()`. `price-freshness.tsx` borrows the `form-error` class for lines that are not refusals, and `unlock.tsx` keeps its alert role on a region that exists before a refusal does; neither uses it |
 | `upload-steps.tsx` | The upload flow's step strip. Four entries, five for a file of several accounts, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
 | `upload-receipt.tsx` | The account page's `?uploaded=` receipt and each line of `/upload/done`, told one way: added/updated/removed counts and the as-of date on a current statement, or the filed-behind sentence (spec 0005 §5) on one a later statement has superseded |
 

@@ -52,6 +52,9 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0022](0022-chart-grain.md) | A chart range of at most 92 days drawn at a grain from the observation log, on a per-day axis (ADR-0014) |
 | [0023](0023-multi-account-upload.md) | One file covering several accounts, each row routed by its account number; the number becomes the selector there and stays the guard elsewhere (ADR-0015; implemented) |
 | [0024](0024-one-commit-over-routed-sections.md) | One assembler, one commit and one review revision over per-account sections; a chosen account is a routing of one (architecture review 2026-09-24 §2.1) |
+| [0025](0025-the-poller-as-a-built-instance.md) | The price poller as one built instance pinned on `globalThis`, its `tick()` promise the completion signal and its clock, cadence read, refresh and log injected (architecture review 2026-09-24 §2.3) |
+| [0026](0026-refresh-prices-takes-now.md) | One `refreshPrices` whose result names the no-quotes case, the overloads and `RunWithQuotes` gone, and `now` a parameter of the price writer rather than a clock read inside it (architecture review 2026-09-24 §2.4) |
+| [0027](0027-the-refusal-round-trip.md) | One `refused()` beside `parseInput` that actions spread their own fields onto, one `<FieldError>`/`<FormError>` pair for the 42 refusal paragraphs, and the two settings routes that never rendered a form-level refusal now rendering it (architecture review 2026-09-24 §2.5) |
 
 ## The ticket directories
 

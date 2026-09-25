@@ -1,8 +1,9 @@
 import { Form, Link, redirect } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
+import { FormError } from "~/components/error-message";
 import { closeAccount, getAccount, updateAccount } from "~/lib/accounts.server";
-import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
 import { listPeople } from "~/lib/people.server";
 
 import type { Route } from "./+types/account";
@@ -35,16 +36,18 @@ export async function action({ params, request }: Route.ActionArgs) {
     return { saved: true, errors: undefined, values: undefined, closeError: undefined };
   } catch (error) {
     if (error instanceof ValidationError) {
+      const refusal = refused(error, values);
       // Close POST carries no account fields — echoing it as `values` would blank every box above.
       if (values.intent === "close") {
         return {
           saved: false,
           errors: undefined,
+          formError: null,
           values: undefined,
-          closeError: error.fieldErrors[FORM_ERROR],
+          closeError: refusal.formError,
         };
       }
-      return { saved: false, errors: error.fieldErrors, values, closeError: undefined };
+      return { saved: false, ...refusal, closeError: undefined };
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -95,6 +98,8 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
 
       <section className="panel">
         <Form method="post" className="panel-form">
+          <FormError message={actionData?.formError} />
+
           <AccountFields
             people={people}
             values={values}
@@ -140,11 +145,7 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
                 current net worth from now on, and it cannot be reopened in this version.
               </strong>
             </label>
-            {actionData?.closeError ? (
-              <p className="form-error" role="alert">
-                {actionData.closeError}
-              </p>
-            ) : null}
+            <FormError message={actionData?.closeError} />
             <button
               type="submit"
               name="intent"
