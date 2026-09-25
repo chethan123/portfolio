@@ -427,7 +427,7 @@ type DividendCandidate = {
  * Next batch: **currently held** feed instruments with a symbol, at a nonzero quantity, whose rate
  * is unmeasured or due.
  * Driven from `holding_valued`, which already owns the latest-position-set rule and excludes closed
- * accounts (`0006:56`), so "no longer held" and "closed" fall out for free — where
+ * accounts (`0006:57`), so "no longer held" and "closed" fall out for free — where
  * {@link selectBackfillCandidates}'s `holding`/`position_set` join is "ever held", which would cost
  * a request a week forever for a position sold in 2019. Not a valuation read: `priceFreshness`
  * already reads the view from this module, in this shape (§4.2 names `valuation.server.ts` the only
@@ -521,7 +521,7 @@ const emptyDividendReport = (): DividendReport => ({
 /** {@link ProviderDividends} plus the one outcome only the caller can see: the call threw. */
 type DividendResult = ProviderDividends | { status: "provider-failed" };
 
-const DIVIDEND_OUTCOME: Record<Exclude<DividendResult["status"], "ok">, DividendOutcome> = {
+const OUTCOME_OF_RESULT: Record<Exclude<DividendResult["status"], "ok">, DividendOutcome> = {
   "no-data": DIVIDEND_OUTCOMES.noData,
   "non-usd": DIVIDEND_OUTCOMES.nonUsd,
   unreadable: DIVIDEND_OUTCOMES.unreadable,
@@ -601,7 +601,7 @@ async function writeTrailingDividend(
           }
         : {
             trailing_dividend_as_of: now,
-            trailing_dividend_outcome: DIVIDEND_OUTCOME[result.status],
+            trailing_dividend_outcome: OUTCOME_OF_RESULT[result.status],
           },
     )
     .where("instrument_id", "=", instrumentId)

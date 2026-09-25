@@ -4,7 +4,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { holdingYield } from "~/lib/holdings-view";
-import { toProviderDividends } from "~/lib/price-provider.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -505,35 +504,15 @@ describe("what a holding is projected to pay", () => {
         name: "iShares Core S&P Total US Stock Market ETF",
       });
 
-      // The distributions Yahoo's own events.dividends carried on 2026-09-25, summed by the parser
-      // the sweep uses: 0.487 + 0.327 + 0.419 + 0.453.
-      const measured = toProviderDividends(
-        {
-          meta: { currency: "USD" },
-          events: {
-            dividends: [
-              { date: new Date("2025-12-22T13:30:00Z"), amount: 0.487 },
-              { date: new Date("2026-03-23T13:30:00Z"), amount: 0.327 },
-              { date: new Date("2026-06-22T13:30:00Z"), amount: 0.419 },
-              { date: new Date("2026-09-22T13:30:00Z"), amount: 0.453 },
-            ],
-          },
-          quotes: [{ date: new Date("2026-09-22T13:30:00Z"), close: 167.73 }],
-        },
-        "2025-09-04",
-        "America/New_York",
-      );
-      if (measured.status !== "ok") throw new Error(`expected a rate, got ${measured.status}`);
-
-      expect(measured.perShare).toBe("1.6860");
-
       await seedQuote({
         instrument: itot,
         price: "167.7300",
         // What the view read before this change: Yahoo's trailingAnnualDividendRate for the same
         // instrument on the same day, which gave 1.246 / 167.73 = 0.7% against a real 1.0%.
         annualDividendPerShare: "1.2460",
-        trailingDividendPerShare: measured.perShare,
+        // The sum the sweep measured from ITOT's four 2026-09-25 distributions; the parser answers
+        // for it in price-provider.test.ts, and the two halves join in dividend-sweep.test.ts.
+        trailingDividendPerShare: "1.6860",
         trailingDividendAsOf: new Date("2026-09-25T20:00:00Z"),
         trailingDividendOutcome: "ok",
       });

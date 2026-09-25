@@ -101,9 +101,11 @@ no longer reaches Yahoo at all. `app` crosses a unix socket to `worker` for ever
 Yahoo only through `egress-proxy`, which admits a `CONNECT` to five hosts and checks the TLS server
 name inside the tunnel against the host it was opened to (§3.1, §7.5,
 [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). Yahoo
-is reached four ways, over three endpoints: the poller's batched *quote* fetch, the backfill's
-per-symbol *chart* fetch and the dividend sweep's own per-symbol *chart* fetch, the last two made on
-the same refresh (ADR-0011) but against separate endpoints, all three off the request path entirely,
+is reached four ways, over three worker routes against two Yahoo endpoints: the poller's batched
+*quote* fetch, the backfill's per-symbol *chart* fetch and the dividend sweep's own per-symbol
+*chart* fetch, the last two made on the same refresh (ADR-0011) but through separate worker routes —
+`/history` and `/dividends`, each with its own body cap and rate limiter — though both call Yahoo's
+single chart endpoint, all three off the request path entirely,
 and `socketProbe`, a currency check over every symbol one submission creates, run *inside* the form
 submission that creates them (§6.1). The last is the only place a third party can make a person wait.
 All four go through the one interface in §7.5,
@@ -415,9 +417,15 @@ table with a single grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1021` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:1022` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
+- `prices.server.ts` (`selectDividendCandidates`) selects ids, a symbol and a stamp from
+  `holding_valued`, not to value anything; it computes no money either. It takes no `OwnerFilter` for
+  the same reason the backfill bullet below gives — a sweep candidate is a fact about the instance's
+  price coverage, not about anyone's net worth. It reads through the view because it wants exactly
+  the set the view multiplies: currently held, open account, non-zero quantity, one slot per
+  instrument.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
   `holding` and `position_set` that §11.1 warns about, to find the earliest date an instrument was
   held, the batch's next few and the whole list Settings → Prices renders, sharing one predicate
@@ -1888,7 +1896,7 @@ hand right after any change to the host's engine or container runtime.
                     ▼                        ▼
         socketProvider()               the tests' fake
         dials the worker's socket      implements all three and nothing else;
-        (provider-socket.server.ts:187) no test reaches the network
+        (provider-socket.server.ts:175) no test reaches the network
 ```
 
 One seam, two implementations either side of a process boundary, not the two boxes above, which are

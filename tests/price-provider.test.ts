@@ -488,7 +488,7 @@ const chartOf = (payload: {
   quotes: ReturnType<typeof bar>[];
 }) => ({
   meta: { currency: payload.currency ?? "USD" },
-  // No `events` key at all where neither is stated — how an instrument that pays nothing answers
+  // No `events` key at all where neither is stated — how a chart carrying no events answers
   ...(payload.splits === undefined && payload.dividends === undefined
     ? {}
     : {
@@ -935,9 +935,26 @@ const WEEKLY = everyNDays("2025-09-26", 7, 53);
 const BIWEEKLY = everyNDays("2025-09-26", 14, 27);
 
 describe("summing the trailing year of distributions", () => {
-  it("stores a zero rate for an instrument with no events key beside real bars", () => {
-    // BRK-B: Yahoo omits `events` entirely for a payer of nothing, which is a real zero
-    expect(dividendsOf(undefined)).toEqual({ status: "ok", perShare: "0.0000" });
+  it("answers no-data for a chart with no events key at all, rather than a measured zero", () => {
+    // VMFXX and SWVXX pay 4-5% and answer with bars and no `events` key, exactly as BRK-B does:
+    // absence cannot tell a real zero from a chart that carries no events, and a stored zero would
+    // wipe a money-market fund's yield under an `ok` the outcome column reports as healthy
+    expect(dividendsOf(undefined)).toEqual({ status: "no-data" });
+  });
+
+  it("stores a zero rate for an events block that is present and lists no dividend", () => {
+    // a readable block naming no payment is the evidence an absent block cannot give
+    expect(dividendsOf([])).toEqual({ status: "ok", perShare: "0.0000" });
+  });
+
+  it("stores a zero rate for an events block carrying splits and no dividends key", () => {
+    expect(
+      toProviderDividends(
+        chartOf({ splits: [split("2026-06-10", 4, 1)], quotes: A_BAR }),
+        SINCE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "ok", perShare: "0.0000" });
   });
 
   it("answers no-data for a chart carrying no bars, which is not evidence of a non-payer", () => {
@@ -953,6 +970,12 @@ describe("summing the trailing year of distributions", () => {
 
   it("excludes an event dated exactly the window's start and keeps one a day later", () => {
     expect(perShareOf([dividend(SINCE, 5), dividend("2025-09-05", 0.25)])).toBe("0.2500");
+  });
+
+  it("excludes an event dated exactly the trailing year's edge and keeps one a day later", () => {
+    // 2025-09-25 is `since` plus the extension — the 365-day core's own bound. Strictly later, or
+    // the core stretches to 366 days and an extension payment sums on top of a full year
+    expect(perShareOf([dividend("2025-09-25", 9.99), dividend("2025-09-26", 0.1)])).toBe("0.1000");
   });
 
   it("reads a zero for a payer whose last distribution was 400 days ago, past the extension too", () => {
@@ -991,7 +1014,8 @@ describe("summing the trailing year of distributions", () => {
   });
 
   it("counts an annual payer's two payments exactly 365 days apart as one", () => {
-    expect(perShareOf([dividend("2025-09-15", 2.5), dividend("2026-09-15", 3)])).toBe("3.0000");
+    // the older one lands on the core's bound, 2025-09-25, and the bound is exclusive
+    expect(perShareOf([dividend("2025-09-25", 2.5), dividend("2026-09-25", 3)])).toBe("3.0000");
   });
 
   it("sums both when an annual ex-date drifts earlier and lands two inside the trailing year", () => {
@@ -1043,6 +1067,17 @@ describe("summing the trailing year of distributions", () => {
   it("rounds the sum once at the end, not every event on the way in", () => {
     // per-event toFixed(4) rounds each 0.00005 up to 0.0001 and reads 0.0012, double the truth
     expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.00005)))).toBe("0.0006");
+  });
+
+  it("rounds the summed rate half away from zero, never towards it", () => {
+    // 3 x 0.12345 sums to 0.37035 at event scale; truncating to money scale would read "0.3703"
+    expect(
+      perShareOf([
+        dividend("2026-03-15", 0.12345),
+        dividend("2026-06-15", 0.12345),
+        dividend("2026-09-15", 0.12345),
+      ]),
+    ).toBe("0.3704");
   });
 
   it("applies no split ratio to an amount, which Yahoo has already back-adjusted", () => {

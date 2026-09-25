@@ -45,17 +45,27 @@ export type ProviderHistory =
   | { status: "non-usd"; currency: string }
   | { status: "split-unresolved" };
 
-/** Refusals map one-to-one onto `DIVIDEND_OUTCOMES`; a non-payer is `ok` with a zero rate, never a refusal. */
+/**
+ * Refusals map one-to-one onto `DIVIDEND_OUTCOMES`; a non-payer whose chart carries an events block
+ * is `ok` with a zero rate, never a refusal.
+ */
 export type ProviderDividends =
   | { status: "ok"; perShare: string }
   | { status: "no-data" }
   | { status: "non-usd"; currency: string }
   | { status: "unreadable" };
 
-/** The trailing year {@link toProviderDividends} sums. Exported from here, not the sweep: this module derives the core bound itself and cannot import `prices.server.ts` (a cycle, via `provider-socket.server.ts`). */
+/**
+ * The trailing year {@link toProviderDividends} sums. Lives here, not in the sweep that subtracts
+ * it: the parser derives the core bound from it.
+ */
 export const TRAILING_WINDOW_DAYS = 365;
 
-/** How far past the year to look when the year holds nothing — an annual payer whose ex-date has drifted this much later still reports last year's payment instead of $0. Never widens a year that has something in it. */
+/**
+ * How far past the year to look when the year holds nothing — an annual payer whose ex-date has
+ * drifted this much later still reports last year's payment instead of $0. Never widens a year
+ * that has something in it.
+ */
 export const DRIFT_EXTENSION_DAYS = 21;
 
 /** `getQuotes` batches — why Yahoo was chosen. History has no batch form: one symbol per call. */
@@ -114,7 +124,10 @@ const CLOSE_CEILING = 10 ** 16;
 /** `quote.price` is `numeric(20,4)`. The `quantity × price` product is guarded in `positions.server.ts`. */
 const PRICE_CEILING = 10 ** 16;
 
-/** Finer than `MONEY_SCALE` so {@link toProviderDividends} rounds once: twelve events of 0.00005 sum to 0.0006, where rounding each first reads 0.0012. */
+/**
+ * Finer than `MONEY_SCALE` so {@link toProviderDividends} rounds to money scale once: twelve events
+ * of 0.00005 sum to 0.0006, where rounding each to money scale first reads 0.0012.
+ */
 const EVENT_SCALE = 8;
 
 /** Overflow aborts the refresh transaction — one bad symbol would cost the household its refresh. */
@@ -187,8 +200,8 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
 
   const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
 
-  // Bounded like the yield; `quantity × rate` is checked where the quantity is chosen. A null rate
-  // reads as $0, a labelled lower bound (§14 limitation 9), where a clamped one would read as real.
+  // Bounded like the yield. Stored beside the provider's own figure for comparison; nothing values
+  // from it since 0019 — `holding_valued` reads `trailing_dividend_per_share`.
   const annualDividendPerShare = inRange(decimal(perShare, 4), RATE_CEILING);
 
   const yieldPct =
@@ -360,15 +373,19 @@ export function toProviderDividends(
   // stored zero would be indistinguishable from a measured one.
   if (chart.quotes.length === 0) return { status: "no-data" };
 
-  // Absent `events` beside real bars is the real zero (BRK-B).
-  if (chart.events === undefined || chart.events === null) {
-    return { status: "ok", perShare: render(0n, MONEY_SCALE) };
-  }
+  // An events block at all is the evidence that this instrument's chart carries events. Yahoo omits
+  // the key for money-market funds paying 4-5% (VMFXX, SWVXX) exactly as it does for a genuine
+  // non-payer, so absence cannot be read as a measured zero — it would wipe the yield under an `ok`
+  // the outcome column then reports as healthy. Refusing advances the stamp and leaves the last rate
+  // standing, and costs nothing: `ok` and `no_data` retry on the same tier.
+  if (chart.events === undefined || chart.events === null) return { status: "no-data" };
 
   const events = yahooDividends.safeParse(chart.events).data;
   if (events === undefined) return { status: "unreadable" };
 
-  // All or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number.
+  // All or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number. A
+  // readable block that lists no dividend — splits only, or an empty array — is a real zero, and
+  // the sum below is what stores it.
   const paid: Array<{ date: IsoDate; units: bigint }> = [];
   for (const dividend of events.dividends ?? []) {
     // `date` crosses the worker socket as an ISO string, whatever the library coerced it to.
@@ -404,8 +421,8 @@ export function toProviderDividends(
   // anything spaced under 28 days: 5.7% of a weekly payer's year, permanently (docs/specs/dividends/01).
   const kept = core.length > 0 ? core : paid.filter((event) => event.date > since);
 
-  // `money.ts` units at `EVENT_SCALE`, one rounding at the end: rounding each event to
-  // `MONEY_SCALE` first would round twelve times for a monthly payer (ARCHITECTURE.md §5.6).
+  // `money.ts` units at `EVENT_SCALE`, rounding to money scale once at the end: rounding each event
+  // to `MONEY_SCALE` first would round twelve times for a monthly payer (ARCHITECTURE.md §5.6).
   let units = 0n;
   for (const event of kept) {
     units += event.units;

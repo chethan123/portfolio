@@ -161,6 +161,19 @@ but its spine does not, from the feed's own history. Fills what is absent and ne
 close the running system recorded itself; a day the market did not trade stays absent.
 _Avoid_: historical import, catch-up, re-pricing, price sync.
 
+**Dividend sweep**:
+The bounded per-tick re-measurement of trailing dividend rates: up to five feed instruments, oldest
+stamp first, one call each. Runs every tick regardless of the scheduled quote window, because a
+dividend can go ex on any date.
+_Avoid_: dividend refresh, dividend poll, yield sweep, rate sync.
+
+**Carried rate**:
+A trailing dividend rate migration `0019` copied from the provider's own figure rather than measured
+from actual distributions, told apart from a measured one by `trailing_dividend_outcome is null`
+beside a non-null rate. Due for the dividend sweep immediately, but ordered behind an instrument
+priced for the first time after the migration, whose stamp is null rather than backdated.
+_Avoid_: legacy rate, migrated rate, inherited rate, stale rate.
+
 **Price worker**:
 The one process that talks to the price feed, holding no rule about what to fetch or what a price
 means, and no database credential.

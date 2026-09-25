@@ -895,8 +895,6 @@ async function seed(
     quoteDividends.push(rate);
     quoteAsOf.push(asOf);
     quoteStale.push(instrument.stale === true);
-    // A null stamp means "never measured by us", which is what puts this row at the head of the
-    // sweep's queue — rather than an `ok` claiming a rate that is not there.
     quoteTrailingAsOf.push(rate === null ? null : asOf);
     quoteTrailingOutcome.push(rate === null ? null : "ok");
   }
@@ -912,8 +910,6 @@ async function seed(
       quoteDividends,
       quoteAsOf,
       quoteStale,
-      // holding_valued's annual_dividend now reads trailing_dividend_per_share exclusively; the
-      // same per-share figure and as_of stamp keep the demo's dividends non-zero.
       quoteDividends,
       quoteTrailingAsOf,
       quoteTrailingOutcome,

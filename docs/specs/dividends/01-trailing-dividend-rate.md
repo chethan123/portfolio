@@ -69,14 +69,19 @@ year** — rather than implying the sum is itself the forward figure. No new ter
 - `chart()` **throws** before fetching on an unparseable `period1` or `period1 === period2`
   (`chart.js:183-196`). Our `from` is always `YYYY-MM-DD`, so this cannot fire; noted so nobody
   "fixes" it later.
-- An instrument that pays nothing omits `events` entirely (BRK-B). A real zero — but only when the
-  response carries bars.
+- A genuine non-payer and one nobody has attached dividend history to look identical: BRK-B (pays
+  nothing) and VMFXX/SWVXX/VMRXX (money-market funds paying 4-5%, verified live 2026-09-25) all omit
+  `events` entirely from a chart that still carries bars. Absence therefore cannot be read as a
+  measured zero — only a *present*, readable block, even one listing no dividends, earns one.
 
 ### The trailing window, and the drift extension
 
-Two constants, **exported from `app/lib/price-provider.server.ts`** — `toProviderDividends` derives
-the core bound itself, and that module cannot import `prices.server.ts` (a cycle, via
-`provider-socket.server.ts`):
+Two constants, **exported from `app/lib/price-provider.server.ts`**, because that is the module that
+applies the bound — `toProviderDividends` derives the core bound itself. Not because of an import
+cycle: `price-provider.server.ts` already value-imports `matchKey` from `prices.server.ts`, and
+`prices.server.ts` value-imports back from it (`DRIFT_EXTENSION_DAYS`, `ProviderUnreachable`,
+`TRAILING_WINDOW_DAYS`) — a cycle both modules already tolerate. Neither imports
+`provider-socket.server.ts` at all:
 
 ```ts
 export const TRAILING_WINDOW_DAYS = 365;
@@ -220,7 +225,10 @@ and `RATE_CEILING` (`:81,:90,:99`) are module-private and must stay so.
   - reuse `yahooChart`; parse failure → `no-data`
   - `meta.currency` present and not USD → `non-usd` (same guard as `toProviderHistory`)
   - `quotes.length === 0` → `no-data`; an empty chart is not evidence of a non-payer
-  - `events` absent or null → `{ status: "ok", perShare: "0.0000" }`
+  - `events` absent or null → `no-data`, **not** a measured zero. A money-market fund paying 4-5%
+    (VMFXX, SWVXX, VMRXX) omits `events` from its chart exactly as a genuine non-payer (BRK-B) does,
+    so absence cannot be read as evidence of zero — it would wipe the yield under an `ok` the outcome
+    column then reports as healthy
   - `events` **present but carrying no `dividends` array** — a splits-only block, which is what an
     instrument that split and pays nothing returns → also `{ status: "ok", perShare: "0.0000" }`.
     Deliberate, and not the same as `unreadable`: the block parsed, it simply holds no payments, and
@@ -228,12 +236,19 @@ and `RATE_CEILING` (`:81,:90,:99`) are module-private and must stay so.
   - `events` present but unparseable, or any element with a non-finite `amount` or a `date`
     `parseInstant` refuses → `unreadable`, all-or-nothing, mirroring the split rule: a half-read
     block yields a plausible-looking wrong number
+  - each event's `amount` bounded with `inRange(…, RATE_CEILING)` **before** `toUnits` — `toFixed`
+    goes exponential past 1e21 and `toUnits` throws a `SyntaxError` on that string, out of a parser
+    that never throws; over the ceiling → `unreadable`, same as an unparseable element
+  - any event with a **negative** amount → `unreadable`: summed, it would store a negative rate
+    against the holding, and refusing only that element would drop the real payments beside it. Zero
+    stays — a payment of nothing is data
   - date each event with `marketDateOf`, keep `date > addDays(since, DRIFT_EXTENSION_DAYS)` — the
     core year — and fall back to `date > since` only when that keeps nothing
   - **sum in `money.ts` units first, round once** — `toUnits` each amount at `EVENT_SCALE` (8), accumulate, then one `divide` down to `MONEY_SCALE`,
     accumulate as `bigint`, one `render` at the end. Per-event rounding would round twelve times
     for a monthly payer. `unadjusted()` (`:213-229`) is the precedent.
-  - bound with `inRange(…, RATE_CEILING)`; over it → `unreadable`
+  - bound the **summed** rate with `inRange(…, RATE_CEILING)` too, separately from the per-event bound
+    above; over it → `unreadable`
   - carry a comment on why no split arithmetic is applied, citing the NVDA observation
 
 **`app/lib/provider-socket.server.ts`** — `AskKind` gains `"dividends"` (both `BUDGET_MS` `:31` and
@@ -253,8 +268,11 @@ case to different literals (`no-history` and `no-data`). Each `get*` parses and 
   module computes. The migration's `interval '7 days'` is the same 7 and is kept in step by hand.
 - `DIVIDEND_OUTCOMES` as a `const` object mirroring `BACKFILL_OUTCOMES` (`:91-98`), kept in step by
   hand with the migration's check constraint
-- `selectDividendCandidates(db, now)` — **currently held** feed instruments with a symbol, inner
-  joined to `quote` so the write always lands on a row. Drive it from `holding_valued`: it already
+- `selectDividendCandidates(db, now)` — **currently held** feed instruments with a symbol, at a
+  nonzero quantity, inner joined to `quote` so the write always lands on a row. The quantity
+  predicate is load-bearing: a turnaround is recorded at zero first (`positions.server.ts`) and the
+  view keeps that row, so "currently held" alone would spend a request a week forever on a position
+  that is gone. Drive it from `holding_valued`: it already
   owns the latest-position-set rule and excludes closed accounts (`0006:56`), so "no longer held"
   and "closed" both fall out for free. Do **not** copy `selectBackfillCandidates`'s joins
   (`prices.server.ts:122-158`) — it joins `holding`/`position_set` with no `account` join at all,
@@ -281,6 +299,9 @@ case to different literals (`no-history` and `no-data`). Each `get*` parses and 
     .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
     .where("holding_valued.price_source", "=", "feed")
     .where("holding_valued.symbol", "is not", null)
+    // A turnaround is recorded at zero first (positions.server.ts); without this the view keeps
+    // spending a request a week forever on a position that is gone.
+    .where("holding_valued.quantity", "!=", "0")
     .where((eb) => eb.or([
       eb("quote.trailing_dividend_as_of", "is", null),
       eb.and([
@@ -392,13 +413,16 @@ Verified line by line; entries that merely *gain* a row rather than becoming fal
 - `docs/data-model.md:361` — "the forward per-share rate behind the projected annual dividend"
 - `docs/data-model.md:647,649` — the `coalesce(annual_dividend_per_share, 0)` sentence and its
   limitation-9 pointer
-- `ARCHITECTURE.md:104` — "over two endpoints", now three
+- `ARCHITECTURE.md:104` — "over two endpoints"; now four ways over three worker routes against
+  two Yahoo endpoints, since both chart fetches reach the same Yahoo endpoint
 - `ARCHITECTURE.md:700-707` — the ER `QUOTE` entity at `:704` (*addition*)
 - `ARCHITECTURE.md:569-570` — the writers table; the sweep is a new `quote` writer beside
   "Refresh quotes"
 - `ARCHITECTURE.md:2537` — the migrations table gains an `0019_trailing_dividend.sql` row, as
   dff847b added one for `0018` (*addition*). Every migration here gets a row; do not skip it.
-- `ARCHITECTURE.md:1376` sequence diagram and `:1870` the `PriceProvider` box
+- `ARCHITECTURE.md:1408-1414` — a new paragraph after the §6 backfill sequence diagram, covering the
+  dividend sweep; the diagram itself needs no new arrow, since the sweep runs after it under the same
+  tick and lock rather than inside it. `:1888-1900` the `PriceProvider` box gains a method (*addition*)
 - `docs/operating.md:1192-1195,1200-1203` — the outside-window tick and "Refresh now" paragraphs,
   which enumerate what does and does not run
 - `docs/operating.md:1115-1130` — the log-stem list; the sweep needs a stem beside
@@ -412,6 +436,11 @@ Verified line by line; entries that merely *gain* a row rather than becoming fal
 - `tests/price-poller.test.ts:124,134,404-413` — `RefreshPricesReport` literals, `refreshCalls`
   typed `{ quotes: boolean }[]`, and a `toEqual([{ quotes: true }])` that is strict on extra keys
 - `tests/price-worker.test.ts:192` — `describe("the three endpoints")`
+- `docs/specs/0006-dividends.md:20-21` — "taken from the provider's `dividendRate` or its ETF
+  spelling `trailingAnnualDividendRate`", corrected in place by banner rather than rewrite
+  (`docs/specs/README.md`)
+- `docs/specs/0025-the-poller-as-a-built-instance.md` — the log-stem table gains a `Price dividends`
+  row beside `Price backfill` (*addition*)
 
 Checked and **not** affected, so leave them alone: `DESIGN.md:795` (§8.4 Prices row) and
 `app/routes/settings/prices.tsx:52` — this change adds no Settings UI; `ARCHITECTURE.md:1352` — the
@@ -447,7 +476,9 @@ historical and is not edited.
       share at 167.73 gives `holdingYield` `"0.010052"` — the reproducing test for this bug.
       `holdingYield` returns a `SHARE_SCALE` ratio string; `1.0%` is the route's rendering, so
       assert the ratio here and leave the percent to a route test.
-- [ ] An instrument with no `events` key and at least one bar stores `0.0000`
+- [ ] An instrument with no `events` key at all refuses as `no-data`, even with bars — a
+      money-market fund's chart looks exactly like a non-payer's (VMFXX, SWVXX, VMRXX vs BRK-B)
+- [ ] A present but dividend-free block — splits-only, or an empty array — stores `0.0000`
 - [ ] An empty chart stores no rate and advances the stamp
 - [ ] An event dated exactly `since` is excluded; one a day later is included
 - [ ] Five quarterly payments inside 365 days sum to five — the accepted artifact, not four

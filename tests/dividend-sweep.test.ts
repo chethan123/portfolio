@@ -370,7 +370,8 @@ describe("what one answer writes", () => {
       );
 
       // Carried, so the counts reach the composition's log line; the cause is the one that escapes.
-      expect((failure as Error | null)?.cause).toBeInstanceOf(ProviderUnreachable);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).cause).toBeInstanceOf(ProviderUnreachable);
       // Not stamped: nothing was learned, and the batch is retried whole next tick.
       expect(await sweepColumnsOf(context.db, instrument.id)).toEqual({
         trailing_dividend_per_share: "1.2460",
