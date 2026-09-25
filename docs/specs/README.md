@@ -55,6 +55,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0025](0025-the-poller-as-a-built-instance.md) | The price poller as one built instance pinned on `globalThis`, its `tick()` promise the completion signal and its clock, cadence read, refresh and log injected (architecture review 2026-09-24 §2.3) |
 | [0026](0026-refresh-prices-takes-now.md) | One `refreshPrices` whose result names the no-quotes case, the overloads and `RunWithQuotes` gone, and `now` a parameter of the price writer rather than a clock read inside it (architecture review 2026-09-24 §2.4) |
 | [0027](0027-the-refusal-round-trip.md) | One `refused()` beside `parseInput` that actions spread their own fields onto, one `<FieldError>`/`<FormError>` pair for the 42 refusal paragraphs, and the two settings routes that never rendered a form-level refusal now rendering it (architecture review 2026-09-24 §2.5) |
+| [0028](0028-the-review-binding-verify.md) | The review binding's verify half: one pure `verifyBinding` beside the encoder in `review-form.ts`, owning the rerouted, revision, reviewed-date, watermark and baseline comparisons and their order, called once by `commitUnderLocks` (architecture review 2026-09-24 §2.2) |
 
 ## The ticket directories
 

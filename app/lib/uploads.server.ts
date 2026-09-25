@@ -49,7 +49,7 @@ import { aliasesFor, unresolvedStrings } from "./instrument-resolution.server.ts
 import { MONEY_SCALE, QUANTITY_SCALE, divide, render, toUnits } from "./money.ts";
 import { fitsTheMoneyColumn } from "./positions.server.ts";
 import { sameRawStrings } from "./raw-string.ts";
-import { sectionKey } from "./review-form.ts";
+import { dateToReproduce, sectionKey, verifyBinding, type StaleReason } from "./review-form.ts";
 import { foldLots, parseStatement, statementMapping } from "./statement.ts";
 import {
   recordedNumber,
@@ -947,7 +947,7 @@ export class StaleReviewError extends ValidationError {
   constructor(
     diff: UploadDiff,
     asOf: IsoDate | null,
-    reason: "date_changed" | "revision_changed" | "rerouted" = "revision_changed",
+    reason: StaleReason = "revision_changed",
     // Accounts with figures recorded since the review, when the form says which; rerouted: those
     // the file's numbers name now, unlocked.
     moved: readonly string[] = [],
@@ -1603,34 +1603,6 @@ export async function recordUpload(
   );
 }
 
-// Ahead of the per-account compare-and-sets: a moved baseline cannot hide another draft, alias or
-// account-state change. A different posted date is only an assertion: `reviewedRevision`
-// rebuilds the current draft and account state at the reviewed date, which must reproduce the
-// submitted revision before the gentler explanation is credible; missing, invalid, forged or
-// concurrently changed evidence falls back to stale.
-async function refuseStaleReview(
-  raw: CommitInput,
-  diff: UploadDiff,
-  asOf: IsoDate | null,
-  reviewedRevision: (reviewedAsOf: string) => Promise<string | null>,
-  moved: readonly string[] = [],
-): Promise<void> {
-  if (
-    raw.reviewRevision !== undefined &&
-    diff.reviewRevision !== null &&
-    raw.reviewRevision === diff.reviewRevision
-  ) {
-    return;
-  }
-
-  let reviewed: string | null = null;
-  if (raw.asOf !== undefined && raw.reviewedAsOf !== undefined && raw.asOf !== raw.reviewedAsOf) {
-    reviewed = await reviewedRevision(raw.reviewedAsOf);
-  }
-  const dateChanged = reviewed !== null && reviewed === raw.reviewRevision;
-  throw new StaleReviewError(diff, asOf, dateChanged ? "date_changed" : "revision_changed", moved);
-}
-
 // A chosen account's number guard. Over the folded rows (FileRow.accountNumber), not the raw
 // positions, which would refuse more files; after assembleDiff, because the date it resolves
 // decides the baseline (#181). The number to capture, with the refusal its write owes, or null.
@@ -1740,34 +1712,25 @@ async function commitUnderLocks(
     db,
   );
 
-  // Routing re-read under the locks can name an account the unlocked read did not.
-  const unlocked: string[] = [];
-  const held: Array<AssembledSection & { account: Account }> = [];
-  for (const section of sections) {
+  const binding = { diff, locked: locked.map(({ id }) => id) };
+  const at = dateToReproduce(raw, binding);
+  const verdict = verifyBinding(raw, {
+    ...binding,
+    reproduced:
+      at === null
+        ? null
+        : (await assembleDiff(draft, { mode: "review", asOf: at }, db)).diff.reviewRevision,
+  });
+  if (!verdict.ok) throw new StaleReviewError(diff, asOf, verdict.reason, verdict.moved);
+
+  // verifyBinding refused every section outside the locks as rerouted.
+  const held: Array<AssembledSection & { account: Account }> = sections.map((section) => {
     const account = locked.find(({ id }) => id === section.diff.accountId);
-    if (account === undefined) unlocked.push(section.diff.accountName);
-    else held.push({ ...section, account });
-  }
-  if (unlocked.length > 0) throw new StaleReviewError(diff, asOf, "rerouted", unlocked);
-  // Decision 9: history written since review names its account, for a file of several; a chosen
-  // account's review is about that one account. The watermark, not the baseline: a changed date
-  // alone moves baselines, never a watermark.
-  const moved = several
-    ? sections.flatMap(({ diff: section }) => {
-        const reviewed = raw[sectionKey("appendWatermark", section.accountId)];
-        return reviewed !== undefined && reviewed !== (section.appendWatermark ?? "")
-          ? [section.accountName]
-          : [];
-      })
-    : [];
-  await refuseStaleReview(
-    raw,
-    diff,
-    asOf,
-    async (reviewedAsOf) =>
-      (await assembleDiff(draft, { mode: "review", asOf: reviewedAsOf }, db)).diff.reviewRevision,
-    moved,
-  );
+    if (account === undefined) {
+      throw new Error("A verified commit reached an account it holds no lock on.");
+    }
+    return { ...section, account };
+  });
 
   const numbers: Array<{
     account: Account;
@@ -1778,7 +1741,6 @@ async function commitUnderLocks(
   for (const { account, ...assembled } of held) {
     const { diff: section, rows, accountNumber, answered } = assembled;
     const posted = {
-      baselineSetId: raw[sectionKey("baselineSetId", section.accountId)],
       confirmRemovals: raw[sectionKey("confirmRemovals", section.accountId)],
       confirmFiledBehind: raw[sectionKey("confirmFiledBehind", section.accountId)],
     };
@@ -1788,7 +1750,7 @@ async function commitUnderLocks(
       const chosen = await chosenAccountNumber(assembled, account, diff, db);
       if (chosen !== null) numbers.push({ account, ...chosen });
     } else {
-      if (baselineMoved(section, posted.baselineSetId)) {
+      if (verdict.voided.has(section.accountId)) {
         throw new RefusedUpload(`${section.accountName}: ${baselineSentence(section)}`, diff);
       }
       if (answered) {
@@ -1814,7 +1776,13 @@ async function commitUnderLocks(
         });
       }
     }
-    const named = { section, rows, accountName: section.accountName, named: several };
+    const named = {
+      section,
+      rows,
+      accountName: section.accountName,
+      named: several,
+      moved: verdict.voided.has(section.accountId),
+    };
     confirmations.push(...reasonsToRefuse(named, posted, diff));
   }
   if (confirmations.length > 0) throw new RefusedUpload(confirmations.join(" "), diff);
@@ -1828,7 +1796,7 @@ async function commitUnderLocks(
 
   const recorded: CommittedUpload[] = [];
   for (const { diff: section, rows, asOf: accountAsOf } of held) {
-    // Non-null: a null date left the revision null, which refuseStaleReview refused.
+    // Non-null: a null date left the revision null, which verifyBinding refused.
     if (accountAsOf === null) throw new Error("A commit reached a dateless account.");
     recorded.push({
       setId: await insertStatement(section.accountId, accountAsOf, draft, rows, db),
@@ -1997,12 +1965,6 @@ async function recordAccountNumber(
   }
 }
 
-// Whether the confirmation was posted against the baseline the diff just classified against
-// (#181). Matching revisions reach here, where stale baseline evidence voids both ticks.
-function baselineMoved(section: DiffSection, posted: string | undefined): boolean {
-  return (posted ?? "") !== (section.baselineSetId ?? "");
-}
-
 function baselineSentence(section: DiffSection): string {
   const measuredAgainst =
     section.baselineAsOf !== null
@@ -2024,12 +1986,18 @@ function reasonsToRefuse(
     rows,
     accountName,
     named = false,
-  }: { section: DiffSection; rows: ReadonlyArray<FileRow>; accountName: string; named?: boolean },
-  posted: Partial<Record<Confirmation, string>>,
+    moved,
+  }: {
+    section: DiffSection;
+    rows: ReadonlyArray<FileRow>;
+    accountName: string;
+    named?: boolean;
+    moved: boolean;
+  },
+  posted: Partial<Record<Exclude<Confirmation, "baselineSetId">, string>>,
   refused: UploadDiff,
 ): string[] {
   const say = (sentence: string) => (named ? `${accountName}: ${sentence}` : sentence);
-  const moved = baselineMoved(section, posted.baselineSetId);
 
   // All three multiplications the view performs; unchecked, the view raises on every request after.
   for (const row of rows) {
