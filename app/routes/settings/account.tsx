@@ -65,6 +65,7 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
     ownerId: account.ownerId,
     taxTreatment: account.taxTreatment,
     externalAccountNumber: account.externalAccountNumber ?? "",
+    fromExternalAccountNumber: account.externalAccountNumber ?? "",
   };
 
   return (
@@ -105,6 +106,22 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
             errors={actionData?.errors}
             idPrefix={`account-${account.id}`}
           />
+
+          {/* What the account-number box above was drawn with, so an untouched box can't erase a
+              number an upload captured since (#312). Echoed from `values` like every visible
+              field: a refusal revalidates the loader, and reading the fresh account here would
+              re-base the baseline to the number recorded now while the box still shows the blank
+              that was posted — the next save would then read as a deliberate clear. A submission
+              that carried no copy is re-rendered carrying none, rather than a blank this page
+              invented: the domain refuses what it cannot read, and a value here would answer for
+              a browser that said nothing. */}
+          {values.fromExternalAccountNumber === undefined ? null : (
+            <input
+              type="hidden"
+              name="fromExternalAccountNumber"
+              value={values.fromExternalAccountNumber}
+            />
+          )}
 
           <button type="submit" className="button">
             Save changes

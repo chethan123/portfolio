@@ -186,6 +186,24 @@ describe("refusing bad input", () => {
   );
 
   it(
+    "takes a line break out of an account number only a forged post could carry",
+    withDatabase(async ({ db }) => {
+      const alice = await createPerson({ name: "Alice" }, db);
+
+      // A single-line box strips newlines on the way out, so no browser sends this. The column is
+      // canonicalised anyway because settings has to post the number back unchanged and the
+      // upload's mismatch check compares the file's cell against it (#312), and 0018 folds the
+      // rows written before it did.
+      const account = await createAccount(
+        { ...validInput(alice.id), externalAccountNumber: "Z12-\n345678" },
+        db,
+      );
+
+      expect(account.externalAccountNumber).toBe("Z12-345678");
+    }),
+  );
+
+  it(
     "reports an unknown account as not found rather than as an error",
     withDatabase(async ({ db }) => {
       await expect(getAccount("999999", db)).rejects.toBeInstanceOf(NotFoundError);
@@ -294,7 +312,16 @@ describe("one open account per account number", () => {
 
       const errors = (
         await refusalOf(() =>
-          updateAccount(roth.id, { ...validInput(alice.id), name: "Fidelity Roth" }, db),
+          updateAccount(
+            roth.id,
+            // Drawn with the number it records, as Settings draws it, so the index decides (#312).
+            {
+              ...validInput(alice.id),
+              name: "Fidelity Roth",
+              fromExternalAccountNumber: "Z12-999999",
+            },
+            db,
+          ),
         )
       ).fieldErrors;
 
@@ -345,6 +372,205 @@ describe("one open account per account number", () => {
         name: "Old Brokerage (2019)",
         externalAccountNumber: "Z12-345678",
       });
+    }),
+  );
+});
+
+describe("an account number saved against the form's own copy", () => {
+  /** A save that records a number, standing in for the commit that captures one (uploads.server.ts). */
+  const recordNumber = (ownerId: string, number: string) => ({
+    ...validInput(ownerId),
+    externalAccountNumber: number,
+    fromExternalAccountNumber: "",
+  });
+
+  it(
+    "keeps a number recorded after the form was drawn when its box comes back untouched",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ name: "Fidelity Taxable", owner: alice });
+      await updateAccount(account.id, recordNumber(alice.id, "Z-999"), db);
+
+      // The form that loaded before that, saved with its blank box untouched.
+      const saved = await updateAccount(
+        account.id,
+        {
+          ...validInput(alice.id),
+          name: "Renamed",
+          externalAccountNumber: "",
+          fromExternalAccountNumber: "",
+        },
+        db,
+      );
+
+      expect(saved.externalAccountNumber).toBe("Z-999");
+      expect(saved.name).toBe("Renamed");
+    }),
+  );
+
+  it(
+    "refuses a number typed against one that changed under the form, and writes nothing at all",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ name: "Fidelity Taxable", owner: alice });
+      await updateAccount(account.id, recordNumber(alice.id, "Z-999"), db);
+
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(
+            account.id,
+            {
+              ...validInput(alice.id),
+              name: "Renamed",
+              externalAccountNumber: "A-111",
+              fromExternalAccountNumber: "",
+            },
+            db,
+          ),
+        )
+      ).fieldErrors;
+
+      // Must land under the box: settings route renders fieldErrors as-is, no form-level key.
+      expect(errors.externalAccountNumber).toMatch(/"Z-999"/);
+      expect(errors.externalAccountNumber).toMatch(/Fidelity Taxable/);
+      expect(errors.form).toBeUndefined();
+
+      // Whole-or-nothing: the rename went with the refusal.
+      const now = await getAccount(account.id, db);
+      expect(now.externalAccountNumber).toBe("Z-999");
+      expect(now.name).toBe("Fidelity Taxable");
+    }),
+  );
+
+  it(
+    "saves a number another writer recorded first when it is the one this form asks for",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ name: "Fidelity Taxable", owner: alice });
+      await updateAccount(account.id, recordNumber(alice.id, "Z-999"), db);
+
+      // Another tab, drawn with the same number, typed this correction first.
+      await updateAccount(
+        account.id,
+        {
+          ...validInput(alice.id),
+          externalAccountNumber: "A-111",
+          fromExternalAccountNumber: "Z-999",
+        },
+        db,
+      );
+
+      const saved = await updateAccount(
+        account.id,
+        {
+          ...validInput(alice.id),
+          name: "Renamed",
+          externalAccountNumber: "A-111",
+          fromExternalAccountNumber: "Z-999",
+        },
+        db,
+      );
+
+      expect(saved.externalAccountNumber).toBe("A-111");
+      expect(saved.name).toBe("Renamed");
+    }),
+  );
+
+  it(
+    "records a number typed over the one the form was drawn with",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ owner: alice, externalAccountNumber: "Z-999" });
+
+      const saved = await updateAccount(
+        account.id,
+        {
+          ...validInput(alice.id),
+          externalAccountNumber: "Z-1000",
+          fromExternalAccountNumber: "Z-999",
+        },
+        db,
+      );
+
+      expect(saved.externalAccountNumber).toBe("Z-1000");
+    }),
+  );
+
+  it(
+    "clears a number the form was drawn with when its box is emptied",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({ owner: alice, externalAccountNumber: "Z-999" });
+
+      const saved = await updateAccount(
+        account.id,
+        {
+          ...validInput(alice.id),
+          externalAccountNumber: "",
+          fromExternalAccountNumber: "Z-999",
+        },
+        db,
+      );
+
+      expect(saved.externalAccountNumber).toBeNull();
+      expect((await getAccount(account.id, db)).externalAccountNumber).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses a blank box from a form that carries no copy of what it was drawn with",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({
+        name: "Fidelity Taxable",
+        owner: alice,
+        externalAccountNumber: "Z-999",
+      });
+
+      // A page drawn before the form carried its own copy: an emptied box and an untouched one
+      // are the same submission, so keeping the number and reporting a save would report a
+      // clear that did not happen.
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "" }, db),
+        )
+      ).fieldErrors;
+
+      expect(errors.externalAccountNumber).toBe(
+        `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
+          "to say whether its box was cleared or drawn empty. Nothing was saved. Reload the " +
+          "account, and clear the box again to remove the number.",
+      );
+      expect(errors.form).toBeUndefined();
+      expect((await getAccount(account.id, db)).externalAccountNumber).toBe("Z-999");
+    }),
+  );
+
+  it(
+    "refuses a number typed on a form that carries no copy without naming a change that did not happen",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const alice = await seedPerson({ name: "Alice" });
+      const account = await seedAccount({
+        name: "Fidelity Taxable",
+        owner: alice,
+        externalAccountNumber: "Z-999",
+      });
+
+      // Nothing moved under this page. It never said which number its box was drawn with, which
+      // reads the same as a save against a number recorded since — so the refusal says that,
+      // rather than sending the reader hunting for another writer.
+      const errors = (
+        await refusalOf(() =>
+          updateAccount(account.id, { ...validInput(alice.id), externalAccountNumber: "A-111" }, db),
+        )
+      ).fieldErrors;
+
+      expect(errors.externalAccountNumber).toBe(
+        `Fidelity Taxable's account number is recorded as "Z-999", and this page is too old ` +
+          "to say which number its box was drawn with. Nothing was saved. Reload the account " +
+          "and make the change against what is recorded now.",
+      );
+      expect((await getAccount(account.id, db)).externalAccountNumber).toBe("Z-999");
     }),
   );
 });

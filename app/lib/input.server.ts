@@ -51,11 +51,16 @@ export const requiredText = (label: string, max = 200) =>
     .max(max, { message: `${label} must be ${max} characters or fewer.` });
 
 // Blank -> null, not "": the schema's absent value, and "" vs. no-number distinguishes nothing.
+// Line breaks go the same way statement.ts's accountNumberCell takes them, and for the same
+// reason: a single-line box strips them on the way out (HTML Standard, the input element), so a
+// stored break is a value no box can post back. Only a forged submission carries one, and for the
+// account number that writes a spelling the upload's mismatch check reads as another account (#312).
 export const optionalText = (label: string, max = 200) =>
   z
     .string()
     .trim()
     .max(max, { message: `${label} must be ${max} characters or fewer.` })
+    .transform((value) => value.replace(/[\r\n]/g, ""))
     .transform((value) => (value === "" ? null : value))
     .nullish()
     .transform((value) => value ?? null);
