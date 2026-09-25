@@ -986,6 +986,23 @@ describe("summing the trailing year of distributions", () => {
     expect(perShareOf(thirteen)).toBe("1.2000");
   });
 
+  it("counts every distribution paid inside one calendar quarter", () => {
+    // Yahoo keys `events.dividends` by the bar bucket, not the ex-date: at `interval=3mo` these
+    // three arrive as one (SGOV returns 6 of its 12), which is why the fetch stays at `1d`
+    expect(
+      perShareOf([
+        dividend("2026-07-15", 0.4),
+        dividend("2026-08-15", 0.4),
+        dividend("2026-09-15", 0.4),
+      ]),
+    ).toBe("1.2000");
+  });
+
+  it("rounds the sum once at the end, not every event on the way in", () => {
+    // per-event toFixed(4) rounds each 0.00005 up to 0.0001 and reads 0.0012, double the truth
+    expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.00005)))).toBe("0.0006");
+  });
+
   it("applies no split ratio to an amount, which Yahoo has already back-adjusted", () => {
     // NVDA's pre-10:1 dividends come back as 0.004, not the 0.04 paid: already in today's share
     // terms, so unadjusted()'s arithmetic here would adjust a second time
@@ -1069,6 +1086,24 @@ describe("summing the trailing year of distributions", () => {
     });
   });
 
+  it("refuses one amount too large for the column, rather than throwing on it", () => {
+    // `toFixed` goes exponential at 1e21 and `toUnits` would raise a SyntaxError on "1e+21";
+    // every refusal here is a status the sweep records
+    expect(dividendsOf([dividend("2026-09-15", 1e21)])).toEqual({ status: "unreadable" });
+  });
+
+  it("refuses a negative amount, which would sum to a negative rate", () => {
+    // no sign check would store a negative annual_dividend against the holding
+    expect(dividendsOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", -5)])).toEqual({
+      status: "unreadable",
+    });
+  });
+
+  it("keeps a zero amount, a distribution of nothing rather than a missing one", () => {
+    // Yahoo emits 0.0; refusing it would drop the real payments beside it
+    expect(perShareOf([dividend("2026-06-15", 0.5), dividend("2026-09-15", 0)])).toBe("0.5000");
+  });
+
   it("refuses a chart quoted in a currency this instance cannot hold", () => {
     expect(
       toProviderDividends(
@@ -1081,7 +1116,7 @@ describe("summing the trailing year of distributions", () => {
 });
 
 describe("asking the worker for one symbol's distributions", () => {
-  it("asks for quarterly bars and dividend events, over a period1 widened past the window", async () => {
+  it("asks for daily bars and dividend events, over a period1 widened past the window", async () => {
     // widened by the fetch lead only: an event dated exactly `since` has to be in the payload for
     // the parser to be the thing that excludes it
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
@@ -1096,7 +1131,7 @@ describe("asking the worker for one symbol's distributions", () => {
     const result = await socketProvider().getTrailingDividend(" itot ", SINCE, NEW_YORK);
 
     expect(seen).toEqual([
-      { symbol: "ITOT", options: { period1: "2025-08-28", interval: "3mo", events: "div" } },
+      { symbol: "ITOT", options: { period1: "2025-08-28", interval: "1d", events: "div" } },
     ]);
     expect(result).toEqual({ status: "ok", perShare: "1.5000" });
   });

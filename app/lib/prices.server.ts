@@ -424,7 +424,8 @@ export type DividendCandidate = {
 };
 
 /**
- * Next batch: **currently held** feed instruments with a symbol, whose rate is unmeasured or due.
+ * Next batch: **currently held** feed instruments with a symbol, at a nonzero quantity, whose rate
+ * is unmeasured or due.
  * Driven from `holding_valued`, which already owns the latest-position-set rule and excludes closed
  * accounts (`0006:56`), so "no longer held" and "closed" fall out for free — where
  * {@link selectBackfillCandidates}'s `holding`/`position_set` join is "ever held", which would cost
@@ -450,6 +451,11 @@ export async function selectDividendCandidates(
     .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
     .where("holding_valued.price_source", "=", "feed")
     .where("holding_valued.symbol", "is not", null)
+    // `!= 0`, never `> 0`: a negative quantity is a liability, which owes a dividend as surely as
+    // an asset earns one. Zero is the waste — a turnaround is recorded as zero first
+    // (`positions.server.ts`), and the view keeps that row, so "currently held" alone would cost a
+    // request a week forever for a position that is gone.
+    .where("holding_valued.quantity", "!=", "0")
     // Two tiers: a failed call is retried tomorrow, every answer re-measured in a week. `is
     // distinct from` puts a null outcome — a rate the migration carried over — in the second.
     .where((eb) =>

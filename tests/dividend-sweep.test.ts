@@ -1,9 +1,9 @@
 // The trailing-dividend sweep (docs/specs/dividends/01): which instruments it picks, in what order,
-// and what one answer writes. Real Postgres, fake provider — the risk is the candidate query and the
-// retry clock the stamp is, both of which disappear under a mock.
+// what one answer writes, and what a dashboard then reads. Real Postgres, fake provider — the risk is
+// the candidate query and the retry clock the stamp is, both of which disappear under a mock.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-import { ProviderUnreachable } from "~/lib/price-provider.server";
+import { ProviderUnreachable, toProviderDividends } from "~/lib/price-provider.server";
 import {
   DIVIDEND_OUTCOMES,
   refreshPrices,
@@ -12,8 +12,10 @@ import {
   selectDividendCandidates,
   type DividendOutcome,
 } from "~/lib/prices.server";
+import { currentHoldings } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 import type { TestContext } from "./support/database.ts";
 import type { SeededInstrument } from "./support/fixtures.ts";
@@ -212,6 +214,33 @@ describe("which instruments a tick measures", () => {
       await seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
 
       expect(await selectDividendCandidates(db, NOW)).toEqual([]);
+    }),
+  );
+
+  it(
+    "drops a position recorded at zero, and keeps one recorded negative, which still owes a dividend",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // A turnaround is recorded as zero first (`positions.server.ts`) and the view keeps that row,
+      // so without the quantity filter a zeroed position costs a request every week forever — the
+      // same waste "ever held" was rejected for.
+      const zeroed = await seedInstrument({ symbol: "ZEROED", priceSource: "feed" });
+      await seedQuote({ instrument: zeroed, price: "100.0000" });
+      const owed = await seedInstrument({ symbol: "OWED", priceSource: "feed" });
+      await seedQuote({ instrument: owed, price: "100.0000" });
+      const account = await seedAccount();
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-25",
+        holdings: [
+          { instrument: zeroed, quantity: "0.00000000" },
+          { instrument: owed, quantity: "-2.00000000" },
+        ],
+      });
+
+      const candidates = await selectDividendCandidates(db, NOW);
+
+      expect(candidates.map((candidate) => candidate.symbol)).toEqual(["OWED"]);
     }),
   );
 
@@ -492,6 +521,58 @@ describe("what the quote column will and will not record", () => {
           trailingDividendOutcome: "measured",
         }),
       ).rejects.toThrow(/quote_trailing_dividend_outcome_valid/);
+    }),
+  );
+});
+
+describe("the rate a sweep writes, read back as a dividend", () => {
+  it(
+    "projects one share's annual dividend from the four distributions the sweep measured",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The two halves joined: nothing else runs a sweep and then reads holding_valued, so a write
+      // landing in a column the view does not read would pass every other case in this file.
+      const itot = await seedInstrument({
+        symbol: "ITOT",
+        name: "iShares Core S&P Total US Stock Market ETF",
+        priceSource: "feed",
+      });
+      await seedQuote({ instrument: itot, price: "167.7300" });
+      const account = await seedAccount();
+      await seedPositionSet({
+        account,
+        asOf: "2026-09-25",
+        holdings: [{ instrument: itot, quantity: "1.00000000" }],
+      });
+
+      // The distributions Yahoo's own events.dividends carried on 2026-09-25, through the parser
+      // the adapter uses: 0.487 + 0.327 + 0.419 + 0.453.
+      const provider = fakeProvider(() =>
+        toProviderDividends(
+          {
+            meta: { currency: "USD" },
+            events: {
+              dividends: [
+                { date: new Date("2025-12-22T13:30:00Z"), amount: 0.487 },
+                { date: new Date("2026-03-23T13:30:00Z"), amount: 0.327 },
+                { date: new Date("2026-06-22T13:30:00Z"), amount: 0.419 },
+                { date: new Date("2026-09-22T13:30:00Z"), amount: 0.453 },
+              ],
+            },
+            quotes: [{ date: new Date("2026-09-22T13:30:00Z"), close: 167.73 }],
+          },
+          SINCE,
+          NEW_YORK,
+        ),
+      );
+
+      const report = await refreshTrailingDividends(provider, NEW_YORK, NOW, db);
+
+      expect(report).toMatchObject({ attempted: 1, written: 1, refused: 0, failed: 0 });
+
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
+      if (holding === undefined) throw new Error("the seeded holding did not come back");
+
+      expect(holding).toMatchObject({ value: "167.7300", annualDividend: "1.6860" });
     }),
   );
 });

@@ -508,7 +508,7 @@ Three tiers, deliberately separate:
 
 ```
 price_observation  (instrument_id, as_of, market_date, price, fetched_at, payload)  -- append-only log
-quote              (instrument_id, price, yield, trailing_dividend, as_of, is_stale)  -- overwritten
+quote              (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten; trailing_dividend is not — the sweep's own retry clock
 price_daily        (instrument_id, date, close)                                     -- daily prices; live refresh may update existing rows
 ```
 

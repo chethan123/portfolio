@@ -137,10 +137,18 @@ const IDLE_DIVIDENDS: DividendReport = {
   batchFailed: false,
 };
 
-function done(quotes: RefreshReport | null, backfillReport = backfill()): RefreshRun {
+function dividends(overrides: Partial<DividendReport> = {}): DividendReport {
+  return { ...IDLE_DIVIDENDS, ...overrides };
+}
+
+function done(
+  quotes: RefreshReport | null,
+  backfillReport = backfill(),
+  dividendReport = IDLE_DIVIDENDS,
+): RefreshRun {
   return {
     status: "done",
-    report: { quotes, backfill: backfillReport, dividends: IDLE_DIVIDENDS },
+    report: { quotes, backfill: backfillReport, dividends: dividendReport },
   };
 }
 
@@ -614,7 +622,54 @@ describe("what a tick writes to the log", () => {
       "warn: Price backfill: 2 attempted, 1 closes written, 1 failed.",
     ]);
     expect(failedBatch.lines).toEqual([
-      "warn: Price backfill: 0 attempted, 0 closes written, 0 failed. The batch itself failed; see the line above.",
+      "warn: Price backfill: 0 attempted, 0 closes written, 0 failed. The batch itself failed; see the 'Price backfill batch failed' line.",
+    ]);
+  });
+
+  it("says nothing about a sweep with no rate due, beside a backfill that did speak", async () => {
+    const { poller, lines } = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill({ attempted: 1 }), dividends()),
+    });
+
+    await poller.tick();
+
+    // The sweep runs every tick, so its silence is what keeps an idle loop quiet.
+    expect(lines).toEqual(["info: Price backfill: 1 attempted, 0 closes written, 0 failed."]);
+  });
+
+  it("counts what the sweep measured when a rate was due", async () => {
+    const { poller, lines } = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill(), dividends({ attempted: 2, written: 1, refused: 1 })),
+    });
+
+    await poller.tick();
+
+    // a refusal is an answer, not a failure — the outcome column names the reason
+    expect(lines).toEqual([
+      "info: Price dividends: 2 attempted, 1 rates written, 1 refused, 0 failed.",
+    ]);
+  });
+
+  it("warns when a dividend call failed or the batch itself failed", async () => {
+    const failedCall = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill(), dividends({ attempted: 2, written: 1, failed: 1 })),
+    });
+    await failedCall.poller.tick();
+
+    const failedBatch = pollerWith({
+      clock: () => WEEKEND,
+      answer: () => done(null, backfill(), dividends({ batchFailed: true })),
+    });
+    await failedBatch.poller.tick();
+
+    expect(failedCall.lines).toEqual([
+      "warn: Price dividends: 2 attempted, 1 rates written, 0 refused, 1 failed.",
+    ]);
+    expect(failedBatch.lines).toEqual([
+      "warn: Price dividends: 0 attempted, 0 rates written, 0 refused, 0 failed. The batch itself failed; see the 'Price dividends batch failed' line.",
     ]);
   });
 });

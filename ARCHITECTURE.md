@@ -101,11 +101,12 @@ no longer reaches Yahoo at all. `app` crosses a unix socket to `worker` for ever
 Yahoo only through `egress-proxy`, which admits a `CONNECT` to five hosts and checks the TLS server
 name inside the tunnel against the host it was opened to (§3.1, §7.5,
 [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). Yahoo
-is reached three ways, over three endpoints: the poller's batched *quote* fetch and the per-symbol
-*chart* fetch the backfill batch and the dividend sweep each make on the same refresh (ADR-0011),
-both off the request path entirely, and `socketProbe`, a currency check over every symbol one
-submission creates, run *inside* the form submission that creates them (§6.1). The last is the only
-place a third party can make a person wait. All three go through the one interface in §7.5,
+is reached four ways, over three endpoints: the poller's batched *quote* fetch, the backfill's
+per-symbol *chart* fetch and the dividend sweep's own per-symbol *chart* fetch, the last two made on
+the same refresh (ADR-0011) but against separate endpoints, all three off the request path entirely,
+and `socketProbe`, a currency check over every symbol one submission creates, run *inside* the form
+submission that creates them (§6.1). The last is the only place a third party can make a person wait.
+All four go through the one interface in §7.5,
 precisely because the endpoint is unofficial and expected to break. **Google** is the `gate`
 service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token in one
@@ -386,7 +387,7 @@ table with a single grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all. Its whole import set (`server/price-worker.ts:7-17`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
-| Importing `yahoo-finance2` | `server/yahoo-client.ts:47` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it, quotes and daily history, and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:48` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it, quotes and daily history, and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts`, the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all, since it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export, `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it, the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 | Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes, which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. Since 7.18.3 the framework's own check compares whole origins, so behind a TLS-terminating proxy — where the app only ever sees `http` — it refused the instance's own pages. `server/server-build.ts` hands it this deployment's **host** as `allowedActionOrigins`, which is the same answer this middleware already gives, not a third one. |
@@ -408,13 +409,13 @@ table with a single grep. They come in three tiers.
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:132` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:133` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 | Whose money a screen is reading | The readers' own signatures, where the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons, both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip, since a new screen can pass `ALL_OWNERS` and draw no control. It can only make the filter **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:765` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:1021` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -971,7 +972,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state. `format.ts:139` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate, so never use it for a figure that is shown, compared or
-  summed. `price-provider.server.ts:99` floats a yield or a per-share dividend rate only to decide
+  summed. `price-provider.server.ts:121` (`inRange`) floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -1720,7 +1721,7 @@ half-landed set.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:147`), and a `bank` account can be holding securities with no kind
-change behind it, because `createDraft` (`uploads.server.ts:198`) reads only whether the account is
+change behind it, because `createDraft` (`uploads.server.ts:199`) reads only whether the account is
 closed, so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1786,7 +1787,7 @@ requests on one process whatever the deployment, which is how #283 was reproduce
 | An alias confirm posted after another tab changed it | The write compares-and-sets on the target the preview was drawn against; zero rows written *is* the refusal | `instrument-aliases.server.ts` |
 | Two writers appending to one account, a correction, a balance, an upload commit or a closure, in any pair | `withAccountLock`: `select … for no key update` on the **bare** account row, then the account read joined to its owner in a second statement, one transaction from the read a writer decides on to its insert, so the later writer copies forward what the earlier one committed rather than the set both started from (#283). Two statements, because a lock taken through the join re-checks that join on being granted against the person tuple the first scan pinned, so an owner change during the wait dropped the row and 404'd a live account (#332); after the lock, the read is a fresh statement and sees the committed owner. `no key`, not `for update`: the stronger mode also blocks the `for key share` an insert referencing the account takes from another transaction, so `createDraft` and any out-of-app insert would queue behind a commit in flight | `accounts.server.ts` (`withAccountLock`), taken by `revisePosition`, `setBalance`, `closeAccount` and `recordUpload` — directly for one account, or nested per routed account, ascending `compareIds` order, through `withAccountLocks` for several |
 | A writer whose transaction began before the one it waited for | `position_set.created_at` defaults to `statement_timestamp()`, the insert, rather than `now()`, the `BEGIN`, so the waiter's set, the one carrying both edits, sorts after the one it copied instead of losing the same-date tie-break to it | `migrations/0014_position_set_created_at.sql` |
-| A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:172`, `:234-262` |
+| A form posted against a position that moved | Read under the account lock, so "moved" means "committed before this writer's turn": `currentPosition` returns null and the form is refused. The write's own `source` CTE repeats the check, and zero rows written is still a refusal | `positions.server.ts:173`, `:234-262` |
 | A balance typed against a statement that changed under it | The same shape: `currentStatement` under the account lock, and the write's `guard` CTE repeating it | `balances.server.ts:104`, `:132-149` |
 | A household's first statement committing while the Overview's change chip is resolving its baseline | `inOneSnapshot`: one `repeatable read`, read-only transaction over the whole resolution, so the baseline's four steps and the totals it is compared against read one committed state. Otherwise the discovery finds nothing recorded while the aggregate finds the new portfolio, and the chip reports the entire net worth as a gain from zero — [#347](https://github.com/chethan123/portfolio/issues/347) arrived at from the other side | `valuation.server.ts` (`netWorthChange`) |
 | A statement landing while a kind change is in flight | **Unguarded.** `updateAccount` can validate the old position set, wait behind the position writer at its later account `UPDATE`, then commit a kind incompatible with the new holdings | `accounts.server.ts` (`updateAccount`); [#311](https://github.com/chethan123/portfolio/issues/311) |
@@ -1844,7 +1845,7 @@ one household's instance and the operator reads `docker compose logs`.
 | Signal | Where |
 |---|---|
 | `GET /healthz` (`app`) | Database reachability **and** migration currency drive the 200/503 status, `Cache-Control: no-store`, never authenticated. Now also crosses the socket: a bounded, cached `pricing.worker` key (`available`/`unavailable`, spec price-health/02) proves this process's own read-only mount reaches the worker's listener, but never gates the status, and stays silent on `egress-proxy`, which nothing this process asks about crosses. `pricing.scheduler` (`not_started`/`running`/`on_schedule`/`overdue`) and `pricing.quotes` (`not_attempted`/`market_closed`/`ok`/`partial`/`failed`/`unknown`) read the price poller's own live state passively (spec price-health/03), with no Yahoo call and no database heartbeat, and `pricing.ok` is a boolean conjunction over all three; none of the three ever gates the status either |
-| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound: `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
+| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound: `Price worker listening on <path>` (`server/price-worker.ts:419`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes, observed, providerFailed }` |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }`, stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
 | Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale. The one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues, stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:358`), and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
@@ -1886,8 +1887,8 @@ hand right after any change to the host's engine or container runtime.
                     ┌───────────┴────────────┐
                     ▼                        ▼
         socketProvider()               the tests' fake
-        dials the worker's socket      implements both and nothing else;
-        (provider-socket.server.ts:213) no test reaches the network
+        dials the worker's socket      implements all three and nothing else;
+        (provider-socket.server.ts:187) no test reaches the network
 ```
 
 One seam, two implementations either side of a process boundary, not the two boxes above, which are
@@ -2070,7 +2071,7 @@ constraint arriving by one path instead of two. `yahoo-client.ts`, `price-worker
 `egress-proxy.ts` are reached only the second way, by the two alternate entrypoints above; nothing
 under `app/` imports them, so `npm run build`'s server bundle never carries them. `symbol-pattern.ts`
 is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:13`), and
-`app/lib/provider-socket.server.ts:11` imports the same file, so Vite bundles it into the app too,
+`app/lib/provider-socket.server.ts:9` imports the same file, so Vite bundles it into the app too,
 with the two sides of the socket sharing one guard rather than each keeping its own copy (Appendix A).
 
 ### 8.2 CI
@@ -2391,7 +2392,7 @@ open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-r
 | `validate-config.ts` | The startup gate. It fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11`, while `instrument-resolution.server.ts:265`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now, the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:9`, while `instrument-resolution.server.ts:265`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable, since the worker's check is the one that binds and the app's is a courtesy |
 | `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host. The `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/`: domain (`.server`) and pure
@@ -2405,8 +2406,8 @@ open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-r
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping, scoped by institution or, null, by the multi-account draft alone (ADR-0015) |
 | `statement-routing.server.ts` | The multi-account upload's one matcher (spec 0023, ADR-0015): `routeStatement`, pure, takes a clean multi-account parse, the open and closed accounts, and the draft's answers, and groups rows by the open account whose recorded number matches, a recorded number always outranking an answer. Groups come out in ascending account id, the commit's lock order. Every step after columns reads its groups; nothing downstream re-matches |
-| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill: its candidate query, its batch, its ledger, and the composition every refresh runs |
-| `price-provider.server.ts` | The provider interface, both methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
+| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, the backfill and the dividend sweep: each one's candidate query, its batch, its ledger where it has one, and the composition every refresh runs |
+| `price-provider.server.ts` | The provider interface, all three methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, the split un-adjust a history goes through, and the anniversary-rule sum a trailing dividend goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
 | `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above, never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below. This module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
 | `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02), extracted rather than hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
 | `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener, never Yahoo and never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |

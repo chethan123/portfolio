@@ -267,7 +267,7 @@ seam exactly:
 |---|---|---|
 | `POST /quotes` | `{ symbols: string[] }` — one to a hundred, each matching the pattern | `200`, the array the library's `quote()` returned |
 | `POST /history` | `{ symbol: string, from: "YYYY-MM-DD" }` | `200`, the object the library's `chart()` returned |
-| `POST /dividends` | `{ symbol: string, from: "YYYY-MM-DD" }` | `200`, the object the library's `chart()` returned, called with `interval "3mo", events "div"` |
+| `POST /dividends` | `{ symbol: string, from: "YYYY-MM-DD" }` | `200`, the object the library's `chart()` returned, called with `interval "1d", events "div"` |
 | `GET /healthz` | — | `200 { ok: true }` — no Yahoo call, no database: "the worker accepts requests" |
 
 Every other answer is a refusal carrying `{ error: <text> }`: **`400`** for a body that does not
@@ -461,8 +461,8 @@ ticket 06: the binding check of §2.1 — and `from` against `^\d{4}-\d{2}-\d{2}
 lives under `app/`. Per-endpoint rate caps — **quotes ten calls a minute, history twenty, dividends
 twenty** — are answered `429` with one log line, because the worker is the honest component when
 the app is not and a runaway app must not earn the household a Yahoo ban; the cap's assumption,
-stated: a tick costs ⌈feed instruments / 100⌉ quotes calls and at most five histories, so 300 feed
-instruments at the one-minute cadence floor (`REFRESH_CADENCE_BOUNDS`,
+stated: a tick costs ⌈feed instruments / 100⌉ quotes calls, at most five histories and at most five
+`/dividends` calls, so 300 feed instruments at the one-minute cadence floor (`REFRESH_CADENCE_BOUNDS`,
 `app/lib/settings.server.ts:138`) plus a press approach the quotes cap — honest households are far
 below. Every library call runs under the client's fixed 30 s signal, its expiry answered `504`; any
 other throw is `502` with the message and

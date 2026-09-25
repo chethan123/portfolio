@@ -753,6 +753,12 @@ describe("carrying the provider's annual rate onto the trailing one", () => {
         "select trailing_dividend_per_share from quote q join instrument i on i.id = q.instrument_id where i.symbol = 'SCHD'",
       );
       expect(rows).toEqual([{ trailing_dividend_per_share: "3.6000" }]);
+
+      // The carry-over leaves both columns at 3.6000, so the figure above holds even if the view
+      // still read the old one. Moving the new column alone is what says which operand it reads.
+      await client.query("update quote set trailing_dividend_per_share = '1.0000'");
+
+      expect(await dividendOf(client, "SCHD")).toEqual([{ annual_dividend: "100.0000" }]);
     });
   });
 

@@ -57,10 +57,16 @@ const chartBodySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
-/** The whole difference between the two chart routes. `3mo` still carries every event, so a dividend payload is a handful of bars. */
+/**
+ * The whole difference between the two chart routes. `dividends` must stay fine-grained: Yahoo keys
+ * `events.dividends` by the bar bucket, not the ex-date, so a coarser interval collapses every
+ * payment sharing a bucket into one — `interval=3mo` returns 6 of SGOV's 12 monthly distributions
+ * where `1d` returns all 12. A quarterly payer has one per bucket and loses nothing, which is what
+ * makes the coarse interval look safe. Thirteen months of daily bars is ~40 KB, well inside the cap.
+ */
 const CHART_REQUESTS = {
   history: { interval: "1d", events: "split" },
-  dividends: { interval: "3mo", events: "div" },
+  dividends: { interval: "1d", events: "div" },
 } as const;
 
 type ChartEndpoint = keyof typeof CHART_REQUESTS;

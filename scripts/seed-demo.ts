@@ -866,8 +866,11 @@ async function seed(
   const quoteDividends: (string | null)[] = [];
   const quoteAsOf: Date[] = [];
   const quoteStale: boolean[] = [];
-  // Every seeded row is measured fresh, never carried — holding_valued reads only this column now.
-  const quoteTrailingOutcome: string[] = [];
+  // A seeded row with a yield is measured fresh, never carried — holding_valued reads only this
+  // column now. One without a yield is left unmeasured instead: `ok` beside a null rate is a state
+  // the sweep never writes, since an `ok` always carries a rendered rate, "0.0000" at the least.
+  const quoteTrailingAsOf: (Date | null)[] = [];
+  const quoteTrailingOutcome: (string | null)[] = [];
   const nowMs = Date.now();
 
   for (const instrument of INSTRUMENTS) {
@@ -881,16 +884,21 @@ async function seed(
         : at(series, series.length - 1);
     const close = answered.close;
     const percent = instrument.yieldPct;
+    // Derived from the price rather than typed beside it, so the two agree.
+    const rate = percent === undefined ? null : ((close * Number(percent)) / 100).toFixed(4);
+    const asOf = new Date(
+      nowMs - (instrument.stale === true ? STALE_QUOTE_DAYS * DAY_MS : 12 * 60 * 1000),
+    );
     quoteIds.push(id);
     quotePrices.push(close.toFixed(4));
     quoteYields.push(percent ?? null);
-    // Derived from the price rather than typed beside it, so the two agree.
-    quoteDividends.push(percent === undefined ? null : ((close * Number(percent)) / 100).toFixed(4));
-    quoteAsOf.push(
-      new Date(nowMs - (instrument.stale === true ? STALE_QUOTE_DAYS * DAY_MS : 12 * 60 * 1000)),
-    );
+    quoteDividends.push(rate);
+    quoteAsOf.push(asOf);
     quoteStale.push(instrument.stale === true);
-    quoteTrailingOutcome.push("ok");
+    // A null stamp means "never measured by us", which is what puts this row at the head of the
+    // sweep's queue — rather than an `ok` claiming a rate that is not there.
+    quoteTrailingAsOf.push(rate === null ? null : asOf);
+    quoteTrailingOutcome.push(rate === null ? null : "ok");
   }
   await client.query(
     `insert into quote (instrument_id, price, yield_pct, annual_dividend_per_share, as_of, is_stale,
@@ -907,7 +915,7 @@ async function seed(
       // holding_valued's annual_dividend now reads trailing_dividend_per_share exclusively; the
       // same per-share figure and as_of stamp keep the demo's dividends non-zero.
       quoteDividends,
-      quoteAsOf,
+      quoteTrailingAsOf,
       quoteTrailingOutcome,
     ],
   );

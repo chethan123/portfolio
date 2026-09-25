@@ -362,6 +362,9 @@ contracts, stated as `COMMENT ON TABLE` in
 | `price` | `numeric(20,4)` | no | last known price. A failed fetch keeps it and sets `is_stale`, never zero and never null into a sum |
 | `yield_pct` | `numeric(10,6)` | yes | provider-reported yield; stored but deliberately not exposed by the valuation view (its price snapshot disagrees with ours) |
 | `annual_dividend_per_share` | `numeric(20,4)` | yes | the provider's own forward-looking rate; no longer read by `holding_valued`, which reads `trailing_dividend_per_share` instead |
+| `trailing_dividend_per_share` | `numeric(20,4)` | yes | the trailing twelve months' distributions, summed; what `holding_valued` reads |
+| `trailing_dividend_as_of` | `timestamptz` | yes | when the dividend sweep last measured this instrument; null means never measured |
+| `trailing_dividend_outcome` | `text` | yes | `ok`, `no_data`, `non_usd`, `unreadable` or `provider_failed`; null beside a non-null rate means the rate was carried from `annual_dividend_per_share` at migration, not yet measured |
 | `as_of` | `timestamptz` | no | the provider's instant, not the fetch time |
 | `is_stale` | `boolean` | no | default false; a stale price is *used*, not discarded |
 

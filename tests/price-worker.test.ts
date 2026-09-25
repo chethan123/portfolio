@@ -247,8 +247,9 @@ describe("the four endpoints", () => {
     expect(res.json).toEqual({ meta: { currency: "USD" }, quotes: [] });
   });
 
-  it("charts quarterly bars with dividend events for /dividends, daily bars with splits for /history", async () => {
-    // the two literals are the whole difference between the routes; one handler serves both
+  it("charts dividend events for /dividends and splits for /history, both over daily bars", async () => {
+    // the event block is the whole difference between the routes; one handler serves both. Daily
+    // bars either way: a coarser bucket hands back one dividend per bucket (`CHART_REQUESTS`)
     const chart = vi.fn(async () => ({ meta: { currency: "USD" }, events: {}, quotes: [] }));
     await start(fakeYahoo({ chart }));
 
@@ -264,7 +265,7 @@ describe("the four endpoints", () => {
     expect([history.status, dividends.status]).toEqual([200, 200]);
     expect(chart.mock.calls).toEqual([
       ["ITOT", { period1: "2025-08-28", interval: "1d", events: "split" }],
-      ["ITOT", { period1: "2025-08-28", interval: "3mo", events: "div" }],
+      ["ITOT", { period1: "2025-08-28", interval: "1d", events: "div" }],
     ]);
     expect(dividends.json).toEqual({ meta: { currency: "USD" }, events: {}, quotes: [] });
   });

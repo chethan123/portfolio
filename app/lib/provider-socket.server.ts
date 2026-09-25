@@ -41,7 +41,7 @@ const BUDGET_MS: Record<AskKind, number> = {
 /** Shorter than quotes: a cold worker pays a three-fetch crumb handshake, and the lost `non-usd` verdict returns next refresh. */
 const PROBE_BUDGET_MS = 10_000;
 
-/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB; `3mo` bars over a year are a handful. */
+/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB; thirteen months of daily dividend bars ≈ 40 KB. */
 const BODY_CAP_BYTES: Record<AskKind, number> = {
   quotes: 512 * 1024,
   history: 2 * 1024 * 1024,
@@ -51,7 +51,7 @@ const BODY_CAP_BYTES: Record<AskKind, number> = {
 /** Spec §3.5's own cap on one `/quotes` body. */
 const BATCH_SIZE = 100;
 
-/** Widens `period1` only, never the arithmetic: an event dated exactly `since` has to be in the payload for {@link toProviderDividends} to exclude it. Kept in step with the sweep's own copy. */
+/** Widens `period1` only, never the arithmetic: an event dated exactly `since` has to be in the payload for {@link toProviderDividends} to exclude it. */
 const DIVIDEND_FETCH_LEAD_DAYS = 7;
 
 /** Mirrors the worker's own `ERROR_TEXT_LIMIT` (`server/price-worker.ts`). */

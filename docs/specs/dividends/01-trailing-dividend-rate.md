@@ -58,8 +58,13 @@ year** — rather than implying the sum is itself the forward figure. No new ter
   2024-06-10 come back as `0.004`, not the `0.04` paid. Amounts are already in today's share terms,
   which is the basis `quantity × rate` needs. **Do not apply the `unadjusted()` split arithmetic to
   dividends** — that would be a second, wrong adjustment. A test must pin this.
-- `interval: "3mo"` is a valid interval (`chart.schema.js:541`) and still carries every event: over
-  13 months ITOT returns 6 bars and all 5 dividends. Use it; the payload stays tiny.
+- **`interval: "3mo"` looks safe and is a trap: Yahoo keys `events.dividends` by bar bucket, not by
+  ex-date, so a coarser interval collapses every payment sharing a bucket into one.** A monthly
+  payer loses distributions: SGOV, paying monthly, returns 6 events at `3mo` against 12 at `1d`.
+  A quarterly payer has one payment per bucket and loses nothing — ITOT returns 4 events either
+  way — which is exactly what made `3mo` look correct during design. Use `interval: "1d"`; thirteen
+  months of daily bars is well inside the body cap, so the fine grain costs nothing worth trading
+  away for a saving that was illusory anyway.
 - `events` is a passthrough string option (`chart.schema.js:547-549`).
 - `chart()` **throws** before fetching on an unparseable `period1` or `period1 === period2`
   (`chart.js:183-196`). Our `from` is always `YYYY-MM-DD`, so this cannot fire; noted so nobody
@@ -180,15 +185,17 @@ about 20 hours for 400 instruments at the seeded 15-minute cadence, and far long
 maximum. During the drain every holding reads its carried value, which is what it read before the
 migration, so nothing regresses; it simply takes that long for every figure to become a measured one.
 
-**`server/yahoo-client.ts`** — widen `ChartRequest` to
-`{ period1: string; interval: "1d" | "3mo"; events: "split" | "div" }`. Nothing else.
+**`server/yahoo-client.ts`** — `ChartRequest` stays
+`{ period1: string; interval: "1d"; events: "split" | "div" }`: both chart routes read at `"1d"`
+now, so `interval` gains no second member. Only `events` widens.
 
 **`server/price-worker.ts`** — a fourth route, `POST /dividends`. **Do not copy `handleHistory`.**
 It and the new handler differ only by two literals, which is the near-copy `AGENTS.md` names.
 Generalise instead:
 
 - one `chartBodySchema` (today's `historyBodySchema`, `:55-58`, unchanged shape)
-- a table `const CHART_REQUESTS = { history: { interval: "1d", events: "split" }, dividends: { interval: "3mo", events: "div" } } as const`
+- a table `const CHART_REQUESTS = { history: { interval: "1d", events: "split" }, dividends: { interval: "1d", events: "div" } } as const`
+  — both fine-grained; see the `3mo` trap above
 - one `handleChart(req, res, yahoo, admit, endpoint)` replacing `handleHistory`
 - `RATE_CAPS.dividends = 20`, a third limiter, threaded through `handle` as the other two are
 
@@ -225,10 +232,11 @@ case to different literals (`no-history` and `no-data`). Each `get*` parses and 
 
 **`app/lib/prices.server.ts`**
 
-- `DIVIDEND_BATCH_SIZE = 5`, `DIVIDEND_STALE_DAYS = 7`, `DIVIDEND_RETRY_DAYS = 1`,
-  `DIVIDEND_FETCH_LEAD_DAYS = 7` (`period1` = `since` less the lead). All numbers of days, not
-  interval strings — the bounds are computed in JS and bound as `Date`s. The migration's
-  `interval '7 days'` is the same 7 and is kept in step by hand.
+- `DIVIDEND_BATCH_SIZE = 5`, `DIVIDEND_STALE_DAYS = 7`, `DIVIDEND_RETRY_DAYS = 1`. All numbers of
+  days, not interval strings — the bounds are computed in JS and bound as `Date`s.
+  `DIVIDEND_FETCH_LEAD_DAYS = 7` (`period1` = `since` less the lead) lives in
+  `provider-socket.server.ts`, not here — see above; it is a socket-side widening, not a bound this
+  module computes. The migration's `interval '7 days'` is the same 7 and is kept in step by hand.
 - `DIVIDEND_OUTCOMES` as a `const` object mirroring `BACKFILL_OUTCOMES` (`:91-98`), kept in step by
   hand with the migration's check constraint
 - `selectDividendCandidates(db, now)` — **currently held** feed instruments with a symbol, inner
@@ -455,7 +463,7 @@ historical and is not edited.
 - [ ] The manual `/refresh` route runs no sweep; a scheduled tick does
 
 **The worker and the socket**
-- [ ] `/dividends` calls `chart` with `interval "3mo"` and `events "div"`, and `/history` still calls it with `"1d"`/`"split"`
+- [ ] `/dividends` calls `chart` with `interval "1d"` and `events "div"`, and `/history` still calls it with `"1d"`/`"split"`
 - [ ] The 21st `/dividends` call inside 60 seconds is refused `429`, and its budget is independent of `/history`'s
 - [ ] A "No data found" throw from the provider becomes `no-data`, not a thrown refresh
 - [ ] A non-USD chart becomes the `non_usd` outcome

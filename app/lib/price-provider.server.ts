@@ -105,7 +105,7 @@ function decimal(value: unknown, scale: number): string | null {
 /** `quote.yield_pct` is `numeric(10,6)` — 9999.999999%. */
 const YIELD_CEILING = 10000;
 
-/** `quote.annual_dividend_per_share` is `numeric(20,4)`. A figure this big is not a rate. */
+/** `quote.annual_dividend_per_share` and `quote.trailing_dividend_per_share` are `numeric(20,4)`. A figure this big is not a rate. */
 const RATE_CEILING = 10 ** 16;
 
 /** `price_daily.close` is `numeric(20,4)`. Bounds the product too; `toFixed` goes exponential at 1e21. */
@@ -113,6 +113,9 @@ const CLOSE_CEILING = 10 ** 16;
 
 /** `quote.price` is `numeric(20,4)`. The `quantity × price` product is guarded in `positions.server.ts`. */
 const PRICE_CEILING = 10 ** 16;
+
+/** Finer than `MONEY_SCALE` so {@link toProviderDividends} rounds once: twelve events of 0.00005 sum to 0.0006, where rounding each first reads 0.0012. */
+const EVENT_SCALE = 8;
 
 /** Overflow aborts the refresh transaction — one bad symbol would cost the household its refresh. */
 function inRange(value: string | null, ceiling: number): string | null {
@@ -366,18 +369,27 @@ export function toProviderDividends(
   if (events === undefined) return { status: "unreadable" };
 
   // All or nothing, mirroring the split rule: a half-read block sums to a plausible wrong number.
-  const paid: Array<{ date: IsoDate; amount: string }> = [];
+  const paid: Array<{ date: IsoDate; units: bigint }> = [];
   for (const dividend of events.dividends ?? []) {
     // `date` crosses the worker socket as an ISO string, whatever the library coerced it to.
     const instant = parseInstant(dividend.date);
     // No split arithmetic, deliberately: Yahoo back-adjusts amounts through later splits — NVDA's
     // pre-10:1 dividends return as 0.004, not the 0.04 paid — so they are already in today's share
     // terms, the basis `quantity × rate` needs. `unadjusted()` here would adjust a second time.
-    const amount = decimal(dividend.amount, MONEY_SCALE);
+    //
+    // Bounded per event and before `toUnits`, as `toProviderHistory` bounds a close: `toFixed`
+    // returns "1e+21" past 1e21 and `BigInt` throws on that, out of a parser that never throws.
+    const amount = inRange(decimal(dividend.amount, EVENT_SCALE), RATE_CEILING);
 
     if (instant === null || amount === null) return { status: "unreadable" };
 
-    paid.push({ date: marketDateOf(instant, marketTimeZone), amount });
+    // A negative distribution is corruption, not a shape Yahoo uses: summed it stores a negative
+    // rate and a negative `annual_dividend`. Zero stays — a payment of nothing is data, and
+    // refusing it would drop the eleven real ones beside it.
+    const units = toUnits(amount, EVENT_SCALE);
+    if (units < 0n) return { status: "unreadable" };
+
+    paid.push({ date: marketDateOf(instant, marketTimeZone), units });
   }
 
   // Market dates, as `toProviderHistory` dates its bars: the edge must not move with time of day.
@@ -389,15 +401,16 @@ export function toProviderDividends(
   const newest = kept.reduce((latest, event) => (event.date > latest ? event.date : latest), since);
   const cutoff = addDays(newest, -(TRAILING_WINDOW_DAYS - ANNIVERSARY_TOLERANCE_DAYS));
 
-  // `money.ts` units, one rounding at the end: per-event rounding would round twelve times for a
-  // monthly payer (ARCHITECTURE.md §5.6).
+  // `money.ts` units at `EVENT_SCALE`, one rounding at the end: rounding each event to
+  // `MONEY_SCALE` first would round twelve times for a monthly payer (ARCHITECTURE.md §5.6).
   let units = 0n;
   for (const event of kept) {
     if (event.date <= cutoff) continue;
-    units += toUnits(event.amount, MONEY_SCALE);
+    units += event.units;
   }
 
-  const perShare = inRange(render(units, MONEY_SCALE), RATE_CEILING);
+  const rate = divide(units, 10n ** BigInt(EVENT_SCALE - MONEY_SCALE), 0);
+  const perShare = inRange(render(rate, MONEY_SCALE), RATE_CEILING);
   if (perShare === null) return { status: "unreadable" };
 
   return { status: "ok", perShare };

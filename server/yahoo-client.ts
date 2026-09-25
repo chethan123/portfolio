@@ -13,7 +13,8 @@
 export type ChartRequest = {
   /** Plain string, not `IsoDate` — that type lives under `app/`. */
   period1: string;
-  interval: "1d" | "3mo";
+  /** Daily only: coarser buckets collapse the dividend events sharing one (`CHART_REQUESTS`, `server/price-worker.ts`). */
+  interval: "1d";
   /** One block per call, never the library default `"div|split|earn"`. */
   events: "split" | "div";
 };

@@ -180,7 +180,7 @@ export function createPricePoller(dependencies: {
 
     const summary =
       `Price backfill: ${report.attempted} attempted, ${report.written} closes written, ` +
-      `${failed} failed.${report.batchFailed ? " The batch itself failed; see the line above." : ""}`;
+      `${failed} failed.${report.batchFailed ? " The batch itself failed; see the 'Price backfill batch failed' line." : ""}`;
 
     if (failed > 0 || report.batchFailed) log.warn(summary);
     else log.info(summary);
@@ -193,7 +193,7 @@ export function createPricePoller(dependencies: {
     const summary =
       `Price dividends: ${report.attempted} attempted, ${report.written} rates written, ` +
       `${report.refused} refused, ${report.failed} failed.` +
-      `${report.batchFailed ? " The batch itself failed; see the line above." : ""}`;
+      `${report.batchFailed ? " The batch itself failed; see the 'Price dividends batch failed' line." : ""}`;
 
     if (report.failed > 0 || report.batchFailed) log.warn(summary);
     else log.info(summary);

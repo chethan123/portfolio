@@ -1205,6 +1205,11 @@ Only the last is a fault:
    window too, and may write its own `Price dividends` line.
 2. **Another refresh was already running or held the lock.** A tick that lands while one is still
    going, or while another process holds the advisory lock, is dropped silently and never queued.
+   The same lock is what a pressed **Refresh now** answers `busy` against, and the dividend sweep
+   makes that more likely: up to five candidates at a 35-second budget each hold the lock up to
+   ~175 seconds longer than a quote-only tick. Expect `busy` presses to be more common than usual
+   during the initial drain right after this deploys, while most instruments still carry a null
+   `trailing_dividend_as_of` and so are swept on every tick.
 3. **The poller failed to start.** That one *does* log, once, at error level.
 
 A *successful* **Refresh now** press writes no `Price refresh` line, because its outcome is reported
