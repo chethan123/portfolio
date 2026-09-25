@@ -468,6 +468,9 @@ describe("what the ledger will and will not record", () => {
 
 const NEW_YORK = "America/New_York";
 
+// the instant a batch runs at unless the case states its own
+const NOW = new Date("2026-06-05T21:00:00Z");
+
 type Asked = { symbol: string; range: HistoryRange };
 
 // answers verbatim, unfiltered — a tidying fake can't test a bad one (cf. refresh-quotes.test.ts)
@@ -564,7 +567,7 @@ describe("what a batch writes to the spine", () => {
         ]),
       );
 
-      const report = await backfillCloses(provider, NEW_YORK, db);
+      const report = await backfillCloses(provider, NEW_YORK, NOW, db);
 
       const rows = await db
         .selectFrom("price_daily")
@@ -598,7 +601,7 @@ describe("what a batch writes to the spine", () => {
         ]),
       );
 
-      const report = await backfillCloses(provider, NEW_YORK, db);
+      const report = await backfillCloses(provider, NEW_YORK, NOW, db);
 
       const rows = await db
         .selectFrom("price_daily")
@@ -643,7 +646,7 @@ describe("what a batch writes to the spine", () => {
         ]),
       );
 
-      await backfillCloses(provider, NEW_YORK, db);
+      await backfillCloses(provider, NEW_YORK, NOW, db);
 
       const rows = await db
         .selectFrom("price_daily")
@@ -675,7 +678,7 @@ describe("what a batch writes to the spine", () => {
 
       let report: Awaited<ReturnType<typeof backfillCloses>>;
       try {
-        report = await backfillCloses(socketProvider(), NEW_YORK, db);
+        report = await backfillCloses(socketProvider(), NEW_YORK, NOW, db);
       } finally {
         await new Promise<void>((resolve) => worker.close(() => resolve()));
       }
@@ -711,7 +714,7 @@ describe("what a batch records", () => {
           status === "non-usd" ? { status, currency: "GBP" } : { status },
         );
 
-        const report = await backfillCloses(provider, NEW_YORK, db);
+        const report = await backfillCloses(provider, NEW_YORK, NOW, db);
 
         const ledger = await db
           .selectFrom("price_backfill")
@@ -756,7 +759,7 @@ describe("what a batch records", () => {
         return history([["2024-03-25", "10.0000"]]);
       });
 
-      const report = await backfillCloses(provider, NEW_YORK, db);
+      const report = await backfillCloses(provider, NEW_YORK, NOW, db);
 
       const ledger = await db
         .selectFrom("price_backfill")
@@ -789,7 +792,7 @@ describe("what a batch records", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
 
-      const report = await backfillCloses(provider, NEW_YORK, db);
+      const report = await backfillCloses(provider, NEW_YORK, NOW, db);
 
       const ledger = await db
         .selectFrom("price_backfill")
@@ -809,7 +812,8 @@ describe("what a batch records", () => {
       await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
 
       const provider = fakeProvider(() => ({ status: "no-history" }));
-      await backfillCloses(provider, NEW_YORK, db);
+      // the real instant: the retry skip measures the stamp against Postgres now()
+      await backfillCloses(provider, NEW_YORK, new Date(), db);
 
       expect(await selectBackfillCandidates(db)).toEqual([]);
     }),
@@ -839,12 +843,7 @@ describe("what a batch asks for", () => {
       const provider = fakeProvider(() => ({ status: "no-history" }));
 
       // 02:00 UTC is the previous evening in NY — range end goes through marketDateOf, not a UTC truncation
-      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T02:00:00Z") });
-      try {
-        await backfillCloses(provider, NEW_YORK, db);
-      } finally {
-        vi.useRealTimers();
-      }
+      await backfillCloses(provider, NEW_YORK, new Date("2026-06-05T02:00:00Z"), db);
 
       expect(provider.asked).toEqual([
         { symbol: "ZM", range: { from: "2019-06-21", until: "2026-06-04" } },
@@ -869,7 +868,7 @@ describe("what a batch asks for", () => {
 
       const provider = fakeProvider(() => ({ status: "no-history" }));
 
-      await backfillCloses(provider, NEW_YORK, db);
+      await backfillCloses(provider, NEW_YORK, NOW, db);
 
       expect(provider.asked).toHaveLength(3);
       expect(provider.concurrency.peak).toBe(1);
@@ -877,33 +876,20 @@ describe("what a batch asks for", () => {
   );
 
   it(
-    "stamps the attempt when the fetch began, not when it answered",
+    "stamps every attempt in a batch with the refresh's instant, never when the provider answered",
     withDatabase(async (context) => {
       const { db } = context;
-      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+      await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+      await heldFrom(context, { symbol: "BND", asOf: "2024-06-01" });
 
       const began = new Date("2026-06-05T14:00:00Z");
 
-      // span between the two is how long the provider took — mirrors price_poll's timestamp rule
-      const provider = fakeProvider(() => {
-        vi.setSystemTime(new Date("2026-06-05T14:00:30Z"));
-        return history([["2024-06-10", "250.0000"]]);
-      });
+      const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
+      await backfillCloses(provider, NEW_YORK, began, db);
 
-      vi.useFakeTimers({ toFake: ["Date"], now: began });
-      try {
-        await backfillCloses(provider, NEW_YORK, db);
-      } finally {
-        vi.useRealTimers();
-      }
+      const rows = await db.selectFrom("price_backfill").select("started_at").execute();
 
-      const row = await db
-        .selectFrom("price_backfill")
-        .select("started_at")
-        .where("instrument_id", "=", instrument.id)
-        .executeTakeFirstOrThrow();
-
-      expect(row.started_at).toEqual(began);
+      expect(rows.map((row) => row.started_at)).toEqual([began, began]);
     }),
   );
 });
@@ -950,7 +936,7 @@ describe("the boundary each attempt commits in", () => {
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
 
       await expect(
-        backfillCloses(provider, NEW_YORK, refusingInsertInto(committing, "price_backfill")),
+        backfillCloses(provider, NEW_YORK, NOW, refusingInsertInto(committing, "price_backfill")),
       ).rejects.toThrow(/refused an insert/);
 
       const closes = await committing
@@ -999,7 +985,7 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
 
-      const report = await refreshPrices(provider, NEW_YORK, { quotes: false }, db);
+      const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: false }, db);
 
       expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
       expect(report.quotes).toBeNull();
@@ -1022,10 +1008,10 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
 
-      const report = await refreshPrices(provider, NEW_YORK, { quotes: true }, db);
+      const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: true }, db);
 
       expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(1);
-      expect(report.quotes.priced).toBe(1);
+      expect(report.quotes?.priced).toBe(1);
       expect(report.backfill.written).toBe(1);
     }),
   );
@@ -1054,6 +1040,7 @@ describe("a refresh, which is quotes and then one batch", () => {
       const report = await refreshPrices(
         provider,
         NEW_YORK,
+        NOW,
         { quotes: false },
         refusingInsertInto(db, "price_backfill", { after: 1 }),
       );
@@ -1073,22 +1060,17 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
 
-      // within the seven-day window of the quote's own asOf, else today's real clock refuses it
-      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T21:00:00Z") });
-      let report;
-      try {
-        report = await refreshPrices(
-          provider,
-          NEW_YORK,
-          { quotes: true },
-          refusingInsertInto(db, "price_backfill"),
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+      // within seven days of the quote's own asOf, so its close is written
+      const report = await refreshPrices(
+        provider,
+        NEW_YORK,
+        NOW,
+        { quotes: true },
+        refusingInsertInto(db, "price_backfill"),
+      );
 
       // quotes committed before the batch ran — the button's "figures above are unchanged" would be false otherwise
-      expect(report.quotes.priced).toBe(1);
+      expect(report.quotes?.priced).toBe(1);
       expect(report.backfill.batchFailed).toBe(true);
 
       const quoted = await db
@@ -1145,7 +1127,7 @@ describe("a refresh, which is quotes and then one batch", () => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
       try {
-        const report = await refreshPrices(provider, NEW_YORK, { quotes: false }, db);
+        const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: false }, db);
 
         // batch stopped on the second candidate — the retry clock isn't charged for the third, never asked
         expect(report.backfill.batchFailed).toBe(true);

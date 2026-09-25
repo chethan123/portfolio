@@ -11,6 +11,9 @@ afterAll(closeTestDatabase);
 
 const NEW_YORK = "America/New_York";
 
+// the instant a case runs at unless it states its own: the default quote's session, after its close
+const NOW = new Date("2026-06-05T21:00:00Z");
+
 // returns quotes verbatim, unfiltered — a filtering fake once made the unrequested-symbol test unfailable
 function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[][] } {
   const asked: string[][] = [];
@@ -48,16 +51,6 @@ const quote = (overrides: Partial<ProviderQuote> & { symbol: string }): Provider
   ...overrides,
 });
 
-// pins today's market date near the fixtures' 2026 dates so the seven-day window doesn't refuse them
-async function withClockNear<T>(now: string, body: () => Promise<T>): Promise<T> {
-  vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
-  try {
-    return await body();
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
 describe("choosing what to fetch", () => {
   it(
     "asks only about instruments priced from a feed",
@@ -67,7 +60,7 @@ describe("choosing what to fetch", () => {
       await usdInstrument();
 
       const provider = fakeProvider([]);
-      await refreshQuotes(provider, NEW_YORK, db);
+      await refreshQuotes(provider, NEW_YORK, NOW, db);
 
       expect(provider.asked).toEqual([["VTI"]]);
     }),
@@ -79,7 +72,7 @@ describe("choosing what to fetch", () => {
       const usd = await usdInstrument();
 
       const provider = fakeProvider([quote({ symbol: "USD", price: "0.9000" })]);
-      await refreshQuotes(provider, NEW_YORK, db);
+      await refreshQuotes(provider, NEW_YORK, NOW, db);
 
       const stored = await db
         .selectFrom("quote")
@@ -97,7 +90,7 @@ describe("choosing what to fetch", () => {
       await seedInstrument({ symbol: null, priceSource: "feed" });
 
       const provider = fakeProvider([]);
-      const report = await refreshQuotes(provider, NEW_YORK, db);
+      const report = await refreshQuotes(provider, NEW_YORK, NOW, db);
 
       expect(provider.asked).toEqual([]);
       expect(report.requested).toBe(0);
@@ -111,17 +104,25 @@ describe("what a refresh learned", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await withClockNear("2026-06-05T21:00:00Z", async () => {
-        const first = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
-        const second = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+      const first = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI" })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
+      const second = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI" })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
 
-        expect(first.observed).toBe(1);
+      expect(first.observed).toBe(1);
 
-        // without `observed`, the second press would claim to update a re-read price
-        expect(second.priced).toBe(1);
-        expect(second.closes).toBe(1);
-        expect(second.observed).toBe(0);
-      });
+      // without `observed`, the second press would claim to update a re-read price
+      expect(second.priced).toBe(1);
+      expect(second.closes).toBe(1);
+      expect(second.observed).toBe(0);
     }),
   );
 
@@ -130,8 +131,8 @@ describe("what a refresh learned", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const outage = await refreshQuotes(brokenProvider(), NEW_YORK, db);
-      const ignorance = await refreshQuotes(fakeProvider([]), NEW_YORK, db);
+      const outage = await refreshQuotes(brokenProvider(), NEW_YORK, NOW, db);
+      const ignorance = await refreshQuotes(fakeProvider([]), NEW_YORK, NOW, db);
 
       // identical aggregates otherwise — providerFailed is the only thing distinguishing feed-down from wrong-symbol
       expect(outage.priced).toBe(0);
@@ -151,15 +152,14 @@ describe("storing a price", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await withClockNear("2026-06-05T21:00:00Z", async () => {
-        await refreshQuotes(
-          fakeProvider([
-            quote({ symbol: "VTI", price: "271.5000", yieldPct: "1.250000", annualDividendPerShare: "3.3900" }),
-          ]),
-          NEW_YORK,
-          db,
-        );
-      });
+      await refreshQuotes(
+        fakeProvider([
+          quote({ symbol: "VTI", price: "271.5000", yieldPct: "1.250000", annualDividendPerShare: "3.3900" }),
+        ]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
 
       const stored = await db
         .selectFrom("quote")
@@ -188,12 +188,11 @@ describe("storing a price", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       // 01:30 UTC on the 6th = 21:30 on the 5th NY — filed under the 6th, the real 6th close would overwrite and lose it
-      await withClockNear("2026-06-06T12:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
+        NEW_YORK,
+        new Date("2026-06-06T12:00:00Z"),
+        db,
       );
 
       const dates = await db
@@ -211,11 +210,20 @@ describe("storing a price", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const asOf = new Date("2026-06-05T17:00:00Z");
+      const polledAt = new Date("2026-06-05T18:00:00Z");
 
-      await withClockNear("2026-06-05T18:00:00Z", async () => {
-        await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]), NEW_YORK, db);
-        await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]), NEW_YORK, db);
-      });
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]),
+        NEW_YORK,
+        polledAt,
+        db,
+      );
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]),
+        NEW_YORK,
+        polledAt,
+        db,
+      );
 
       const rows = await db
         .selectFrom("price_daily")
@@ -233,12 +241,11 @@ describe("storing a price", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "265.0000" });
 
-      await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T20:00:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T20:00:00Z") })]),
+        NEW_YORK,
+        NOW,
+        db,
       );
 
       const rows = await db
@@ -263,7 +270,7 @@ describe("storing a price", () => {
       const second = await seedInstrument({ symbol: "VTI", name: "Total Market (dup)", priceSource: "feed" });
 
       const provider = fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]);
-      const report = await refreshQuotes(provider, NEW_YORK, db);
+      const report = await refreshQuotes(provider, NEW_YORK, NOW, db);
 
       expect(provider.asked).toEqual([["VTI"]]);
       expect(report.priced).toBe(2);
@@ -286,14 +293,13 @@ describe("the seven-day window", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedDailyClose({ instrument: vti, date: "2026-06-07", close: "265.0000" });
 
-      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([
-            quote({ symbol: "VTI", price: "999.0000", asOf: new Date("2026-06-07T20:00:00Z") }),
-          ]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([
+          quote({ symbol: "VTI", price: "999.0000", asOf: new Date("2026-06-07T20:00:00Z") }),
+        ]),
+        NEW_YORK,
+        new Date("2026-06-15T12:00:00Z"),
+        db,
       );
 
       expect(report.closes).toBe(0);
@@ -328,12 +334,11 @@ describe("the seven-day window", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
+        NEW_YORK,
+        new Date("2026-06-15T12:00:00Z"),
+        db,
       );
 
       expect(report.closes).toBe(0);
@@ -354,15 +359,14 @@ describe("the seven-day window", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       try {
-        await withClockNear("2026-06-15T12:00:00Z", () =>
-          refreshQuotes(
-            fakeProvider([
-              quote({ symbol: "VTI", asOf: new Date("2026-06-01T20:00:00Z") }),
-              quote({ symbol: "VXUS", asOf: new Date("2026-06-01T20:00:00Z") }),
-            ]),
-            NEW_YORK,
-            db,
-          ),
+        await refreshQuotes(
+          fakeProvider([
+            quote({ symbol: "VTI", asOf: new Date("2026-06-01T20:00:00Z") }),
+            quote({ symbol: "VXUS", asOf: new Date("2026-06-01T20:00:00Z") }),
+          ]),
+          NEW_YORK,
+          new Date("2026-06-15T12:00:00Z"),
+          db,
         );
 
         const skipped = warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"));
@@ -382,9 +386,7 @@ describe("the seven-day window", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       try {
-        await withClockNear("2026-06-05T21:00:00Z", () =>
-          refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db),
-        );
+        await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, NOW, db);
 
         expect(warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"))).toEqual(
           [],
@@ -401,12 +403,11 @@ describe("the seven-day window", () => {
       // without this edge, narrowing the future half to six days would still pass
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-22T20:00:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-22T20:00:00Z") })]),
+        NEW_YORK,
+        new Date("2026-06-15T12:00:00Z"),
+        db,
       );
 
       expect(report.closes).toBe(1);
@@ -426,12 +427,11 @@ describe("the seven-day window", () => {
       // 02:00 UTC is the previous evening in NY — both sides must speak the market's calendar or the window slides a day
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await withClockNear("2026-06-06T02:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-05-29T20:00:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-05-29T20:00:00Z") })]),
+        NEW_YORK,
+        new Date("2026-06-06T02:00:00Z"),
+        db,
       );
 
       // market today is 06-05: 05-29 is exactly the past edge; read as UTC today (06-06) it'd be eight days back, refused
@@ -451,12 +451,11 @@ describe("the seven-day window", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-08T20:00:00Z") })]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-08T20:00:00Z") })]),
+        NEW_YORK,
+        new Date("2026-06-15T12:00:00Z"),
+        db,
       );
 
       expect(report.closes).toBe(1);
@@ -476,12 +475,11 @@ describe("the seven-day window", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       try {
-        await withClockNear("2026-06-15T12:00:00Z", () =>
-          refreshQuotes(
-            fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
-            NEW_YORK,
-            db,
-          ),
+        await refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
+          NEW_YORK,
+          new Date("2026-06-15T12:00:00Z"),
+          db,
         );
 
         expect(warn.mock.calls.some((call) => String(call[0]).includes("VTI"))).toBe(true);
@@ -499,7 +497,7 @@ describe("a symbol that does not come back", () => {
       const gone = await seedInstrument({ symbol: "GONE", priceSource: "feed" });
       await seedQuote({ instrument: gone, price: "42.0000", isStale: false });
 
-      const report = await refreshQuotes(fakeProvider([]), NEW_YORK, db);
+      const report = await refreshQuotes(fakeProvider([]), NEW_YORK, NOW, db);
 
       const stored = await db
         .selectFrom("quote")
@@ -519,7 +517,7 @@ describe("a symbol that does not come back", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const fresh = await seedInstrument({ symbol: "NEVER", priceSource: "feed" });
 
-      await refreshQuotes(fakeProvider([]), NEW_YORK, db);
+      await refreshQuotes(fakeProvider([]), NEW_YORK, NOW, db);
 
       const stored = await db
         .selectFrom("quote")
@@ -538,7 +536,12 @@ describe("a symbol that does not come back", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedQuote({ instrument: vti, price: "42.0000", isStale: true });
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]), NEW_YORK, db);
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
 
       const stored = await db
         .selectFrom("quote")
@@ -556,12 +559,11 @@ describe("a symbol that does not come back", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI" }), quote({ symbol: "SURPRISE" })]),
-          NEW_YORK,
-          db,
-        ),
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI" }), quote({ symbol: "SURPRISE" })]),
+        NEW_YORK,
+        NOW,
+        db,
       );
 
       expect(report.priced).toBe(1);
@@ -578,7 +580,7 @@ describe("a provider that fails outright", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedQuote({ instrument: vti, price: "271.5000", isStale: false });
 
-      const report = await refreshQuotes(brokenProvider(), NEW_YORK, db);
+      const report = await refreshQuotes(brokenProvider(), NEW_YORK, NOW, db);
 
       const stored = await db
         .selectFrom("quote")
@@ -599,7 +601,7 @@ describe("a provider that fails outright", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+      await refreshQuotes(brokenProvider(), NEW_YORK, NOW, db);
 
       const closes = await db
         .selectFrom("price_daily")
@@ -622,6 +624,7 @@ describe("matching a quote to an instrument", () => {
       const report = await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -726,7 +729,12 @@ describe("how fresh the prices are", () => {
       // quoteType: null is every instrument created before the column existed
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed", quoteType: null });
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", quoteType: "ETF" })]), NEW_YORK, db);
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", quoteType: "ETF" })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
 
       const after = await db
         .selectFrom("instrument")
@@ -747,6 +755,7 @@ describe("how fresh the prices are", () => {
       await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", quoteType: null })]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -784,6 +793,7 @@ describe("the observation log", () => {
           quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T17:00:00Z") }),
         ]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -809,6 +819,7 @@ describe("the observation log", () => {
       await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -828,8 +839,18 @@ describe("the observation log", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const asOf = new Date("2026-06-05T17:00:00Z");
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]), NEW_YORK, db);
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]), NEW_YORK, db);
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]),
+        NEW_YORK,
+        NOW,
+        db,
+      );
 
       const rows = await db
         .selectFrom("price_observation")
@@ -859,11 +880,13 @@ describe("the observation log", () => {
       await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf: new Date("2026-06-05T17:00:00Z") })]),
         NEW_YORK,
+        NOW,
         db,
       );
       await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T17:15:00Z") })]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -890,6 +913,7 @@ describe("the observation log", () => {
           quote({ symbol: "BND" }),
         ]),
         NEW_YORK,
+        NOW,
         db,
       );
 
@@ -923,7 +947,7 @@ describe("the observation log", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedQuote({ instrument: vti, price: "271.5000", isStale: false });
 
-      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+      await refreshQuotes(brokenProvider(), NEW_YORK, NOW, db);
 
       // the absence is the truth about that instant — a carried-forward price isn't something the feed said
       const rows = await db.selectFrom("price_observation").selectAll().execute();
@@ -941,9 +965,8 @@ describe("the observation log", () => {
 
   it(
     "rolls back with the quote and the close when a later write in the same refresh fails",
-    withDatabase(async ({ db, seedInstrument }) =>
-      // under a real clock no close would be written at all, so the assertion below would hold regardless of the rollback
-      withClockNear("2026-06-05T21:00:00Z", async () => {
+    withDatabase(async ({ db, seedInstrument }) => {
+      // at NOW the close is inside the seven-day window, so its absence below is the rollback's doing
       const good = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedInstrument({ symbol: "BAD", priceSource: "feed" });
 
@@ -958,6 +981,7 @@ describe("the observation log", () => {
             quote({ symbol: "BAD", yieldPct: "99999.000000" }),
           ]),
           NEW_YORK,
+          NOW,
           db,
         ),
       ).rejects.toThrow();
@@ -971,8 +995,7 @@ describe("the observation log", () => {
       expect(
         await db.selectFrom("price_daily").select("instrument_id").where("instrument_id", "=", good.id).execute(),
       ).toEqual([]);
-      }),
-    ),
+    }),
   );
 });
 
@@ -986,9 +1009,7 @@ describe("the archive cap", () => {
       const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope + 1) };
       expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024 + 1);
 
-      await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
-      );
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, NOW, db);
 
       const observation = await db
         .selectFrom("price_observation")
@@ -1008,9 +1029,7 @@ describe("the archive cap", () => {
       const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope) };
       expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024);
 
-      await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
-      );
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, NOW, db);
 
       const observation = await db
         .selectFrom("price_observation")
@@ -1029,14 +1048,13 @@ describe("the archive cap", () => {
 
       try {
         // within the seven-day window, so the only possible warning is the archive cap's, not a window-skip
-        await withClockNear("2026-06-05T21:00:00Z", () =>
-          refreshQuotes(
-            fakeProvider([
-              quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(33 * 1024) } }),
-            ]),
-            NEW_YORK,
-            db,
-          ),
+        await refreshQuotes(
+          fakeProvider([
+            quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(33 * 1024) } }),
+          ]),
+          NEW_YORK,
+          NOW,
+          db,
         );
 
         const observation = await db
@@ -1065,12 +1083,11 @@ describe("the archive cap", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(
-          fakeProvider([quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(4000) } })]),
-          NEW_YORK,
-          db,
-        ),
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(4000) } })]),
+        NEW_YORK,
+        NOW,
+        db,
       );
 
       const observation = await db
@@ -1094,9 +1111,7 @@ describe("the archive cap", () => {
       expect(JSON.stringify(payload).length).toBeLessThan(32 * 1024);
       expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeGreaterThan(32 * 1024);
 
-      await withClockNear("2026-06-05T21:00:00Z", () =>
-        refreshQuotes(fakeProvider([quote({ symbol: "FX", payload })]), NEW_YORK, db),
-      );
+      await refreshQuotes(fakeProvider([quote({ symbol: "FX", payload })]), NEW_YORK, NOW, db);
 
       const observation = await db
         .selectFrom("price_observation")
@@ -1111,17 +1126,18 @@ describe("the archive cap", () => {
 
 describe("the poll record", () => {
   it(
-    "records the attempt with the report the refresh assembled",
+    "records the attempt at the refresh's instant, with the report the refresh assembled",
     withDatabase(async ({ db, seedInstrument, seedQuote }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const gone = await seedInstrument({ symbol: "GONE", priceSource: "feed" });
       await seedQuote({ instrument: gone, price: "42.0000" });
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, NOW, db);
 
       const polls = await db.selectFrom("price_poll").selectAll().execute();
 
       expect(polls).toHaveLength(1);
+      expect(polls[0]?.started_at).toEqual(NOW);
       expect(polls[0]?.requested).toBe(2);
       expect(polls[0]?.priced).toBe(1);
       expect(polls[0]?.stale).toBe(1);
@@ -1133,7 +1149,7 @@ describe("the poll record", () => {
     withDatabase(async ({ db }) => {
       const provider = fakeProvider([]);
 
-      const report = await refreshQuotes(provider, NEW_YORK, db);
+      const report = await refreshQuotes(provider, NEW_YORK, NOW, db);
 
       // nothing asked, but the attempt happened — a quiet hour's log still has a row
       expect(provider.asked).toEqual([]);
@@ -1157,7 +1173,7 @@ describe("the poll record", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+      await refreshQuotes(brokenProvider(), NEW_YORK, NOW, db);
 
       const polls = await db.selectFrom("price_poll").selectAll().execute();
 
@@ -1178,8 +1194,8 @@ describe("the poll record", () => {
       // an existing attempt before this test's two — pins "appends", not "wrote exactly two"
       await seedPoll({ startedAt: new Date("2026-06-05T16:45:00Z") });
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, NOW, db);
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, NOW, db);
 
       // three polls, one observation — dedup shows up as the second refresh writing no observation
       expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(3);

@@ -2,7 +2,7 @@
  * The only price writer (DESIGN.md §6.2, ADR-0006).
  * `price_daily` is dated by the quote's own instant in the market zone, never today's date,
  * and refused outside ±{@link CLOSE_WINDOW_DAYS}. Backfill inserts-where-absent, never
- * overwrites.
+ * overwrites. No clock read: `now` is always a parameter.
  */
 import { sql } from "kysely";
 
@@ -33,7 +33,7 @@ const BACKFILL_RETRY_INTERVAL = "1 day";
 /** Reaches back far enough to find a close to carry forward onto a weekend or holiday date. */
 const BACKFILL_RANGE_LEAD_DAYS = 7;
 
-/** How far a quote's market date may sit from today's before {@link writeDailyClose} refuses it. */
+/** How far a quote's market date may sit from `now`'s before {@link writeDailyClose} refuses it. */
 const CLOSE_WINDOW_DAYS = 7;
 
 /** `null` if a refresh is already running. Dedicated connection — the lock is the session's. */
@@ -286,16 +286,18 @@ const emptyBackfillReport = (): BackfillReport => ({
 
 /**
  * Fill the spine backwards for a bounded batch (ADR-0011). Sequential — a queue against an
- * unofficial endpoint is how an instance gets rate limited. The range ends at today's market date,
- * exclusive. A provider failure is ledgered and the next symbol tried; a database failure is not
- * caught here. `ProviderUnreachable` escapes unledgered, wrapped once (price-worker spec §3.1).
+ * unofficial endpoint is how an instance gets rate limited. The range ends at `now`'s market
+ * date, exclusive, and every ledger row is stamped `now`. A provider failure is ledgered and the
+ * next symbol tried; a database failure is not caught here. `ProviderUnreachable` escapes
+ * unledgered, wrapped once (price-worker spec §3.1).
  */
 export async function backfillCloses(
   provider: PriceProvider,
   marketTimeZone: string,
+  now: Date,
   db: Kysely<Database> = getDb(),
 ): Promise<BackfillReport> {
-  const until = marketDateOf(new Date(), marketTimeZone);
+  const until = marketDateOf(now, marketTimeZone);
   const candidates = await selectBackfillCandidates(db);
 
   const report = emptyBackfillReport();
@@ -303,10 +305,6 @@ export async function backfillCloses(
   try {
     for (const candidate of candidates) {
       const range: HistoryRange = { from: candidate.rangeFrom, until };
-
-      // Before the fetch: the span to the commit is how long the provider took, and an attempt
-      // that never commits leaves no row at all.
-      const startedAt = new Date();
 
       let history: ProviderHistory;
       try {
@@ -320,7 +318,7 @@ export async function backfillCloses(
         await inTransaction(db, (trx) =>
           writeBackfillAttempt(trx, {
             instrumentId: candidate.id,
-            startedAt,
+            startedAt: now,
             range,
             written: 0,
             outcome,
@@ -339,7 +337,7 @@ export async function backfillCloses(
         await inTransaction(db, (trx) =>
           writeBackfillAttempt(trx, {
             instrumentId: candidate.id,
-            startedAt,
+            startedAt: now,
             range,
             written: 0,
             outcome,
@@ -358,7 +356,7 @@ export async function backfillCloses(
 
         await writeBackfillAttempt(trx, {
           instrumentId: candidate.id,
-          startedAt,
+          startedAt: now,
           range,
           written: count,
           outcome: count > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite,
@@ -394,25 +392,17 @@ export type RefreshPricesReport = {
 export async function refreshPrices(
   provider: PriceProvider,
   marketTimeZone: string,
-  options: { quotes: true },
-  db?: Kysely<Database>,
-): Promise<{ quotes: RefreshReport; backfill: BackfillReport }>;
-export async function refreshPrices(
-  provider: PriceProvider,
-  marketTimeZone: string,
-  options: { quotes: boolean },
-  db?: Kysely<Database>,
-): Promise<RefreshPricesReport>;
-export async function refreshPrices(
-  provider: PriceProvider,
-  marketTimeZone: string,
+  now: Date,
   { quotes }: { quotes: boolean },
   db: Kysely<Database> = getDb(),
 ): Promise<RefreshPricesReport> {
-  const quotesReport = quotes ? await refreshQuotes(provider, marketTimeZone, db) : null;
+  const quotesReport = quotes ? await refreshQuotes(provider, marketTimeZone, now, db) : null;
 
   try {
-    return { quotes: quotesReport, backfill: await backfillCloses(provider, marketTimeZone, db) };
+    return {
+      quotes: quotesReport,
+      backfill: await backfillCloses(provider, marketTimeZone, now, db),
+    };
   } catch (error) {
     const stopped = error instanceof BackfillBatchFailed;
     const cause = stopped ? error.cause : undefined;
@@ -457,10 +447,9 @@ export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 export async function refreshQuotes(
   provider: PriceProvider,
   marketTimeZone: string,
+  now: Date,
   db: Kysely<Database> = getDb(),
 ): Promise<RefreshReport> {
-  const startedAt = new Date();
-
   const instruments = await selectFeedInstruments(db).execute();
 
   const feed: FeedInstrument[] = instruments.map((row) => ({
@@ -502,7 +491,7 @@ export async function refreshQuotes(
     for (const { instrumentId, quote } of matched) {
       await writeQuote(trx, instrumentId, quote);
       await writeQuoteType(trx, instrumentId, quote);
-      const wroteClose = await writeDailyClose(trx, instrumentId, quote, marketTimeZone);
+      const wroteClose = await writeDailyClose(trx, instrumentId, quote, marketTimeZone, now);
       pricedIds.add(instrumentId);
       if (wroteClose) {
         closes += 1;
@@ -541,7 +530,7 @@ export async function refreshQuotes(
       providerFailed,
     };
 
-    await writePoll(trx, startedAt, report);
+    await writePoll(trx, now, report);
 
     return report;
   });
@@ -601,9 +590,10 @@ async function writeDailyClose(
   instrumentId: string,
   quote: ProviderQuote,
   marketTimeZone: string,
+  now: Date,
 ): Promise<boolean> {
   const date = marketDateOf(quote.asOf, marketTimeZone);
-  const today = marketDateOf(new Date(), marketTimeZone);
+  const today = marketDateOf(now, marketTimeZone);
 
   if (date < addDays(today, -CLOSE_WINDOW_DAYS) || date > addDays(today, CLOSE_WINDOW_DAYS)) {
     return false;

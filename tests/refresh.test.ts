@@ -56,6 +56,9 @@ function brokenQuotesProvider(): PriceProvider {
 /** The instant every fake quote is struck at, so a seeded observation can collide with it. */
 const QUOTED_AT = new Date("2026-06-05T20:00:00Z");
 
+/** The instant every run here happens at: the fake quotes' session, after its close. */
+const NOW = new Date("2026-06-05T21:00:00Z");
+
 const quote = (symbol: string): ProviderQuote => ({
   symbol,
   price: "100.0000",
@@ -76,14 +79,12 @@ describe("a run that takes the lock", () => {
       try {
         const run = await withDb(
           db,
-          () => runRefresh({ quotes: true }, fakeProvider([quote("VTI")])),
+          () => runRefresh({ quotes: true }, NOW, fakeProvider([quote("VTI")])),
           pool,
         );
 
         if (run.status !== "done") throw new Error(`expected done, got ${run.status}`);
-        expect(run.report.quotes.requested).toBe(1);
-        expect(run.report.quotes.priced).toBe(1);
-        expect(run.report.quotes.observed).toBe(1);
+        expect(run.report.quotes).toMatchObject({ requested: 1, priced: 1, observed: 1 });
       } finally {
         await pool.end();
       }
@@ -116,6 +117,7 @@ describe("a run that takes the lock", () => {
             outcomeOf(
               await runRefresh(
                 { quotes: true },
+                NOW,
                 fakeProvider(quoted.map((instrument) => quote(instrument.symbol!))),
               ),
             ),
@@ -146,7 +148,7 @@ describe("a run that takes the lock", () => {
       try {
         const outcome = await withDb(
           db,
-          async () => outcomeOf(await runRefresh({ quotes: true }, brokenQuotesProvider())),
+          async () => outcomeOf(await runRefresh({ quotes: true }, NOW, brokenQuotesProvider())),
           pool,
         );
 
@@ -172,11 +174,34 @@ describe("a run that takes the lock", () => {
       const pool = createPool(TEST_DATABASE_URL);
 
       try {
-        const run = await withDb(db, () => runRefresh({ quotes: true }, brokenQuotesProvider()), pool);
+        const run = await withDb(
+          db,
+          () => runRefresh({ quotes: true }, NOW, brokenQuotesProvider()),
+          pool,
+        );
 
         if (run.status !== "done") throw new Error(`expected done, got ${run.status}`);
-        expect(run.report.quotes.providerFailed).toBe(true);
-        expect(run.report.quotes.stale).toBe(1);
+        expect(run.report.quotes).toMatchObject({ providerFailed: true, stale: 1 });
+      } finally {
+        await pool.end();
+      }
+    }),
+  );
+
+  it(
+    "answers error for a done run that carried no quotes report, rather than inventing counts",
+    withDatabase(async ({ db }) => {
+      const pool = createPool(TEST_DATABASE_URL);
+
+      try {
+        const run = await withDb(
+          db,
+          () => runRefresh({ quotes: false }, NOW, fakeProvider()),
+          pool,
+        );
+
+        expect(run).toMatchObject({ status: "done", report: { quotes: null } });
+        expect(outcomeOf(run)).toEqual({ status: "error" });
       } finally {
         await pool.end();
       }
@@ -194,7 +219,7 @@ describe("a run that cannot take the lock", () => {
       try {
         await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
 
-        const run = await withDb(db, () => runRefresh({ quotes: true }, fakeProvider()), pool);
+        const run = await withDb(db, () => runRefresh({ quotes: true }, NOW, fakeProvider()), pool);
 
         expect(run).toEqual({ status: "busy" });
         // passed through untouched — no report to project; the control renders "someone else is refreshing" from this alone
@@ -216,7 +241,11 @@ describe("a run where the database or the lock fails", () => {
       const unreachable = createPool(UNREACHABLE_DATABASE_URL);
 
       try {
-        const run = await withDb(db, () => runRefresh({ quotes: true }, fakeProvider()), unreachable);
+        const run = await withDb(
+          db,
+          () => runRefresh({ quotes: true }, NOW, fakeProvider()),
+          unreachable,
+        );
 
         expect(run).toEqual({ status: "error" });
       } finally {

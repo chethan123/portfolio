@@ -9,9 +9,7 @@ import { socketProvider } from "./provider-socket.server.ts";
 import {
   refreshPrices,
   withRefreshLock,
-  type BackfillReport,
   type RefreshPricesReport,
-  type RefreshReport,
 } from "./prices.server.ts";
 
 import type { PriceProvider } from "./price-provider.server.ts";
@@ -28,18 +26,15 @@ export type RefreshOutcome =
     }
   /** Someone else — the poller, or another tab — holds the lock. */
   | { status: "busy" }
-  /** The database, not the provider. A provider failure is a `done` above. */
+  /**
+   * The database, not the provider (a `done` above), or a run without a quotes report
+   * ({@link outcomeOf}).
+   */
   | { status: "error" };
 
-/** `report.quotes` is null unless quotes were asked for; {@link runRefresh}'s `{ quotes: true }` overload narrows it. */
+/** `report.quotes` is null unless quotes were asked for. */
 export type RefreshRun =
   | { status: "done"; report: RefreshPricesReport }
-  | { status: "busy" }
-  | { status: "error" };
-
-/** `runRefresh({ quotes: true })`'s own answer: `report.quotes` is never null. */
-type RunWithQuotes =
-  | { status: "done"; report: { quotes: RefreshReport; backfill: BackfillReport } }
   | { status: "busy" }
   | { status: "error" };
 
@@ -52,20 +47,13 @@ type RunWithQuotes =
  * must never throw (`provider-socket.server.ts` keeps that constraint).
  */
 export async function runRefresh(
-  options: { quotes: true },
-  provider?: PriceProvider,
-): Promise<RunWithQuotes>;
-export async function runRefresh(
-  options: { quotes: boolean },
-  provider?: PriceProvider,
-): Promise<RefreshRun>;
-export async function runRefresh(
   { quotes }: { quotes: boolean },
+  now: Date,
   provider: PriceProvider = socketProvider(),
 ): Promise<RefreshRun> {
   try {
     const result = await withRefreshLock(() =>
-      refreshPrices(provider, getConfig().MARKET_TIMEZONE, { quotes }, getDb()),
+      refreshPrices(provider, getConfig().MARKET_TIMEZONE, now, { quotes }, getDb()),
     );
 
     if (result === null) return { status: "busy" };
@@ -76,11 +64,17 @@ export async function runRefresh(
   }
 }
 
-/** Takes the narrowed overload's answer, so there is no null `report.quotes` to invent an outcome for. */
-export function outcomeOf(run: RunWithQuotes): RefreshOutcome {
+/**
+ * A `done` run without a quotes report has no counts to show, so it answers `error` rather than
+ * invent them. The route always asks for quotes and never sees one: `refreshQuotes` reports or
+ * throws, and a throw is already `error`.
+ */
+export function outcomeOf(run: RefreshRun): RefreshOutcome {
   if (run.status !== "done") return run;
 
   const { quotes } = run.report;
+  if (quotes === null) return { status: "error" };
+
   return {
     status: "done",
     requested: quotes.requested,

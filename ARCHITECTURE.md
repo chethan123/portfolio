@@ -413,7 +413,7 @@ table with a single grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:775` (`priceFreshness`) selects from `holding_valued`, not to value anything,
+- `prices.server.ts:765` (`priceFreshness`) selects from `holding_valued`, not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -713,7 +713,7 @@ erDiagram
     PRICE_BACKFILL {
         bigint id PK
         bigint instrument_id FK "the instrument attempted"
-        timestamptz started_at "when the fetch began, not when the row committed"
+        timestamptz started_at "when the refresh that attempted it began, never when the provider answered or the row committed"
         date range_from "the range asked for"
         date range_until "exclusive"
         integer written "closes the spine did not already hold"

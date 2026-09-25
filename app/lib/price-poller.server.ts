@@ -53,7 +53,11 @@ export function createPricePoller(dependencies: {
   provider: PriceProvider;
   clock: () => Date;
   readCadence: () => Promise<number>;
-  refresh: (options: { quotes: boolean }, provider: PriceProvider) => Promise<RefreshRun>;
+  refresh: (
+    options: { quotes: boolean },
+    now: Date,
+    provider: PriceProvider,
+  ) => Promise<RefreshRun>;
   log?: Pick<Console, "info" | "warn" | "error">;
 }): PricePoller {
   const { provider, clock, readCadence, refresh, log = console } = dependencies;
@@ -124,7 +128,7 @@ export function createPricePoller(dependencies: {
       if (nextMinutes !== minutes && timer !== undefined) arm(nextMinutes);
 
       // `refresh` owns the lock, and logs `busy`/`error` itself; only `done` has a report.
-      const result = await refresh({ quotes }, provider);
+      const result = await refresh({ quotes }, now, provider);
       if (result.status === "done") {
         // One line per attempt at quotes, always: a log that speaks only on failure cannot tell a
         // quiet loop from a dead one. Stale > 0 warns — the line an operator greps for.
