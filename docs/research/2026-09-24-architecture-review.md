@@ -2,7 +2,9 @@
 
 *Reviewed 2026-09-24 against `8f0cf8f`. Thirteen candidates, eight smaller cuts, one reopened
 refutation. The [archived visual report](2026-09-24-architecture-review/report.html) carries a
-before/after diagram for every candidate; this document is the one to pick work up from.*
+before/after diagram for every candidate; this document is the one to pick work up from.
+Follow-up in [§7](#7-follow-up--25-september-2026-what-landed-within-a-day), 2026-09-25: three of
+the seven Strong candidates landed within a day, and the cards below are kept as written.*
 
 A second look for **deepening opportunities**, a month after the
 [first](2026-08-23-architecture-review.md): places where a module's interface carries knowledge
@@ -67,6 +69,8 @@ how the deepened module is tested across its seam: **in-process** (pure), **loca
 
 ### 2.1 One commit over N routed sections; a chosen account is a routing of one
 
+> **Landed 2026-09-24** in #385 (`91216ad`), as [spec 0024](../specs/0024-one-commit-over-routed-sections.md). Kept as written; §7 has what shipped and what it decided.
+
 **Rating: Strong.** Local-substitutable. Ingest.
 **Files:** `app/lib/uploads.server.ts` — `commitUploadUnderLock` (`:1704-1836`) against
 `commitMultiAccountUnderLocks` (`:1861-1973`); `assembleDiff` (`:1371-1448`) against
@@ -117,6 +121,8 @@ other), not code shape; the guard becomes the one-group adapter's own rule.
 
 ### 2.2 A review-binding module: draw it, post it, verify it
 
+> **Half landed 2026-09-24** with 2.1: the *draw* half is `app/lib/review-form.ts`. The *verify* half remains and is smaller now; §7 re-rates it Worth exploring.
+
 **Rating: Strong.** In-process for the comparison; the reproduce-at-reviewed-date closure stays
 local-substitutable. Ingest. Falls out of 2.1, since one hash over sections is most of it.
 **Files:** `uploads.server.ts` — the two hash recipes (`:1396-1418`, `:1519-1534`),
@@ -146,6 +152,8 @@ reason ordering becomes a table test with no database.
 **ADR.** None.
 
 ### 2.3 The poller as a built instance, not module functions over a `globalThis` bag
+
+> **Landed 2026-09-24** in #386 (`231a92b`), as [spec 0025](../specs/0025-the-poller-as-a-built-instance.md). Kept as written; §7 has what shipped.
 
 **Rating: Strong.** In-process (clock, timer) plus local-substitutable. Pricing. Independent of
 everything else here; the cheapest Strong.
@@ -183,6 +191,8 @@ fixes the `Price refresh` / `Price backfill` stems; `tests/price-poller.test.ts:
 **ADR.** None.
 
 ### 2.4 `refreshPrices`: drop the mode flag's overloads, take `now`
+
+> **Landed 2026-09-24** in #387 (`ec03f55`), as [spec 0026](../specs/0026-refresh-prices-takes-now.md). Kept as written; §7 has what shipped.
 
 **Rating: Strong.** In-process. Pricing.
 **Files:** `app/lib/prices.server.ts` — `refreshPrices` overloads (`:394-411`); `new Date()` inside
@@ -674,6 +684,8 @@ checked, it is anchored to a file and a symbol".
 
 ## 6. Suggested sequence
 
+> Items 1 and 2 landed on 2026-09-24 (§7). The live sequence is at the end of §7.
+
 1. **2.1, one commit over N routed sections**, first. It sits in the hottest module in the
    repository, the multi-account commit landed the day before this review as a second copy of the
    first, and the two have already drifted in three places. Taking it gives 2.2 its single hash for
@@ -687,3 +699,52 @@ checked, it is anchored to a file and a symbol".
    carry nothing else; §11.3's two-route gap closes with it.
 5. **2.10 `holdingsTable`** last among the read-path items, as August already said, and only if
    DESIGN.md §8.3's saved-view builder is still next.
+
+---
+
+## 7. Follow-up — 25 September 2026: what landed within a day
+
+*Checked against `ec03f55`, the day after the review merged. The cards above are the original
+evidence and stay as written; this section is the status.*
+
+Four commits landed on `main` after `cf11d01`. Three of them are this review's candidates, each
+run as its own spec and pull request; the fourth (#358, the change chip's baseline) touches two
+cards' evidence without addressing either. Every status below was re-verified in the code, not read
+off a commit subject.
+
+| Candidate | Status at `ec03f55` | Evidence |
+|---|---|---|
+| 2.1 One commit over N routed sections | **Landed.** #385, spec 0024 | `commitUnderLocks` is the one commit; `assembleDiff` takes groups; `UploadDiff.accounts: AccountDiff[]` (`uploads.server.ts:940`); `recordUpload` returns `CommittedUpload[]` (`:1581-1585`); one hash recipe; `review.tsx` one branch; the file is 2 295 lines, from 2 420. Spec 0024 §4 records the three drift decisions: (a) both survive, the chosen-account guard reading `numberHolder` for the number it captured and the unique index deciding for every account; (b) the posted `accountId` check survives for both kinds; (c) the watermark is posted and hashed for both. Tests: one staging helper (`tests/support/review.ts`: `posted`, `reviewAndRecord`) replaces the two encoders; `tests/review-revision.test.ts` (643 lines) pins the hash field by field. |
+| 2.2 A review-binding module | **Half landed** with #385 | The draw half: `app/lib/review-form.ts` (`sectionKey`, `reviewedFields`), browser-safe, the one encoder the page and the tests share. The verify half (`refuseStaleReview` at `:1611`, `baselineMoved`, the reason ordering) is still inside the commit; spec 0024 §5 names it as this candidate. With one recipe, one encoder and one commit path, what is left is a `verifyBinding(posted, fresh)` over sections. **Re-rated Worth exploring.** |
+| 2.3 The poller as a built instance | **Landed.** #386, spec 0025 | `createPricePoller` (`price-poller.server.ts:52`); `startPricePoller` pins one instance (`:238`). `tests/price-poller.test.ts` fakes no `Date`, pokes no symbol, spies no module; its one `useFakeTimers` fakes only `setInterval`, for the arming test, by design (`:287`); `Price refresh` is pinned. The `afterEach(stopPricePoller)` hooks in the four other files stay, as the spec predicted: the root middleware arms the process-wide slot. |
+| 2.4 `refreshPrices` takes `now` | **Landed.** #387, spec 0026 | No `new Date()` in `prices.server.ts` or `refresh.server.ts`; one `refreshPrices`, one `runRefresh`; `RunWithQuotes` gone; no clock faking left in `refresh-quotes`, `price-backfill`, `refresh` or `routes/refresh` tests. Shape chosen: one entry with the null case named (spec 0026 §1). |
+| 2.5 The refusal round trip | Unchanged | 11 splits, 10 comment copies, 21 + 21 paragraphs. `refusalOf` copies grew from sixteen to eighteen with #385's new test files. Still Strong. |
+| 2.6 One chart entry | Unchanged, and the loader grew | #358 added the change chip's basis rule (`ChangeBasis`, the *clamped* label) to the Overview loader: more loader-body logic, not less. Still Strong. |
+| 2.7 Valuation's matrix | Unchanged; one export more | #358 added `manualNetWorthAt` (twenty exported functions now). `holdingsAt` and `netWorthAt` still have no production caller; the `accountTotal` / `accountTotals` twins are intact. #358 pinned `netWorthChange`'s baseline rules (`tests/dashboard-queries.test.ts:275-410`); the `netWorthChange.current` against `netWorth.amount` agreement in §3 is still not in the invariant suite. Step one is still minutes. |
+| 2.8, 2.9 Router step ownership, `resumeAt` | Unchanged in shape; counts moved | #385's `review.tsx` rewrite took the `?stale=true` carries from twelve to nine and the `steps` literals from six to five. `refusalsByStep`, `stepOf`, `numberQuestions` and the third `readDraft` reader are all still there. |
+| 2.10, 2.11 | Unchanged | `holdings.tsx` and the lock were not touched. |
+| 2.12 The provider seam | Unchanged | The cycle is still there (`price-provider.server.ts:11`, `provider-socket.server.ts:25`); `priceFreshness` moved to `:765` and ARCHITECTURE.md §4.2 followed it, by line number again. |
+| 2.13 One product at money scale | Unchanged | `valueAt` (`uploads.server.ts:1035`) and the inline rounding (`positions.server.ts:132`) both stand; #385 kept the mirror test (`tests/invariants/ingest-rounding.test.ts:180-183`). |
+
+**Smaller cuts and housekeeping.** The `.orig` files are still tracked. `tests/dashboard-queries.test.ts:57-58`
+still sums through `Number()`. New: #385 left its eight PR-lifetime captures in
+`docs/specs/ingest/screenshots/0024-*.png`; docs/README.md says they are deleted once the pull
+request merges, and each `-main` / `-branch` pair is byte-identical, so there is nothing in them to
+keep.
+
+**Stale facts (§5).** Fixed on the way: the `recordAccountNumber` line number (dropped), the
+`:1878-1885` row (rewritten for `commitUnderLocks`), and, by #358, the "seven reads through
+`ValuedSource`" sentence and §6.3's Overview reads row. Still open: the eight statement fixtures, the
+flowchart's two missing refusals, `balances.server.ts:104`, `migrations.ts:126-128`,
+§7.2's "not a read first" (spec 0024 §4 kept both behaviours, so the sentence is still
+wrong the same way), `provider-socket.server.ts:213` and `:11`, the "one edit here and one in
+`startPricePoller`" claim,
+"roughly fifteen sites", "The capital gains rate", "asks this module one question",
+"`mintGrant` inserts unconditionally", "both resource routes", the three React Router versions,
+"three of the household-scoped reads", `format.ts:139`, "five array calls". New, from spec 0025's
+review record: Appendix A `:2385` names a provider default on `refreshPrices` that is
+`runRefresh`'s.
+
+**The live sequence.** 2.7 step one (two dead exports, one twin: minutes). 2.5 as its own pull
+request. 2.6, which #358 has made slightly more valuable. 2.2's verify half, now that its inputs are
+one recipe and one encoder. 2.12. Then 2.8 and 2.9 on the settled ingest shape, in that order.
