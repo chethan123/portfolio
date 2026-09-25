@@ -29,8 +29,8 @@ const VALUE: AllocationAmount = {
   isKnown: (holding) => holding.isPriced,
 };
 
-// Income screen's cut (DESIGN.md §8.1). isKnown is always true — holding_valued coalesces a
-// missing rate to zero in SQL (§14 limitation 9), so the total is a lower bound.
+// Income screen's cut (DESIGN.md §8.1). isKnown is always true — holding_valued coalesces an
+// un-swept or never-quoted rate to zero in SQL (§14 limitation 9), so the total is a lower bound.
 const ANNUAL_DIVIDEND: AllocationAmount = {
   of: (holding) => holding.annualDividend,
   isKnown: () => true,

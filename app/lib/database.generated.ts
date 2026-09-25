@@ -178,6 +178,9 @@ export interface Quote {
   instrument_id: Int8;
   is_stale: Generated<boolean>;
   price: Numeric;
+  trailing_dividend_as_of: Timestamp | null;
+  trailing_dividend_outcome: string | null;
+  trailing_dividend_per_share: Numeric | null;
   yield_pct: Numeric | null;
 }
 

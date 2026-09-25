@@ -501,6 +501,10 @@ function fakeProvider(
 
       return answer(symbol);
     },
+    // No case here asks for the sweep, so this answers the way an instrument with nothing to read does.
+    async getTrailingDividend() {
+      return { status: "no-data" };
+    },
     async probe() {
       throw new Error("This provider is never asked to probe.");
     },
@@ -988,7 +992,13 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
 
-      const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: false }, db);
+      const report = await refreshPrices(
+        provider,
+        NEW_YORK,
+        NOW,
+        { quotes: false, dividends: false },
+        db,
+      );
 
       expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
       expect(report.quotes).toBeNull();
@@ -1011,7 +1021,13 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
 
-      const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: true }, db);
+      const report = await refreshPrices(
+        provider,
+        NEW_YORK,
+        NOW,
+        { quotes: true, dividends: false },
+        db,
+      );
 
       expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(1);
       expect(report.quotes?.priced).toBe(1);
@@ -1044,7 +1060,7 @@ describe("a refresh, which is quotes and then one batch", () => {
         provider,
         NEW_YORK,
         NOW,
-        { quotes: false },
+        { quotes: false, dividends: false },
         refusingInsertInto(db, "price_backfill", { after: 1 }),
       );
 
@@ -1068,7 +1084,7 @@ describe("a refresh, which is quotes and then one batch", () => {
         provider,
         NEW_YORK,
         NOW,
-        { quotes: true },
+        { quotes: true, dividends: false },
         refusingInsertInto(db, "price_backfill"),
       );
 
@@ -1130,7 +1146,13 @@ describe("a refresh, which is quotes and then one batch", () => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
       try {
-        const report = await refreshPrices(provider, NEW_YORK, NOW, { quotes: false }, db);
+        const report = await refreshPrices(
+          provider,
+          NEW_YORK,
+          NOW,
+          { quotes: false, dividends: false },
+          db,
+        );
 
         // batch stopped on the second candidate — the retry clock isn't charged for the third, never asked
         expect(report.backfill.batchFailed).toBe(true);

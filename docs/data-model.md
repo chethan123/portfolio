@@ -123,6 +123,9 @@ erDiagram
         numeric price
         numeric yield_pct "nullable"
         numeric annual_dividend_per_share "nullable"
+        numeric trailing_dividend_per_share "nullable"
+        timestamptz trailing_dividend_as_of "nullable"
+        text trailing_dividend_outcome "nullable"
         timestamptz as_of
         boolean is_stale
     }
@@ -358,7 +361,10 @@ contracts, stated as `COMMENT ON TABLE` in
 | `instrument_id` | `bigint` → `instrument` | no | primary key (one row per instrument); `ON DELETE CASCADE` |
 | `price` | `numeric(20,4)` | no | last known price. A failed fetch keeps it and sets `is_stale`, never zero and never null into a sum |
 | `yield_pct` | `numeric(10,6)` | yes | provider-reported yield; stored but deliberately not exposed by the valuation view (its price snapshot disagrees with ours) |
-| `annual_dividend_per_share` | `numeric(20,4)` | yes | the forward per-share rate behind the projected annual dividend |
+| `annual_dividend_per_share` | `numeric(20,4)` | yes | the provider's own forward-looking rate; no longer read by `holding_valued`, which reads `trailing_dividend_per_share` instead |
+| `trailing_dividend_per_share` | `numeric(20,4)` | yes | the trailing twelve months' distributions, summed; what `holding_valued` reads |
+| `trailing_dividend_as_of` | `timestamptz` | yes | when the dividend sweep last measured this instrument; null means never measured |
+| `trailing_dividend_outcome` | `text` | yes | `ok`, `no_data`, `non_usd`, `unreadable` or `provider_failed`; null beside a non-null rate means the rate was carried from `annual_dividend_per_share` at migration, not yet measured |
 | `as_of` | `timestamptz` | no | the provider's instant, not the fetch time |
 | `is_stale` | `boolean` | no | default false; a stale price is *used*, not discarded |
 
@@ -644,9 +650,9 @@ holding of every open account. The rules it encodes, each a decision:
   `numeric(20,4)`. Unrealized gain subtracts those rounded figures. Null price or basis stays
   unknown; separate totals need separate coverage counts.
 - **`is_stale` is carried through**: a stale price is used, not discarded; unpriced is not stale.
-- **`annual_dividend = quantity × coalesce(annual_dividend_per_share, 0)`** is the one deliberate
-  exception to null-propagation: a missing rate is a zero, so the projection omits unknown income
-  and expenses (DESIGN.md §14, accepted limitation 9).
+- **`annual_dividend = quantity × coalesce(trailing_dividend_per_share, 0)`** is the one deliberate
+  exception to null-propagation: an unswept or never-quoted rate is a zero, so the projection omits
+  unknown income and expenses (DESIGN.md §14, accepted limitation 9).
 
 Columns (the generated `HoldingValued` type mirrors this list): account and owner context
 (`account_id`, `account_name`, `institution`, `account_kind`, `tax_treatment`, `owner_id`,

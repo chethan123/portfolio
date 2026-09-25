@@ -213,9 +213,9 @@ async function aPortfolioThatPays(ctx: TestContext) {
   const trust = await ctx.seedInstrument({ symbol: "PRIVATE" });
   const usd = await ctx.usdInstrument();
 
-  await ctx.seedQuote({ instrument: vti, price: "200.0000", annualDividendPerShare: "3.6000" });
-  await ctx.seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0400" });
-  await ctx.seedQuote({ instrument: usd, price: "1.0000", annualDividendPerShare: "0.0360" }); // the note's rate, on the instrument the debt positions in
+  await ctx.seedQuote({ instrument: vti, price: "200.0000", trailingDividendPerShare: "3.6000" });
+  await ctx.seedQuote({ instrument: schd, price: "27.5000", trailingDividendPerShare: "1.0400" });
+  await ctx.seedQuote({ instrument: usd, price: "1.0000", trailingDividendPerShare: "0.0360" }); // the note's rate, on the instrument the debt positions in
 
   await ctx.seedPositionSet({
     account: brokerage,

@@ -67,7 +67,8 @@ the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-g
 [`owner-filter/`](owner-filter/) (0013), [`dump/`](dump/) (0014),
 [`price-backfill/`](price-backfill/) (0017), [`price-worker/`](price-worker/) (0018),
 [`lock/`](lock/) (0019), [`lock-hardening/`](lock-hardening/) (0020),
-[`price-health/`](price-health/) (0021), and [`chart-grain/`](chart-grain/) (0022).
+[`price-health/`](price-health/) (0021), [`chart-grain/`](chart-grain/) (0022), and
+[`dividends/`](dividends/) (0006).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's

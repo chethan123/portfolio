@@ -381,13 +381,14 @@ describe("revisePosition", () => {
   it(
     "refuses a quantity whose product with the dividend rate the view could not project",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // third axis, unguarded until migration 0006 — operands individually legal, product isn't
+      // third axis, unguarded until migration 0006 — operands individually legal, product isn't.
+      // The rate seeded is the trailing one, the only operand the view multiplies (migration 0019).
       const account = await seedAccount({ kind: "brokerage" });
       const penny = await seedInstrument({ symbol: "PENNY", name: "Penny Income Trust" });
       await seedQuote({
         instrument: penny,
         price: "0.0001",
-        annualDividendPerShare: "1000000.0000",
+        trailingDividendPerShare: "1000000.0000",
       });
       await seedPositionSet({
         account,
@@ -412,7 +413,7 @@ describe("revisePosition", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const account = await seedAccount({ kind: "brokerage" });
       const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });
-      await seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0300" });
+      await seedQuote({ instrument: schd, price: "27.5000", trailingDividendPerShare: "1.0300" });
       await seedPositionSet({
         account,
         asOf: "2026-06-30",
@@ -585,7 +586,7 @@ describe("currentPosition", () => {
         asOf: "2026-06-30",
         // null, not absent — an unquoted trust is still held, left-joined as the view joins it
         price: null,
-        annualDividendPerShare: null,
+        trailingDividendPerShare: null,
         // anything but "fixed" is a count, not a sum of money
         priceSource: "feed",
       });

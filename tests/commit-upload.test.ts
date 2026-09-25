@@ -1216,11 +1216,12 @@ describe("recordUpload", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "PNY", name: "Penny Income Trust" });
       await seedInstrumentAlias({ instrument: fund, rawString: "PNY" });
-      // Small enough that quantity×price is legal; quantity×dividend rate is what overflows (migration 0006).
+      // Small enough that quantity×price is legal; quantity×dividend rate is what overflows — the
+      // trailing rate, which is the operand the view multiplies (migration 0019).
       await seedQuote({
         instrument: fund,
         price: "0.0001",
-        annualDividendPerShare: "1000000.0000",
+        trailingDividendPerShare: "1000000.0000",
       });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPNY,100000000000,\n");

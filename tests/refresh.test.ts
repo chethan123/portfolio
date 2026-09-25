@@ -29,7 +29,7 @@ const REFRESH_ADVISORY_LOCK_KEY = "7295380114023642";
 
 afterAll(closeTestDatabase);
 
-/** A provider that answers the quotes it is handed and no history. */
+/** A provider that answers the quotes it is handed, no history and no dividend. */
 function fakeProvider(quotes: ProviderQuote[] = []): PriceProvider {
   return {
     async getQuotes() {
@@ -37,6 +37,9 @@ function fakeProvider(quotes: ProviderQuote[] = []): PriceProvider {
     },
     async getDailyCloses() {
       return { status: "no-history" };
+    },
+    async getTrailingDividend() {
+      return { status: "no-data" };
     },
     async probe() {
       throw new Error("This provider is never asked to probe.");
@@ -52,6 +55,9 @@ function brokenQuotesProvider(): PriceProvider {
     },
     async getDailyCloses() {
       return { status: "no-history" };
+    },
+    async getTrailingDividend() {
+      return { status: "no-data" };
     },
     async probe() {
       throw new Error("This provider is never asked to probe.");
@@ -85,7 +91,7 @@ describe("a run that takes the lock", () => {
       try {
         const run = await withDb(
           db,
-          () => runRefresh({ quotes: true }, NOW, fakeProvider([quote("VTI")])),
+          () => runRefresh({ quotes: true, dividends: false }, NOW, fakeProvider([quote("VTI")])),
           pool,
         );
 
@@ -122,7 +128,7 @@ describe("a run that takes the lock", () => {
           async () =>
             outcomeOf(
               await runRefresh(
-                { quotes: true },
+                { quotes: true, dividends: false },
                 NOW,
                 fakeProvider(quoted.map((instrument) => quote(instrument.symbol!))),
               ),
@@ -154,7 +160,10 @@ describe("a run that takes the lock", () => {
       try {
         const outcome = await withDb(
           db,
-          async () => outcomeOf(await runRefresh({ quotes: true }, NOW, brokenQuotesProvider())),
+          async () =>
+            outcomeOf(
+              await runRefresh({ quotes: true, dividends: false }, NOW, brokenQuotesProvider()),
+            ),
           pool,
         );
 
@@ -182,7 +191,7 @@ describe("a run that takes the lock", () => {
       try {
         const run = await withDb(
           db,
-          () => runRefresh({ quotes: true }, NOW, brokenQuotesProvider()),
+          () => runRefresh({ quotes: true, dividends: false }, NOW, brokenQuotesProvider()),
           pool,
         );
 
@@ -202,7 +211,7 @@ describe("a run that takes the lock", () => {
       try {
         const run = await withDb(
           db,
-          () => runRefresh({ quotes: false }, NOW, fakeProvider()),
+          () => runRefresh({ quotes: false, dividends: false }, NOW, fakeProvider()),
           pool,
         );
 
@@ -225,7 +234,11 @@ describe("a run that cannot take the lock", () => {
       try {
         await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
 
-        const run = await withDb(db, () => runRefresh({ quotes: true }, NOW, fakeProvider()), pool);
+        const run = await withDb(
+          db,
+          () => runRefresh({ quotes: true, dividends: false }, NOW, fakeProvider()),
+          pool,
+        );
 
         expect(run).toEqual({ status: "busy" });
         // passed through untouched — no report to project; the control renders "someone else is refreshing" from this alone
@@ -249,7 +262,7 @@ describe("a run where the database or the lock fails", () => {
       try {
         const run = await withDb(
           db,
-          () => runRefresh({ quotes: true }, NOW, fakeProvider()),
+          () => runRefresh({ quotes: true, dividends: false }, NOW, fakeProvider()),
           unreachable,
         );
 

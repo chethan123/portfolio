@@ -8,41 +8,60 @@
 import { getConfig } from "../../server/config.ts";
 import { isWellFormedSymbol } from "../../server/symbol-pattern.ts";
 
+import { addDays } from "./chart-range.ts";
+import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import {
   CurrencyRefused,
   isMissingHistory,
   matchKey,
   probeVerdicts,
   ProviderUnreachable,
+  toProviderDividends,
   toProviderHistory,
   toProviderQuote,
   type HistoryRange,
   type PriceProvider,
+  type ProviderDividends,
   type ProviderHistory,
   type ProviderQuote,
   type SymbolProbe,
 } from "./price-provider.server.ts";
 import { socketRequest } from "./socket-transport.server.ts";
 
-type AskKind = "quotes" | "history";
+type AskKind = "quotes" | "history" | "dividends";
 
-/** `quotes`: a slow quote is stale on arrival. `history`: past the worker's own 30 s watchdog, so the app reads its `504`. */
+/** `quotes`: a slow quote is stale on arrival. The chart kinds: past the worker's own 30 s watchdog, so the app reads its `504`. */
 const BUDGET_MS: Record<AskKind, number> = {
   quotes: 15_000,
   history: 35_000,
+  dividends: 35_000,
 };
 
 /** Shorter than quotes: a cold worker pays a three-fetch crumb handshake, and the lost `non-usd` verdict returns next refresh. */
 const PROBE_BUDGET_MS = 10_000;
 
-/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB. */
+/** Read to here, then the request is destroyed. 100 quotes ≈ 400 KB, a ten-year chart ≈ 300 KB; two years of daily dividend bars ≈ 90 KB (502 bars, measured). */
 const BODY_CAP_BYTES: Record<AskKind, number> = {
   quotes: 512 * 1024,
   history: 2 * 1024 * 1024,
+  dividends: 512 * 1024,
 };
 
 /** Spec §3.5's own cap on one `/quotes` body. */
 const BATCH_SIZE = 100;
+
+/**
+ * How far back `period1` opens the dividend chart — the range over which "does this instrument pay
+ * at all?" is answerable, which is NOT the window `toProviderDividends` sums. Yahoo returns only the
+ * events inside `period1` (verified live: ITOT at 393 days back answers with 5 events, at 730 days
+ * back with 9), and a chart with bars and no `events` block is a refusal, because money-market funds
+ * paying 4-5% answer that way too. So a range that barely covers the summed year hides the final
+ * payment of an instrument that stopped a year ago, and that instrument keeps its last measured rate
+ * forever instead of falling to $0. Two years puts the last payment in the payload, where the sum
+ * window then excludes it and the rate reads $0. Keep the two ranges apart: collapsing them back
+ * into one is the bug (docs/specs/dividends/01-trailing-dividend-rate.md).
+ */
+const DIVIDEND_EVIDENCE_DAYS = 730;
 
 /** Mirrors the worker's own `ERROR_TEXT_LIMIT` (`server/price-worker.ts`). */
 const ERROR_TEXT_LIMIT = 1000;
@@ -214,6 +233,27 @@ export function socketProvider(): PriceProvider {
         return toProviderHistory(raw, range, marketTimeZone);
       } catch (error) {
         if (isMissingHistory(error)) return { status: "no-history" };
+        throw error;
+      }
+    },
+
+    async getTrailingDividend(
+      symbol: string,
+      since: IsoDate,
+      marketTimeZone: string,
+    ): Promise<ProviderDividends> {
+      try {
+        const raw = await ask("dividends", {
+          symbol: matchKey(symbol),
+          // The evidence range, formed from now rather than from `since` — which crosses to the
+          // parser below unchanged, as the bound of the year that is summed.
+          from: addDays(marketDateOf(new Date(), marketTimeZone), -DIVIDEND_EVIDENCE_DAYS),
+        });
+        return toProviderDividends(raw, since, marketTimeZone);
+      } catch (error) {
+        // A delisted ticker answers "No data found", which is a refusal: the last measured rate is
+        // kept rather than zeroed.
+        if (isMissingHistory(error)) return { status: "no-data" };
         throw error;
       }
     },

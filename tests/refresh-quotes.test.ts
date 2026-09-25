@@ -27,6 +27,9 @@ function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[
     async getDailyCloses() {
       return { status: "no-history" };
     },
+    async getTrailingDividend() {
+      return { status: "no-data" };
+    },
     async probe() {
       throw new Error("This provider is never asked to probe.");
     },
@@ -39,6 +42,9 @@ function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
       throw new Error(message);
     },
     async getDailyCloses(): Promise<never> {
+      throw new Error(message);
+    },
+    async getTrailingDividend(): Promise<never> {
       throw new Error(message);
     },
     async probe() {

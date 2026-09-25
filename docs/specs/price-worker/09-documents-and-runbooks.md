@@ -229,7 +229,9 @@ and only that clause.
       ticket's own file list did not reach. `app/lib/price-poller.server.ts:102` appends "The batch
       itself failed; see the error above." to the batch summary; since 01 the line above it is a
       *warning* whenever the provider could not be reached, so the sentence points at a level that
-      is not there — "see the line above" is the whole fix. `docs/operating.md`'s backfill bullet
+      is not there — "see the line above" is the whole fix. (The dividends ticket later dropped the
+      positional reference entirely: the line now names its sibling directly, "The batch itself
+      failed; see the 'Price backfill batch failed' line.") `docs/operating.md`'s backfill bullet
       was corrected in 01, along with the sentence that told an operator to grep the retired
       `Manual price refresh failed` stem; re-read both against whatever the worker's arrival makes
       true

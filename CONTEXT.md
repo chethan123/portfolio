@@ -13,7 +13,8 @@ Terms are added when one is actually resolved, not preemptively.
 
 **Annual dividend**:
 What a holding is projected to pay over the coming year, from the quantity held and the instrument's
-current per-share rate. The annual dividend is forward-looking and current-only, so there is no such
+current per-share rate. The rate is the trailing year's distributions summed, used as the projection
+for the coming year. The annual dividend is forward-looking and current-only, so there is no such
 figure for a past date.
 _Avoid_: dividend income, payout, projected income, distribution.
 
@@ -159,6 +160,19 @@ Filling an instrument's daily closes for the finished days its position history 
 but its spine does not, from the feed's own history. Fills what is absent and never replaces a
 close the running system recorded itself; a day the market did not trade stays absent.
 _Avoid_: historical import, catch-up, re-pricing, price sync.
+
+**Dividend sweep**:
+The bounded per-tick re-measurement of trailing dividend rates: up to five feed instruments, oldest
+stamp first, one call each. Runs every tick regardless of the scheduled quote window, because a
+dividend can go ex on any date.
+_Avoid_: dividend refresh, dividend poll, yield sweep, rate sync.
+
+**Carried rate**:
+A trailing dividend rate migration `0019` copied from the provider's own figure rather than measured
+from actual distributions, told apart from a measured one by `trailing_dividend_outcome is null`
+beside a non-null rate. Due for the dividend sweep immediately, but ordered behind an instrument
+priced for the first time after the migration, whose stamp is null rather than backdated.
+_Avoid_: legacy rate, migrated rate, inherited rate, stale rate.
 
 **Price worker**:
 The one process that talks to the price feed, holding no rule about what to fetch or what a price

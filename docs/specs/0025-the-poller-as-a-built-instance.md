@@ -194,7 +194,8 @@ Unchanged in text and level; the poller's own go through `log`, the two module-l
 | Line | Level | From |
 |---|---|---|
 | `` `Price refresh: ${priced} of ${requested} priced, ${stale} stale, ${closes} closes written, ${observed} new.` `` | `warn` if `stale > 0`, else `info` | the tick, when quotes were asked and the run was `done` |
-| `` `Price backfill: ${attempted} attempted, ${written} closes written, ${failed} failed.` `` plus `" The batch itself failed; see the line above."` when `batchFailed` | `warn` if `failed > 0` or `batchFailed`, else `info`; silent when `attempted === 0` and not `batchFailed` | the tick, on a `done` run |
+| `` `Price backfill: ${attempted} attempted, ${written} closes written, ${failed} failed.` `` plus `" The batch itself failed; see the 'Price backfill batch failed' line."` when `batchFailed` | `warn` if `failed > 0` or `batchFailed`, else `info`; silent when `attempted === 0` and not `batchFailed` | the tick, on a `done` run |
+| `` `Price dividends: ${attempted} attempted, ${written} rates written, ${refused} refused, ${failed} failed.` `` plus `" The batch itself failed; see the 'Price dividends batch failed' line."` when `batchFailed` | `warn` if `failed > 0` or `batchFailed`, else `info`; silent when `attempted === 0` and not `batchFailed` | the tick, on a `done` run |
 | `Price refresh failed; last known prices are kept:` + error | `error` | the tick's `catch` (and, untouched, `runRefresh`'s own) |
 | `Refresh cadence could not be read; keeping the current one:` + error | `error` | the tick's cadence read |
 | `Price poller did not start; prices will not refresh:` + error | `error` | `pinPricePoller`'s `catch` |

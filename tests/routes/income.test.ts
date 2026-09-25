@@ -26,8 +26,8 @@ async function seedTwoOwners(
 
   const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
   const bnd = await ctx.seedInstrument({ symbol: "BND", name: "Vanguard Total Bond" });
-  await ctx.seedQuote({ instrument: vti, price: "250.0000", annualDividendPerShare: "2.5000" });
-  await ctx.seedQuote({ instrument: bnd, price: "70.0000", annualDividendPerShare: "3.5000" });
+  await ctx.seedQuote({ instrument: vti, price: "250.0000", trailingDividendPerShare: "2.5000" });
+  await ctx.seedQuote({ instrument: bnd, price: "70.0000", trailingDividendPerShare: "3.5000" });
 
   const hers = await ctx.seedAccount({
     name: "Alice Brokerage",

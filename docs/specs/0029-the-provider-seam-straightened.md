@@ -358,6 +358,18 @@ request, not the tree.
 - [ ] `npm run typecheck`, `npm test` (2431 passing, §6's count), `npm run build` clean.
 - [ ] §8's differential: `diff -r` empty.
 
+## Merged with `main` at `1e971f7`, 2026-09-25
+
+\#390 (the trailing dividend rate) landed while this was in review and gave `PriceProvider` a
+method of its own, `getTrailingDividend`. The merge keeps both: the interface has four methods, and
+`probe` is the one this spec adds. `socketProvider()` implements all four; `getTrailingDividend`
+asks `/dividends` per symbol, as `getDailyCloses` asks `/history`, and does not use the quote batch
+loop. `prices.server.ts` imports #390's `DRIFT_EXTENSION_DAYS` and `TRAILING_WINDOW_DAYS` beside
+`matchKey`. Every provider double carries both methods, including #390's new one in
+`tests/dividend-sweep.test.ts`, which gains the same throwing `probe`. ARCHITECTURE.md reads "four"
+where §7 said "three", and keeps #390's `selectDividendCandidates` exception beside the freshness
+module in §4.2. Wherever this spec says "three methods", read four.
+
 ## Review findings rejected
 
 Grounding review, two rounds. Round 1: twelve findings, two material, both folded in. The pure

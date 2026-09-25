@@ -20,7 +20,7 @@ import { isScheduledQuoteWindow } from "./market-hours.ts";
 import { defaultProvider, runRefresh, type RefreshRun } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
 
-import type { BackfillReport } from "./prices.server.ts";
+import type { BackfillReport, DividendReport } from "./prices.server.ts";
 import type { PollerSnapshot, TickObservation } from "./price-health.ts";
 import type { PriceProvider } from "./price-provider.server.ts";
 
@@ -53,7 +53,7 @@ export function createPricePoller(dependencies: {
   clock: () => Date;
   readCadence: () => Promise<number>;
   refresh: (
-    options: { quotes: boolean },
+    options: { quotes: boolean; dividends: boolean },
     now: Date,
     provider: PriceProvider,
   ) => Promise<RefreshRun>;
@@ -127,7 +127,9 @@ export function createPricePoller(dependencies: {
       if (nextMinutes !== minutes && timer !== undefined) arm(nextMinutes);
 
       // `refresh` owns the lock, and logs `busy`/`error` itself; only `done` has a report.
-      const result = await refresh({ quotes }, now, provider);
+      // The sweep runs every tick, calendar or not: a dividend goes ex on any date, and the batch
+      // bound is what paces it. Only a person's own button press skips it (`app/routes/refresh.ts`).
+      const result = await refresh({ quotes, dividends: true }, now, provider);
       if (result.status === "done") {
         // One line per attempt at quotes, always: a log that speaks only on failure cannot tell a
         // quiet loop from a dead one. Stale > 0 warns — the line an operator greps for.
@@ -148,6 +150,7 @@ export function createPricePoller(dependencies: {
         // recorded above.
 
         logBackfill(result.report.backfill);
+        if (result.report.dividends !== null) logDividends(result.report.dividends);
       } else if (result.status === "error") {
         pending = { outcome: "error" };
       }
@@ -176,9 +179,22 @@ export function createPricePoller(dependencies: {
 
     const summary =
       `Price backfill: ${report.attempted} attempted, ${report.written} closes written, ` +
-      `${failed} failed.${report.batchFailed ? " The batch itself failed; see the line above." : ""}`;
+      `${failed} failed.${report.batchFailed ? " The batch itself failed; see the 'Price backfill batch failed' line." : ""}`;
 
     if (failed > 0 || report.batchFailed) log.warn(summary);
+    else log.info(summary);
+  }
+
+  /** {@link logBackfill}'s sibling — a different report shape, the same silence rule. */
+  function logDividends(report: DividendReport): void {
+    if (report.attempted === 0 && !report.batchFailed) return;
+
+    const summary =
+      `Price dividends: ${report.attempted} attempted, ${report.written} rates written, ` +
+      `${report.refused} refused, ${report.failed} failed.` +
+      `${report.batchFailed ? " The batch itself failed; see the 'Price dividends batch failed' line." : ""}`;
+
+    if (report.failed > 0 || report.batchFailed) log.warn(summary);
     else log.info(summary);
   }
 
