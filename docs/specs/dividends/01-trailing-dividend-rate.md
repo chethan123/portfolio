@@ -72,67 +72,76 @@ year** — rather than implying the sum is itself the forward figure. No new ter
 - An instrument that pays nothing omits `events` entirely (BRK-B). A real zero — but only when the
   response carries bars.
 
-### The trailing window, and the anniversary rule
+### The trailing window, and the drift extension
 
-Two constants, **exported from `app/lib/price-provider.server.ts`** — `toProviderDividends` applies
-the cutoff itself, and that module cannot import `prices.server.ts` (a cycle, via
+Two constants, **exported from `app/lib/price-provider.server.ts`** — `toProviderDividends` derives
+the core bound itself, and that module cannot import `prices.server.ts` (a cycle, via
 `provider-socket.server.ts`):
 
 ```ts
 export const TRAILING_WINDOW_DAYS = 365;
-export const ANNIVERSARY_TOLERANCE_DAYS = 21;
+export const DRIFT_EXTENSION_DAYS = 21;
 ```
 
 A third, `DIVIDEND_FETCH_LEAD_DAYS = 7`, lives in `provider-socket.server.ts` — only
 `getTrailingDividend` uses it, to widen `period1`. It is not part of the arithmetic and the sweep
 never sees it, so it must NOT be declared a second time in `prices.server.ts`.
 
-**Where each date is computed.** `refreshTrailingDividends` forms
-`since = addDays(marketDateOf(now, tz), -(TRAILING_WINDOW_DAYS + ANNIVERSARY_TOLERANCE_DAYS))` using
-the existing `addDays` (`app/lib/chart-range.ts:94`) — do not hand-roll day arithmetic. It passes
-`since` to `getTrailingDividend`, which subtracts `DIVIDEND_FETCH_LEAD_DAYS` to form `period1`
-before calling the socket. `toProviderDividends` receives `since` and applies the
-`newest - (365 - 21)` cutoff internally.
+**Where each date is computed.** `refreshTrailingDividends` forms the **wider** bound
+`since = addDays(marketDateOf(now, tz), -(TRAILING_WINDOW_DAYS + DRIFT_EXTENSION_DAYS))` using the
+existing `addDays` (`app/lib/chart-range.ts:94`) — do not hand-roll day arithmetic. It passes `since`
+to `getTrailingDividend`, which subtracts `DIVIDEND_FETCH_LEAD_DAYS` to form `period1` before calling
+the socket. The wider bound is what crosses the socket deliberately: the parser cannot fall back to
+events it never received. `toProviderDividends` then derives the **core** bound from it,
+`addDays(since, DRIFT_EXTENSION_DAYS)`, which is `now - 365`. Both bounds are exclusive, and both
+compare **market dates** (`marketDateOf`, as `toProviderHistory` dates its bars) rather than raw
+instants, so the edge is deterministic rather than a function of time-of-day.
 
-Keep an event when `date > now - (365 + 21)`, then take the newest kept event and **drop every event
-dated `<= newest - (365 - 21)`**. Compare **market dates** (`marketDateOf`, as `toProviderHistory`
-dates its bars), not raw instants, so the edge is deterministic rather than a function of time-of-day.
+**The rule.**
 
-A plain 365-day window is wrong in both directions:
+1. `core` = events dated after `now - TRAILING_WINDOW_DAYS`.
+2. `core` non-empty → that is the answer. Sum it. **No further cutoff of any kind.**
+3. `core` empty → sum the events dated after `now - (TRAILING_WINDOW_DAYS + DRIFT_EXTENSION_DAYS)`.
 
-- **Too many.** Quarterly payments ~91 days apart put **five** in 365 days for several days a year:
-  quarterly +25%, monthly +8%, semi-annual +50%, **annual +100%**. A once-a-year December payer is
-  exactly the mutual-fund case §6.1 chose this provider for.
-- **Too few.** An annual payer whose ex-date drifts later — Dec 19 one year, Dec 22 the next — has
-  an empty window for those three days and reads **$0**.
+So the extension exists to rescue an empty year and for nothing else. An annual payer whose ex-date
+has drifted up to 20 days later — Dec 19 one year, Jan 5 the next — reports last year's payment
+rather than `$0`; a payer that genuinely stopped still reads `$0`, 386 days after its last payment
+instead of 365.
 
-Widening the window to `365 + tolerance` and letting the rule drop the year-ago slot fixes both: the
-previous year's payment stays until this year's arrives, and is then dropped as the same slot.
+**Why not an anniversary rule.** The rule this replaced kept `date > now - 386`, then dropped every
+event dated `<= newest - (365 - 21)` — the newest payment's own year-ago slot, and everything older.
+It assumed payments are at least ~28 days apart. Weekly and biweekly distribution funds exist, and
+for them the cutoff lands inside the trailing year and deletes real payments:
 
-The tolerance is bounded on both sides, and 21 sits between them with margin:
+| frequency | anniversary rule kept | true 365-day count | error |
+| --- | --- | --- | --- |
+| weekly | 50 | 53 | −5.7% |
+| biweekly | 25 | 27 | −7.4% |
+| monthly | 12 | 12 | — |
+| quarterly | 4 | 4 | — |
+| semi-annual | 2 | 2 | — |
+| annual | 1 | 1 | — |
 
-- It must **exceed** the jitter in one instrument's own ex-date from year to year — specifically
-  when this year's date lands **earlier** than last year's. Drifting later never doubles. Verified:
-  a tolerance of 7 double-counts at 8 days earlier; 21 tolerates 21. Annual fund distributions move
-  one to two weeks.
-- It must stay **under 28**, or the cutoff rises past a monthly payer's eleventh-prior payment and
-  drops a real one: the longest 11-month span is 337 days (Mar 28 to Feb 28), and a tolerance of 28
-  puts the cutoff exactly there. 21 leaves about six days for monthly jitter.
+That understatement was **permanent** for those funds — every sweep, forever, with nothing to
+self-correct. Do not reintroduce the rule, in any form that measures a cutoff from the newest
+payment: the cost falls on exactly the payers whose spacing is shorter than the tolerance, and it is
+invisible in the output. Simulated across all six frequencies, the replacement returns the true
+365-day count for each.
 
-Checked by simulation across monthly, quarterly, semi-annual and annual spacing, and against an
-annual payer before and after its payment: all return the right count at 21.
+**Residual, for §14** (the accepted artifact, stated this way and not as "irregular payments"):
+counting the plain year counts whatever is in it, so a payer whose ex-dates put **five** quarterly
+payments inside 365 days reads +25% for those few days, monthly +8%, semi-annual +50%, and an annual
+payer whose ex-date drifts *earlier* reads +100% until the older payment ages out. This is the
+standard trailing-twelve-month definition every data provider publishes, it is **transient** — a
+few days a year, self-correcting with no intervention — and the alternative is the permanent
+understatement above. The frequency-change residual the anniversary rule carried is gone: a fund
+that switched from annual to quarterly now keeps every payment inside its trailing year.
 
-**Residual, for §14** (state it this way, not as "irregular payments"): an event at least 344 days
-older than the newest, and still inside the 386-day window, is dropped even when it is not the
-newest's own year-ago slot. The case that costs
-something real is a **frequency change** — a fund that paid annually and switched to quarterly loses
-the annual payment from its first trailing year. Rare, self-correcting within a year, and the
-alternative is inferring a payment schedule.
-
-**Which stopped payers read $0.** A still-trading instrument that stopped paying falls out of the
-window and reads `$0`, about three weeks later than a plain window would. A *delisted* one returns
-no bars or "No data found", which is `no-data` — a refusal, so the last measured rate is kept, not
-zeroed. Those are different outcomes on purpose.
+**Which stopped payers read $0.** A still-trading instrument that stopped paying empties the core
+year, falls out of the extension too, and reads `$0` 386 days after its last payment — about three
+weeks later than a plain window would. A *delisted* one returns no bars or "No data found", which is
+`no-data` — a refusal, so the last measured rate is kept, not zeroed. Those are different outcomes
+on purpose.
 
 ### Shape
 
@@ -212,10 +221,15 @@ and `RATE_CEILING` (`:81,:90,:99`) are module-private and must stay so.
   - `meta.currency` present and not USD → `non-usd` (same guard as `toProviderHistory`)
   - `quotes.length === 0` → `no-data`; an empty chart is not evidence of a non-payer
   - `events` absent or null → `{ status: "ok", perShare: "0.0000" }`
+  - `events` **present but carrying no `dividends` array** — a splits-only block, which is what an
+    instrument that split and pays nothing returns → also `{ status: "ok", perShare: "0.0000" }`.
+    Deliberate, and not the same as `unreadable`: the block parsed, it simply holds no payments, and
+    such an instrument must still be measurable as a real zero rather than keeping a stale rate
   - `events` present but unparseable, or any element with a non-finite `amount` or a `date`
     `parseInstant` refuses → `unreadable`, all-or-nothing, mirroring the split rule: a half-read
     block yields a plausible-looking wrong number
-  - date each event with `marketDateOf`, keep `date > since`, apply the anniversary rule
+  - date each event with `marketDateOf`, keep `date > addDays(since, DRIFT_EXTENSION_DAYS)` — the
+    core year — and fall back to `date > since` only when that keeps nothing
   - **sum in `money.ts` units first, round once** — `toUnits` each amount at `EVENT_SCALE` (8), accumulate, then one `divide` down to `MONEY_SCALE`,
     accumulate as `bigint`, one `render` at the end. Per-event rounding would round twelve times
     for a monthly payer. `unadjusted()` (`:213-229`) is the precedent.
@@ -372,7 +386,8 @@ Verified line by line; entries that merely *gain* a row rather than becoming fal
 - `DESIGN.md:455` — the `PriceProvider` interface gains a method
 - `DESIGN.md:507` — the `quote` tuple
 - `DESIGN.md:1556-1557` — limitation 9: a swept non-payer is now a real zero; only the unswept and
-  refused cases remain. Add the anniversary-rule residual here too.
+  refused cases remain. Add the trailing-twelve-month artifact (five quarterly payments in one year)
+  here too.
 - `docs/data-model.md:121-128` — the ER `quote` block (*addition*)
 - `docs/data-model.md:361` — "the forward per-share rate behind the projected annual dividend"
 - `docs/data-model.md:647,649` — the `coalesce(annual_dividend_per_share, 0)` sentence and its
@@ -435,13 +450,18 @@ historical and is not edited.
 - [ ] An instrument with no `events` key and at least one bar stores `0.0000`
 - [ ] An empty chart stores no rate and advances the stamp
 - [ ] An event dated exactly `since` is excluded; one a day later is included
-- [ ] Five quarterly payments in 365 days sum to four — the oldest is dropped by the anniversary rule
+- [ ] Five quarterly payments inside 365 days sum to five — the accepted artifact, not four
+- [ ] A quarterly payment older than the year is excluded while the four inside it sum
 - [ ] Two payments 365 days apart (an annual payer) sum to one
-- [ ] An annual payer whose ex-date drifted 14 days **earlier** sums to one, not two (this is the
-      direction that pins the tolerance; drifting later passes at any tolerance)
-- [ ] An annual payer that has not yet paid this year still reports last year's payment, not $0
-- [ ] Twelve monthly payments survive the anniversary rule intact
-- [ ] Thirteen monthly payments inside the window sum to twelve
+- [ ] An annual payer whose ex-date drifted 14 days **earlier** sums to two, both being inside the
+      year — transient, and the artifact above
+- [ ] An annual payer that has not yet paid this year, its last payment inside the extension and not
+      the year, still reports last year's payment, not $0
+- [ ] 53 weekly payments inside the year sum to 53, and 27 biweekly to 27 — the anniversary rule's
+      permanent understatement, the regression that must not come back
+- [ ] Twelve monthly payments all sum
+- [ ] A thirteenth monthly payment, in the extension rather than the year, is ignored
+- [ ] A payer whose last distribution was 400 days ago reads `0.0000`
 - [ ] A split inside the window changes nothing — no ratio is applied
 - [ ] `date` arriving as an ISO string parses (the socket JSON case), not only as a `Date`
 - [ ] One unparseable event refuses the whole response rather than summing what parsed

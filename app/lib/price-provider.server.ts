@@ -52,11 +52,11 @@ export type ProviderDividends =
   | { status: "non-usd"; currency: string }
   | { status: "unreadable" };
 
-/** The trailing year {@link toProviderDividends} sums. Exported from here, not the sweep: this module applies the cutoff and cannot import `prices.server.ts` (a cycle, via `provider-socket.server.ts`). */
+/** The trailing year {@link toProviderDividends} sums. Exported from here, not the sweep: this module derives the core bound itself and cannot import `prices.server.ts` (a cycle, via `provider-socket.server.ts`). */
 export const TRAILING_WINDOW_DAYS = 365;
 
-/** Slack for an ex-date that drifts year to year. Under 28, or the cutoff passes a monthly payer's eleventh-prior payment (337 days at the widest) and drops a real one. */
-export const ANNIVERSARY_TOLERANCE_DAYS = 21;
+/** How far past the year to look when the year holds nothing — an annual payer whose ex-date has drifted this much later still reports last year's payment instead of $0. Never widens a year that has something in it. */
+export const DRIFT_EXTENSION_DAYS = 21;
 
 /** `getQuotes` batches — why Yahoo was chosen. History has no batch form: one symbol per call. */
 export type PriceProvider = {
@@ -392,20 +392,22 @@ export function toProviderDividends(
     paid.push({ date: marketDateOf(instant, marketTimeZone), units });
   }
 
-  // Market dates, as `toProviderHistory` dates its bars: the edge must not move with time of day.
-  const kept = paid.filter((event) => event.date > since);
+  // `since` arrives as the wider bound — the caller subtracts `TRAILING_WINDOW_DAYS +
+  // DRIFT_EXTENSION_DAYS` — so the core year is that bound plus the extension. Market dates, as
+  // `toProviderHistory` dates its bars: the edge must not move with time of day.
+  const core = paid.filter((event) => event.date > addDays(since, DRIFT_EXTENSION_DAYS));
 
-  // The window is deliberately wider than a year, so an annual payer that has not yet paid still
-  // reports last year's; dropping the newest payment's own year-ago slot is what stops that
-  // payment being counted twice once this year's arrives (docs/specs/dividends/01).
-  const newest = kept.reduce((latest, event) => (event.date > latest ? event.date : latest), since);
-  const cutoff = addDays(newest, -(TRAILING_WINDOW_DAYS - ANNIVERSARY_TOLERANCE_DAYS));
+  // The extension rescues an empty year and nothing else: a drifted annual ex-date reports last
+  // year's payment rather than $0, and a payer that stopped still reads $0 at 386 days. Summing the
+  // plain year costs a transient artifact — five quarterly ex-dates in 365 days sum to five — and an
+  // anniversary cutoff off the newest payment bought that back by deleting real payments from
+  // anything spaced under 28 days: 5.7% of a weekly payer's year, permanently (docs/specs/dividends/01).
+  const kept = core.length > 0 ? core : paid.filter((event) => event.date > since);
 
   // `money.ts` units at `EVENT_SCALE`, one rounding at the end: rounding each event to
   // `MONEY_SCALE` first would round twelve times for a monthly payer (ARCHITECTURE.md §5.6).
   let units = 0n;
   for (const event of kept) {
-    if (event.date <= cutoff) continue;
     units += event.units;
   }
 

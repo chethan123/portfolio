@@ -1566,9 +1566,10 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    `unreadable`, `non_usd`, `provider_failed`) keeps the last measured rate rather than zeroing it,
    which can go stale but is never invented; and a workplace-plan trust the refresh never asks about,
    because it has no symbol, or the seeded `USD` row, which no provider will ever quote, stay
-   permanently unquoted rather than unswept. A further residual: a fund that changes how often it
-   pays, say annual to quarterly, can lose an old annual payment to the same rule that drops last
-   year's slot, for one trailing year only. The projection omits unquoted income and borrowing
+   permanently unquoted rather than unswept. A further residual, in the other direction: the sum
+   counts whatever went ex inside the year, so a payer whose ex-dates put five quarterly payments in
+   365 days reads high for the few days that lasts — the standard trailing-twelve-month artifact,
+   transient and self-correcting. The projection omits unquoted income and borrowing
    costs. Missing positive payments lower it; missing loan interest can overstate net income. This
    is the one place the codebase departs from §8.2's "sum what is known and label the
    coverage". Applied literally here, a portfolio where most holdings correctly pay nothing would

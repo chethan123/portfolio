@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { addDays } from "~/lib/chart-range";
 import {
   CurrencyRefused,
   probeVerdicts,
@@ -888,7 +889,8 @@ describe("asking the worker for one symbol's history", () => {
   });
 });
 
-// The window refreshTrailingDividends forms for a sweep on 2026-09-25: 365 + 21 days back.
+// The bound refreshTrailingDividends forms for a sweep on 2026-09-25: 365 + 21 days back. The parser
+// derives its 365-day core from it — 2025-09-25 — and only falls back to this one when that is empty.
 const SINCE = "2025-09-04";
 
 // One bar, because a chart with none is a delisted ticker rather than a non-payer.
@@ -923,6 +925,15 @@ const MONTHLY = [
   "2026-09-15",
 ];
 
+// Generated: 53 literal ex-dates would bury the rule under a wall of strings.
+const everyNDays = (first: string, step: number, count: number): string[] =>
+  Array.from({ length: count }, (_, index) => addDays(first, index * step));
+
+// 2025-09-26 through 2026-09-25 — the 364 days ending on the sweep's own date, so every one of them
+// is inside the trailing year and none is in the 21-day extension.
+const WEEKLY = everyNDays("2025-09-26", 7, 53);
+const BIWEEKLY = everyNDays("2025-09-26", 14, 27);
+
 describe("summing the trailing year of distributions", () => {
   it("stores a zero rate for an instrument with no events key beside real bars", () => {
     // BRK-B: Yahoo omits `events` entirely for a payer of nothing, which is a real zero
@@ -944,13 +955,30 @@ describe("summing the trailing year of distributions", () => {
     expect(perShareOf([dividend(SINCE, 5), dividend("2025-09-05", 0.25)])).toBe("0.2500");
   });
 
-  it("reads a zero for a payer whose last distribution has fallen out of the window", () => {
-    // still trading, stopped paying: a real zero about three weeks later than a plain window (§14)
-    expect(perShareOf([dividend("2025-08-20", 1)])).toBe("0.0000");
+  it("reads a zero for a payer whose last distribution was 400 days ago, past the extension too", () => {
+    // still trading, stopped paying: the trailing year is empty and so is the extension it falls
+    // back to, so the zero is measured rather than assumed — 386 days after the last payment (§14)
+    expect(perShareOf([dividend("2025-08-21", 1)])).toBe("0.0000");
   });
 
-  it("drops the oldest of five quarterly payments inside 365 days, the newest's own year-ago slot", () => {
-    // 9.99 marks the slot that must go: a plain 365-day window counts it and reads +25%
+  it("sums all five when a quarterly payer's ex-dates put five inside the trailing year", () => {
+    // The accepted artifact of counting the plain year: +25% for the few days a year five ex-dates
+    // fit in 365, self-correcting when the oldest ages out. It is the trailing-twelve-month figure
+    // every provider publishes, and the anniversary rule it replaces cost weekly payers 5.7% forever.
+    expect(
+      perShareOf([
+        dividend("2025-09-26", 1),
+        dividend("2025-12-26", 1),
+        dividend("2026-03-26", 1),
+        dividend("2026-06-26", 1),
+        dividend("2026-09-22", 1),
+      ]),
+    ).toBe("5.0000");
+  });
+
+  it("excludes a quarterly payment older than the trailing year while the four inside it sum", () => {
+    // 9.99 marks the one out: 2025-09-15 is 375 days back, inside the extension and not the year,
+    // and the extension is never read while the year has something in it
     expect(
       perShareOf([
         dividend("2025-09-15", 9.99),
@@ -966,24 +994,38 @@ describe("summing the trailing year of distributions", () => {
     expect(perShareOf([dividend("2025-09-15", 2.5), dividend("2026-09-15", 3)])).toBe("3.0000");
   });
 
-  it("counts one payment when an annual ex-date lands fourteen days earlier than last year's", () => {
-    // the direction that pins the tolerance: at 7 both are inside the cutoff and the rate doubles
-    expect(perShareOf([dividend("2025-09-29", 2.5), dividend("2026-09-15", 3)])).toBe("3.0000");
+  it("sums both when an annual ex-date drifts earlier and lands two inside the trailing year", () => {
+    // 2025-09-29 is 361 days back: both payments are in the year, so both count. Transient — a
+    // fortnight until the older ages out — where the anniversary rule that suppressed it understated
+    // every weekly and biweekly payer permanently
+    expect(perShareOf([dividend("2025-09-29", 2.5), dividend("2026-09-15", 3)])).toBe("5.5000");
   });
 
   it("reports last year's payment for an annual payer that has not yet paid this year", () => {
-    // the window is wider than a year for exactly this: a plain one reads $0 for the drift
-    expect(perShareOf([dividend("2025-12-19", 2.5)])).toBe("2.5000");
+    // 2025-09-10 is 380 days back, so the trailing year holds nothing and the 21-day extension is
+    // what is summed: a plain 365-day window reads $0 for the days the ex-date has drifted
+    expect(perShareOf([dividend("2025-09-10", 2.5)])).toBe("2.5000");
   });
 
   it("keeps all twelve of a monthly payer's payments", () => {
     expect(perShareOf(MONTHLY.slice(1).map((date) => dividend(date, 0.1)))).toBe("1.2000");
   });
 
-  it("drops a thirteenth monthly payment inside the window", () => {
+  it("ignores a thirteenth monthly payment that falls in the extension rather than the year", () => {
     const thirteen = MONTHLY.map((date, index) => dividend(date, index === 0 ? 9.99 : 0.1));
 
     expect(perShareOf(thirteen)).toBe("1.2000");
+  });
+
+  it("sums all 53 of a weekly payer's payments inside the trailing year", () => {
+    // The bug the anniversary rule caused: dropping everything 344 days older than the newest cut
+    // the first three weeks and read 5.0000, a permanent 5.7% understatement of a real fund class
+    expect(perShareOf(WEEKLY.map((date) => dividend(date, 0.1)))).toBe("5.3000");
+  });
+
+  it("sums all 27 of a biweekly payer's payments inside the trailing year", () => {
+    // the same cut took two of these and read 2.5000, 7.4% low
+    expect(perShareOf(BIWEEKLY.map((date) => dividend(date, 0.1)))).toBe("2.7000");
   });
 
   it("counts every distribution paid inside one calendar quarter", () => {

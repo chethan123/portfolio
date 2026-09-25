@@ -10,7 +10,7 @@ import { addDays } from "./chart-range.ts";
 import { getDb, getPool, inTransaction, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
 import {
-  ANNIVERSARY_TOLERANCE_DAYS,
+  DRIFT_EXTENSION_DAYS,
   ProviderUnreachable,
   TRAILING_WINDOW_DAYS,
 } from "./price-provider.server.ts";
@@ -541,10 +541,11 @@ export async function refreshTrailingDividends(
   now: Date,
   db: Kysely<Database> = getDb(),
 ): Promise<DividendReport> {
-  // The widened window; `toProviderDividends` applies the anniversary cutoff within it.
+  // The widened bound, so the extension's events reach the parser at all; the parser derives the
+  // 365-day core from it and only falls back to the extension when the core is empty.
   const since = addDays(
     marketDateOf(now, marketTimeZone),
-    -(TRAILING_WINDOW_DAYS + ANNIVERSARY_TOLERANCE_DAYS),
+    -(TRAILING_WINDOW_DAYS + DRIFT_EXTENSION_DAYS),
   );
   const candidates = await selectDividendCandidates(db, now);
 
