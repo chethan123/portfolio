@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Form } from "react-router";
 
+import { FieldError, FormError } from "~/components/error-message";
 import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import { percentRateRule } from "~/lib/decimal-input";
 import { rateDigits } from "~/lib/format";
-import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
+import { ValidationError, formFields, refused } from "~/lib/input.server";
 import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
 
 import type { Route } from "./+types/tax";
@@ -28,10 +29,7 @@ export async function action({ request }: Route.ActionArgs) {
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      return refused(error, values);
     }
     throw error;
   }
@@ -61,11 +59,7 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
         </header>
 
         <Form method="post" className="panel-form">
-          {actionData?.formError ? (
-            <p className="form-error" role="alert">
-              {actionData.formError}
-            </p>
-          ) : null}
+          <FormError message={actionData?.formError} />
 
           <div>
             <label htmlFor="capital-gains-rate">Rate, as a percentage</label>
@@ -86,11 +80,7 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
               shape="percentage"
             />
 
-            {error && errorActive ? (
-              <p id="capital-gains-rate-error" className="field-error" role="alert">
-                {error}
-              </p>
-            ) : null}
+            {errorActive ? <FieldError id="capital-gains-rate-error" message={error} /> : null}
 
             <p id="capital-gains-rate-note" className="field-note">
               The default, 23.8%, is the 20% long-term capital gains rate plus the 3.8% net

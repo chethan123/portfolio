@@ -2333,13 +2333,12 @@ Two sources, labelled rather than blended. **From the architecture review**
 ([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
 still live in the current code:
 
-- **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
-  `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
-  keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
-  still there. Latent rather than live.
 - **Logic stranded in route module bodies**, `describe(filters)` in `holdings.tsx` among it,
   untestable where it currently sits (§9.3).
-- **`<FieldError>` is open-coded at roughly fifteen sites.**
+
+The review's §2.5 (two settings routes never rendering a form-level refusal) and §2.6 (the
+open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-round-trip.md): one
+`refused()` split, one element pair, and both routes rendering the refusal.
 
 **Found while writing this document**, not from the review:
 
@@ -2416,7 +2415,7 @@ still live in the current code:
 | `account-label.ts` | The upload picker's labels, grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
-| `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
+| `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, `refused()` — the one split of a refusal into per-field messages and the form-level one, which every action spreads its own fields onto — and the one phrase-builder the refusals that name a list share |
 | `decimal-input.ts` | The browser-safe exact-string rules shared by every typed financial field and its live interpretation: grouping, sign, scale, storage width and percentage range are decided once without floating point; commas and non-line-breaking whitespace group thousands only in threes, while the legacy leading `+` and trailing point remain valid |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
@@ -2510,6 +2509,7 @@ also export pure helpers for testing.
 | `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
 | `price-freshness.tsx` | How old this page's figures are, and the control that changes it, one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
 | `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
+| `error-message.tsx` | The refusal paragraphs' markup, once: `FieldError` (with the `id` an input's `aria-describedby` names, where it has one) and `FormError`. Browser-safe and handed a string rather than a `ValidationError`, because the `form` split happens server-side in `refused()`. `price-freshness.tsx` borrows the `form-error` class for lines that are not refusals, and `unlock.tsx` keeps its alert role on a region that exists before a refusal does; neither uses it |
 | `upload-steps.tsx` | The upload flow's step strip. Four entries, five for a file of several accounts, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
 | `upload-receipt.tsx` | The account page's `?uploaded=` receipt and each line of `/upload/done`, told one way: added/updated/removed counts and the as-of date on a current statement, or the filed-behind sentence (spec 0005 §5) on one a later statement has superseded |
 

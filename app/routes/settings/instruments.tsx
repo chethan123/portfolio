@@ -2,8 +2,9 @@ import { Form, Link } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
+import { FieldError, FormError } from "~/components/error-message";
 import { describeInstrument } from "~/lib/format";
-import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
+import { ValidationError, formFields, refused } from "~/lib/input.server";
 import { changeAlias, listAliases } from "~/lib/instrument-aliases.server";
 import { sameRawStrings } from "~/lib/raw-string";
 
@@ -40,15 +41,7 @@ export async function action({ request }: Route.ActionArgs) {
     };
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return {
-        preview: null,
-        applied: null,
-        errors: fieldErrors,
-        formError: formError ?? null,
-        values,
-      };
+      return { preview: null, applied: null, ...refused(error, values) };
     }
     throw error;
   }
@@ -184,11 +177,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
         </div>
       </header>
 
-      {actionData?.formError ? (
-        <p className="form-error" role="alert">
-          {actionData.formError}
-        </p>
-      ) : null}
+      <FormError message={actionData?.formError} />
 
       {actionData?.applied ? (
         <p className="form-note" role="status">
@@ -270,11 +259,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                                 </option>
                               ))}
                             </select>
-                            {errors?.instrumentId ? (
-                              <p className="field-error" role="alert">
-                                {errors.instrumentId}
-                              </p>
-                            ) : null}
+                            <FieldError message={errors?.instrumentId} />
                           </div>
                           <div className="record-actions">
                             <button

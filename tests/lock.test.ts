@@ -22,6 +22,7 @@ import {
   withDatabase,
 } from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
+import { refusalOf } from "./support/refusal.ts";
 import {
   NO_USER_VERIFICATION_FLAGS,
   assertionResponse,
@@ -125,16 +126,6 @@ function unrelatedPublicKeyCose(): Uint8Array {
       [-3, Buffer.from(jwk.y, "base64url")],
     ]) as Parameters<typeof isoCBOR.encode>[0],
   );
-}
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("expected the call to be refused, and it was not");
 }
 
 /** For asserting a challenge's or grant id's true byte length. */

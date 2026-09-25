@@ -1,6 +1,7 @@
 import { Form } from "react-router";
 
-import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { FieldError, FormError } from "~/components/error-message";
+import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
 import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/people.server";
 
 import type { Route } from "./+types/people";
@@ -37,16 +38,7 @@ export async function action({ request }: Route.ActionArgs) {
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-
-      return {
-        intent,
-        personId: personId ?? null,
-        errors: fieldErrors,
-        formError: formError ?? null,
-        values,
-      };
+      return { intent, personId: personId ?? null, ...refused(error, values) };
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -77,11 +69,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
         </div>
       </header>
 
-      {removalRefusal ? (
-        <p className="form-error" role="alert">
-          {removalRefusal}
-        </p>
-      ) : null}
+      <FormError message={removalRefusal} />
 
       {people.length === 0 ? (
         <p className="empty-note">Nobody is recorded yet.</p>
@@ -107,11 +95,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                         aria-invalid={errors?.name ? true : undefined}
                       />
 
-                      {errors?.name ? (
-                        <p className="field-error" role="alert">
-                          {errors.name}
-                        </p>
-                      ) : null}
+                      <FieldError message={errors?.name} />
                     </div>
 
                     <p className="record-note">
@@ -172,11 +156,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
               />
             </label>
 
-            {errorsFor("create")?.name ? (
-              <p className="field-error" role="alert">
-                {errorsFor("create")?.name}
-              </p>
-            ) : null}
+            <FieldError message={errorsFor("create")?.name} />
           </div>
 
           <button type="submit" name="intent" value="create" className="button">

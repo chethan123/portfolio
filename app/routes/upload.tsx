@@ -1,9 +1,10 @@
 import { Form, Link, redirect } from "react-router";
 
+import { FieldError, FormError } from "~/components/error-message";
 import { UploadSteps } from "~/components/upload-steps";
 import { accountPickerGroups } from "~/lib/account-label";
 import { listAccounts } from "~/lib/accounts.server";
-import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
 import {
   SEVERAL_ACCOUNTS,
   createDraft,
@@ -56,9 +57,7 @@ export async function action({ request }: Route.ActionArgs) {
     throw redirect(`/upload/${draft.id}/columns`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — client bundle must not drag `FORM_ERROR`'s `.server` module in.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      return refused(error, values);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -112,11 +111,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
               full — and nothing is recorded until it is committed there.
             </p>
 
-            {actionData?.formError ? (
-              <p className="form-error" role="alert">
-                {actionData.formError}
-              </p>
-            ) : null}
+            <FormError message={actionData?.formError} />
           </div>
 
           <Form method="post" encType="multipart/form-data" className="panel-form">
@@ -148,11 +143,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                   </option>
                 </select>
               </label>
-              {errors?.accountId ? (
-                <p className="field-error" role="alert">
-                  {errors.accountId}
-                </p>
-              ) : null}
+              <FieldError message={errors?.accountId} />
             </div>
 
             <div>
@@ -169,11 +160,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
               <p className="field-note">
                 Statements up to <span className="u-data">{maxUploadMb}</span> MB.
               </p>
-              {errors?.file ? (
-                <p className="field-error" role="alert">
-                  {errors.file}
-                </p>
-              ) : null}
+              <FieldError message={errors?.file} />
             </div>
 
             <button type="submit" className="button">

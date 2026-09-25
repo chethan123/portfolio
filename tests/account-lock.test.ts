@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { closeAccount, getAccount, withAccountLock } from "~/lib/accounts.server";
 import { setBalance } from "~/lib/balances.server";
-import { ValidationError } from "~/lib/input.server";
 import { revisePosition } from "~/lib/positions.server";
 import {
   RefusedUpload,
@@ -26,6 +25,7 @@ import {
   waitUntilBlocked,
 } from "./support/database.ts";
 import { RACE_PREFIX, clearRaces, makeFixtures, renumber } from "./support/fixtures.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { onlySection, posted } from "./support/review.ts";
 
 import type { Database } from "~/lib/db.server";
@@ -45,17 +45,6 @@ afterAll(async () => {
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 type Writer<T> = (trx: Kysely<Database>) => Promise<T>;
-
-/** The refusal a call produced, or a failure if it did not refuse. */
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the write to be refused, and it was not.");
-}
 
 /**
  * `holds` runs in one transaction and stays open; `waits` is issued in a second and has to block on

@@ -6,7 +6,6 @@ import { afterAll, describe, expect, it } from "vitest";
 import { getAccount, updateAccount } from "~/lib/accounts.server";
 import { lastRecorded } from "~/lib/balances.server";
 import { changeAlias } from "~/lib/instrument-aliases.server";
-import { ValidationError } from "~/lib/input.server";
 import { sectionKey } from "~/lib/review-form";
 import {
   RefusedUpload,
@@ -21,6 +20,7 @@ import {
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { restateDraft } from "./support/fixtures.ts";
+import { refusalOf } from "./support/refusal.ts";
 import { onlySection, posted, reviewAndRecord } from "./support/review.ts";
 
 import type { StatementMapping } from "~/lib/statement";
@@ -76,16 +76,6 @@ async function seedAliased(
   const instrument = await ctx.seedInstrument({ symbol: rawString, name: rawString });
   await ctx.seedInstrumentAlias({ instrument, rawString });
   return instrument;
-}
-
-async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
-  try {
-    await run();
-  } catch (error) {
-    if (error instanceof ValidationError) return error;
-    throw error;
-  }
-  throw new Error("Expected the commit to be refused, and it was not.");
 }
 
 /** Commits `form`, expects a stale refusal, and that the draft's accounts recorded nothing. */

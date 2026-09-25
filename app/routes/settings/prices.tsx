@@ -1,6 +1,7 @@
 import { Form } from "react-router";
 
-import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
+import { FieldError, FormError } from "~/components/error-message";
+import { ValidationError, formFields, refused } from "~/lib/input.server";
 import { backfillGaps } from "~/lib/prices.server";
 import { readRefreshCadence, saveRefreshCadence } from "~/lib/settings.server";
 
@@ -33,10 +34,7 @@ export async function action({ request }: Route.ActionArgs) {
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
-      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
-
-      return { errors: fieldErrors, formError: formError ?? null, values };
+      return refused(error, values);
     }
     throw error;
   }
@@ -66,11 +64,7 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         </header>
 
         <Form method="post" className="panel-form">
-          {actionData?.formError ? (
-            <p className="form-error" role="alert">
-              {actionData.formError}
-            </p>
-          ) : null}
+          <FormError message={actionData?.formError} />
 
           <div>
             <label htmlFor="refresh-cadence">
@@ -90,11 +84,7 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
               />
             </label>
 
-            {error ? (
-              <p className="field-error" role="alert">
-                {error}
-              </p>
-            ) : null}
+            <FieldError message={error} />
 
             <p id="refresh-cadence-note" className="field-note">
               A whole number from 1 to 1440 — the default is 15. A lower number costs more
