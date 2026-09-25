@@ -365,6 +365,18 @@ export function parseStatement(
     return value === "" ? null : value;
   };
 
+  // Account numbers only, and the whole rule for one: trimmed, never case- or zero-folded (spec
+  // 0023 decision 15), and with its line breaks taken out. A text input's value sanitization
+  // strips those (HTML Standard, the input element) while a quoted cell may hold one (RFC 4180),
+  // so a number that keeps one can never come back from a form unchanged — it would read as an
+  // edit against its own box, or as a conflict no retry resolves (#312). Both sides of the
+  // upload's mismatch check read this, so the comparison stays one of like with like; so does the
+  // router, which folds only surrounding whitespace (ADR-0015) and would otherwise match a wrapped
+  // number to nothing. Every other cell keeps its breaks and is judged on them — a date split
+  // across two lines is not a date.
+  const accountNumberCell = (cells: ReadonlyArray<string>, index: number | null): string | null =>
+    optionalCell(cells, index)?.replace(/[\r\n]/g, "") ?? null;
+
   for (let row = mapping.headerRow + 1; row < rows.length; row++) {
     const cells = rows[row] ?? [];
     const instrument = cells[instrumentIndex] ?? "";
@@ -405,7 +417,7 @@ export function parseStatement(
     const quantity = normaliseFigure(quantityCell);
 
     if (quantity.kind === "absent") {
-      const accountNumber = multiAccount ? optionalCell(cells, accountNumberIndex) : null;
+      const accountNumber = multiAccount ? accountNumberCell(cells, accountNumberIndex) : null;
       skipped.push(
         accountNumber === null ? { row, instrument } : { row, instrument, accountNumber },
       );
@@ -493,8 +505,7 @@ export function parseStatement(
       }
     }
 
-    // Number trimmed only, never case- or zero-folded (spec 0023 decision 15).
-    const accountNumber = optionalCell(cells, accountNumberIndex);
+    const accountNumber = accountNumberCell(cells, accountNumberIndex);
     const asOf = optionalCell(cells, asOfIndex);
 
     if (multiAccount) {

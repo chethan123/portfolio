@@ -511,6 +511,93 @@ describe("the open-account number index", () => {
   });
 });
 
+describe("taking line breaks out of numbers already recorded", () => {
+  /** Accounts as `values` rows of (name, number, closed_at) state them, for one owner. */
+  const numbered = (values: string) => `
+    with owner as (insert into person (name) values ('Dana Okafor') returning id)
+    insert into account
+      (name, institution, kind, owner_id, tax_treatment, external_account_number, closed_at)
+    select seeded.name, 'Schwab', 'brokerage', owner.id, 'taxable', seeded.number, seeded.closed_at
+    from owner, (values ${values}) as seeded (name, number, closed_at)
+    returning id
+  `;
+
+  /** 0018 over the accounts `seed` inserts, as an upgrade past 0015 meets them: its index built. */
+  async function foldingOver(
+    seed: string,
+    check: (
+      seeded: Array<{ id: string }>,
+      migrate: () => Promise<unknown>,
+      client: PoolClient,
+    ) => Promise<void>,
+  ): Promise<void> {
+    const migration = await readFile(
+      path.join(migrationsDirectory(), "0018_account_number_line_breaks.sql"),
+      "utf8",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const { rows } = await client.query<{ id: string }>(seed);
+      await check(rows, () => client.query(migration), client);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+    }
+  }
+
+  it("refuses to fold two open accounts onto one number, naming it and both accounts", async () => {
+    // 0015 btrims the ends only, so the index was built over both spellings and takes them.
+    await foldingOver(
+      numbered(`('Broken', E'8391-\n2245', null::timestamptz), ('Whole', '8391-2245', null)`),
+      async ([broken, whole], migrate) => {
+        await expect(migrate()).rejects.toThrow(
+          `: "8391-2245" on Broken (id ${broken?.id}), Whole (id ${whole?.id}). `,
+        );
+      },
+    );
+  });
+
+  it("stores a wrapped number on one line, and one that was only breaks as none", async () => {
+    await foldingOver(
+      numbered(`
+        ('Wrapped', E'8391-\r\n2245', null::timestamptz),
+        ('Breaks', E'\r\n', null),
+        ('Plain', 'A-1', null)
+      `),
+      async (seeded, migrate, client) => {
+        await migrate();
+        const { rows } = await client.query(
+          "select name, external_account_number from account where id = any($1) order by id",
+          [seeded.map(({ id }) => id)],
+        );
+        expect(rows).toEqual([
+          { name: "Wrapped", external_account_number: "8391-2245" },
+          { name: "Breaks", external_account_number: null },
+          { name: "Plain", external_account_number: "A-1" },
+        ]);
+      },
+    );
+  });
+
+  it("folds an open account onto a closed one's number, which the index does not cover", async () => {
+    await foldingOver(
+      numbered(`('Open', E'A-\n1', null::timestamptz), ('Retired', 'A-1', now())`),
+      async (seeded, migrate, client) => {
+        await migrate();
+        const { rows } = await client.query(
+          "select name, external_account_number from account where id = any($1) order by id",
+          [seeded.map(({ id }) => id)],
+        );
+        expect(rows).toEqual([
+          { name: "Open", external_account_number: "A-1" },
+          { name: "Retired", external_account_number: "A-1" },
+        ]);
+      },
+    );
+  });
+});
+
 describe("a draft's answers to account numbers", () => {
   /** The constraint a statement violated, or null when it ran clean. */
   async function violatedBy(statements: string): Promise<string | null> {

@@ -252,6 +252,23 @@ export async function createAccount(
   return getAccount(row.id, db);
 }
 
+// What the account-number box was drawn with, echoed back by the edit form: evidence about the
+// page the browser was shown, never authorization (#312). optionalText's shape minus the bound —
+// it has to normalise identically or a trailing space reads as an edit, and a captured number
+// longer than the visible box's 64 has to stay clearable rather than refuse under a key
+// AccountFields never draws. Absent stays undefined rather than collapsing to null: a form drawn
+// before this field existed said nothing about its box, which is not the same as saying it was
+// empty.
+const accountUpdateInput = accountInput.extend({
+  fromExternalAccountNumber: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/[\r\n]/g, ""))
+    .transform((value) => (value === "" ? null : value))
+    .nullable()
+    .optional(),
+});
+
 // Kind is the one field guarded beyond field validation: both views apply it retroactively to
 // every date, so relabelling used to let setBalance sell out a brokerage, or file assets as debt
 // with no write at all (SET-1). The two refusals below close exactly those two holes — an account
@@ -263,7 +280,7 @@ export async function updateAccount(
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
   const existing = await getAccount(id, db);
-  const input = parseInput(accountInput, raw);
+  const input = parseInput(accountUpdateInput, raw);
   await requireOwner(input.ownerId, db);
 
   // Checked against the new kind and the rows, never existing.kind — otherwise a two-hop edit
@@ -309,24 +326,95 @@ export async function updateAccount(
     }
   }
 
-  await refusingDuplicateNumber(
+  const fields = {
+    name: input.name,
+    institution: input.institution ?? "",
+    kind: input.kind,
+    owner_id: input.ownerId,
+    tax_treatment: input.taxTreatment,
+  };
+
+  // No baseline and a blank box: a form drawn before that field existed, saying nothing about
+  // what its box held. An untouched stale box and a deliberate clear post exactly the same
+  // thing, and keeping the number while answering "Saved." would report a clear that did not
+  // happen. Refused instead, so the one submission nothing can read is the one nobody claims.
+  if (
+    input.fromExternalAccountNumber === undefined &&
+    input.externalAccountNumber === null &&
+    existing.externalAccountNumber !== null
+  ) {
+    throw new ValidationError({
+      externalAccountNumber:
+        `${existing.name}'s account number is recorded as "${existing.externalAccountNumber}", ` +
+        "and this page is too old to say whether its box was cleared or drawn empty. Nothing " +
+        "was saved. Reload the account, and clear the box again to remove the number.",
+    });
+  }
+
+  const drawnWith = input.fromExternalAccountNumber ?? null;
+
+  // Box came back holding what was rendered into it: not an instruction. The column stays out of
+  // the write, so a number a commit captured while this form sat open (uploads.server.ts)
+  // survives the save (#312), and no duplicate can be minted by a write that omits the column.
+  // A submission carrying neither field reads as untouched too, which is the safe default — the
+  // refusal above has already taken the case where it isn't.
+  if (input.externalAccountNumber === drawnWith) {
+    await db.updateTable("account").set(fields).where("id", "=", existing.id).execute();
+    return getAccount(existing.id, db);
+  }
+
+  // An edit: compare-and-set on what the form was drawn with — the alias confirm's shape
+  // (ARCHITECTURE.md §7.2), not a second lock. Only that arm is the alias confirm's, though: it
+  // refuses an already-at-target change outright, where the second arm here accepts one. A save
+  // carrying no drawn-with copy compares against null, so without it an ordinary re-post of the
+  // recorded number reads as a conflict — refused once, accepted on reload. Zero rows means the
+  // column is neither value, which is the refusal.
+  const written = await refusingDuplicateNumber(
     input.externalAccountNumber,
     db,
     () =>
       db
         .updateTable("account")
-        .set({
-          name: input.name,
-          institution: input.institution ?? "",
-          kind: input.kind,
-          owner_id: input.ownerId,
-          tax_treatment: input.taxTreatment,
-          external_account_number: input.externalAccountNumber,
-        })
+        .set({ ...fields, external_account_number: input.externalAccountNumber })
         .where("id", "=", existing.id)
-        .execute(),
+        .where((eb) =>
+          eb.or(
+            [drawnWith, input.externalAccountNumber].map((value) =>
+              value === null
+                ? eb("external_account_number", "is", null)
+                : eb("external_account_number", "=", value),
+            ),
+          ),
+        )
+        .executeTakeFirst(),
     duplicateNumber,
   );
+
+  if (written.numUpdatedRows === 0n) {
+    // Re-read rather than quote `existing`: a 404 if the account went, the number now otherwise.
+    const now = await getAccount(existing.id, db);
+    const reload =
+      " Nothing was saved. Reload the account and make the change against what is recorded now.";
+    throw new ValidationError({
+      // Under the box, not the form: the route hands fieldErrors straight to AccountFields.
+      // Two situations, two sentences: a page carrying no copy was never told apart from a stale
+      // one, and naming a change that did not happen sends the reader hunting for another writer.
+      externalAccountNumber:
+        input.fromExternalAccountNumber === undefined
+          ? `${now.name}'s account number is ` +
+            (now.externalAccountNumber === null
+              ? "not recorded"
+              : `recorded as "${now.externalAccountNumber}"`) +
+            ", and this page is too old to say which number its box was drawn with." +
+            reload
+          : `${now.name}'s account number changed while this page was open — it is ` +
+            (now.externalAccountNumber === null
+              ? "not recorded any more"
+              : `now recorded as "${now.externalAccountNumber}"`) +
+            "." +
+            reload,
+    });
+  }
 
   return getAccount(existing.id, db);
 }
