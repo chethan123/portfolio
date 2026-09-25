@@ -987,8 +987,8 @@ describe("summing the trailing year of distributions", () => {
   });
 
   it("counts every distribution paid inside one calendar quarter", () => {
-    // Yahoo keys `events.dividends` by the bar bucket, not the ex-date: at `interval=3mo` these
-    // three arrive as one (SGOV returns 6 of its 12), which is why the fetch stays at `1d`
+    // Three in one quarter, all summed. The bucket collapse that makes the fetch interval matter
+    // happens in Yahoo's response, not here, so the guard for that is in tests/price-worker.ts.
     expect(
       perShareOf([
         dividend("2026-07-15", 0.4),

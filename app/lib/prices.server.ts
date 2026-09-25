@@ -417,7 +417,7 @@ export async function backfillCloses(
   return report;
 }
 
-export type DividendCandidate = {
+type DividendCandidate = {
   id: string;
   /** As stored. The adapter upper-cases it to send; nothing here rewrites it. */
   symbol: string;

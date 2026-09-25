@@ -216,7 +216,7 @@ and `RATE_CEILING` (`:81,:90,:99`) are module-private and must stay so.
     `parseInstant` refuses → `unreadable`, all-or-nothing, mirroring the split rule: a half-read
     block yields a plausible-looking wrong number
   - date each event with `marketDateOf`, keep `date > since`, apply the anniversary rule
-  - **sum in `money.ts` units first, round once** — `toUnits` each amount at `MONEY_SCALE`,
+  - **sum in `money.ts` units first, round once** — `toUnits` each amount at `EVENT_SCALE` (8), accumulate, then one `divide` down to `MONEY_SCALE`,
     accumulate as `bigint`, one `render` at the end. Per-event rounding would round twelve times
     for a monthly payer. `unadjusted()` (`:213-229`) is the precedent.
   - bound with `inRange(…, RATE_CEILING)`; over it → `unreadable`

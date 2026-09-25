@@ -51,7 +51,7 @@ const BODY_CAP_BYTES: Record<AskKind, number> = {
 /** Spec §3.5's own cap on one `/quotes` body. */
 const BATCH_SIZE = 100;
 
-/** Widens `period1` only, never the arithmetic: an event dated exactly `since` has to be in the payload for {@link toProviderDividends} to exclude it. */
+/** Widens `period1` only, never the arithmetic: it is a UTC instant against a market-date `since`. Same slack as `BACKFILL_RANGE_LEAD_DAYS`. */
 const DIVIDEND_FETCH_LEAD_DAYS = 7;
 
 /** Mirrors the worker's own `ERROR_TEXT_LIMIT` (`server/price-worker.ts`). */
@@ -169,18 +169,6 @@ function wellFormedSymbols(symbols: string[]): string[] {
 }
 
 /**
- * Raw payload or a throw, never a status literal: both callers discriminate the same missing-history
- * throw, and each names it differently (`no-history`, `no-data`).
- */
-async function askChart(
-  kind: "history" | "dividends",
-  symbol: string,
-  from: IsoDate,
-): Promise<unknown> {
-  return ask(kind, { symbol: matchKey(symbol), from });
-}
-
-/**
  * **Must not throw when built, only when called**: it is `runRefresh`'s default parameter, evaluated
  * before that function's `try`, so a throw here would reach the route's error boundary.
  */
@@ -218,7 +206,7 @@ export function socketProvider(): PriceProvider {
       marketTimeZone: string,
     ): Promise<ProviderHistory> {
       try {
-        const raw = await askChart("history", symbol, range.from);
+        const raw = await ask("history", { symbol: matchKey(symbol), from: range.from });
         return toProviderHistory(raw, range, marketTimeZone);
       } catch (error) {
         if (isMissingHistory(error)) return { status: "no-history" };
@@ -232,11 +220,10 @@ export function socketProvider(): PriceProvider {
       marketTimeZone: string,
     ): Promise<ProviderDividends> {
       try {
-        const raw = await askChart(
-          "dividends",
-          symbol,
-          addDays(since, -DIVIDEND_FETCH_LEAD_DAYS),
-        );
+        const raw = await ask("dividends", {
+          symbol: matchKey(symbol),
+          from: addDays(since, -DIVIDEND_FETCH_LEAD_DAYS),
+        });
         return toProviderDividends(raw, since, marketTimeZone);
       } catch (error) {
         // A delisted ticker answers "No data found", which is a refusal: the last measured rate is
