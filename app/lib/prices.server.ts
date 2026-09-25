@@ -425,13 +425,9 @@ type DividendCandidate = {
 
 /**
  * Next batch: **currently held** feed instruments with a symbol, at a nonzero quantity, whose rate
- * is unmeasured or due.
- * Driven from `holding_valued`, which already owns the latest-position-set rule and excludes closed
- * accounts (`0006:57`), so "no longer held" and "closed" fall out for free — where
- * {@link selectBackfillCandidates}'s `holding`/`position_set` join is "ever held", which would cost
- * a request a week forever for a position sold in 2019. Not a valuation read: `priceFreshness`
- * already reads the view from this module, in this shape (§4.2 names `valuation.server.ts` the only
- * *valuation* reader). Inner joined to `quote` so the write always lands on a row.
+ * is unmeasured or due. Reads `holding_valued` rather than the `holding`/`position_set` join
+ * {@link selectBackfillCandidates} uses — ARCHITECTURE.md §4.2 carries why that read is sanctioned
+ * and what it buys.
  *
  * `holding_valued` is one row per account x instrument, so the `groupBy` is what makes `limit` bound
  * instruments: without it an ETF held in three accounts takes three slots and is fetched three
