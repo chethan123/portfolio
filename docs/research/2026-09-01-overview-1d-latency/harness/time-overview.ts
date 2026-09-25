@@ -20,7 +20,7 @@ import { chartReach, chartSeries, type ChartScope } from "../../../../app/lib/ch
 import { chartWindow, isoDate } from "../../../../app/lib/chart-range.ts";
 import { getDb } from "../../../../app/lib/db.server.ts";
 import { ALL_OWNERS } from "../../../../app/lib/owner-filter.ts";
-import { asOfView } from "../../../../app/lib/prices.server.ts";
+import { asOfView } from "../../../../app/lib/price-freshness.server.ts";
 import {
   accountTotals,
   manualNetWorth,

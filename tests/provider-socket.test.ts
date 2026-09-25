@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderUnreachable } from "~/lib/price-provider.server";
-import { ask, socketProbe, socketProvider } from "~/lib/provider-socket.server";
+import { ask, socketProvider } from "~/lib/provider-socket.server";
 
 import * as configModule from "../server/config.ts";
 import { startWorker } from "../server/price-worker.ts";
@@ -96,23 +96,68 @@ describe("socketProvider().getQuotes", () => {
     expect(seen).toEqual([["VTI"]]);
     expect(quotes.map((quote) => quote.symbol)).toEqual(["VTI"]);
   });
+});
 
-  it("splits 101 symbols into two requests", async () => {
+describe("the one batch loop", () => {
+  it.each(["getQuotes", "probe"] as const)(
+    "splits 101 symbols into two requests of 100 and 1, and answers every one (%s)",
+    async (method) => {
+      const seen: string[][] = [];
+      await start({
+        quote: async (symbols) => {
+          seen.push(symbols);
+          return symbols.map((symbol) => ({ symbol, regularMarketPrice: 10, currency: "USD" }));
+        },
+        chart: async () => ({}),
+      });
+
+      const symbols = Array.from({ length: 101 }, (_, i) => `S${i}`);
+      const provider = socketProvider();
+
+      if (method === "getQuotes") {
+        const quotes = await provider.getQuotes(symbols);
+        expect(quotes).toHaveLength(101);
+      } else {
+        const verdicts = await provider.probe(symbols);
+        expect(verdicts.size).toBe(101);
+        for (const verdict of verdicts.values()) {
+          expect(verdict).toEqual({ status: "ok", quoteType: null });
+        }
+      }
+
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toHaveLength(100);
+      expect(seen[1]).toHaveLength(1);
+    },
+  );
+
+  it("gives quotes a 15 s budget and the probe a 10 s one", async () => {
+    await start({ quote: async () => [], chart: async () => ({}) });
+
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const provider = socketProvider();
+    await provider.getQuotes(["VTI"]);
+    await provider.probe(["VTI"]);
+    const budgets = timeoutSpy.mock.calls.map(([ms]) => ms);
+    timeoutSpy.mockRestore();
+
+    expect(budgets).toEqual([15_000, 10_000]);
+  });
+
+  it("fails getQuotes on the first failed batch and asks for no later one", async () => {
     const seen: string[][] = [];
     await start({
       quote: async (symbols) => {
         seen.push(symbols);
-        return [];
+        throw new Error("502 Bad Gateway");
       },
       chart: async () => ({}),
     });
 
     const symbols = Array.from({ length: 101 }, (_, i) => `S${i}`);
-    await socketProvider().getQuotes(symbols);
 
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).toHaveLength(100);
-    expect(seen[1]).toHaveLength(1);
+    await expect(socketProvider().getQuotes(symbols)).rejects.toThrow("502 Bad Gateway");
+    expect(seen).toHaveLength(1);
   });
 });
 
@@ -424,14 +469,14 @@ describe("ask", () => {
   });
 });
 
-describe("socketProbe", () => {
+describe("socketProvider().probe", () => {
   it("answers ok for a symbol that resolves in USD", async () => {
     await start({
       quote: async () => [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }],
       chart: async () => ({}),
     });
 
-    const verdicts = await socketProbe(["VTI"]);
+    const verdicts = await socketProvider().probe(["VTI"]);
 
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
   });
@@ -442,7 +487,7 @@ describe("socketProbe", () => {
       chart: async () => ({}),
     });
 
-    const verdicts = await socketProbe(["VOD.L"]);
+    const verdicts = await socketProvider().probe(["VOD.L"]);
 
     expect(verdicts.get("VOD.L")).toEqual({ status: "non-usd", currency: "GBP" });
   });
@@ -450,7 +495,7 @@ describe("socketProbe", () => {
   it("answers unavailable for a symbol the feed never mentions", async () => {
     await start({ quote: async () => [], chart: async () => ({}) });
 
-    const verdicts = await socketProbe(["MISTYPED"]);
+    const verdicts = await socketProvider().probe(["MISTYPED"]);
 
     expect(verdicts.get("MISTYPED")).toEqual({ status: "unavailable" });
   });
@@ -463,7 +508,7 @@ describe("socketProbe", () => {
     });
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const verdicts = await socketProbe(["VTI", "AAA/BBB"]);
+    const verdicts = await socketProvider().probe(["VTI", "AAA/BBB"]);
     warn.mockRestore();
 
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
@@ -474,7 +519,7 @@ describe("socketProbe", () => {
     "answers unavailable for every symbol, one request, when no worker is listening — and logs once",
     async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      const verdicts = await socketProbe(["VTI", "VXUS", "BND"]);
+      const verdicts = await socketProvider().probe(["VTI", "VXUS", "BND"]);
 
       // one bad batch costs every symbol its guard — the only trace is this one warn
       expect(warn).toHaveBeenCalledTimes(1);
@@ -490,28 +535,8 @@ describe("socketProbe", () => {
     },
   );
 
-  it("splits 101 symbols into two chunks, each answered on its own", async () => {
-    const seen: string[][] = [];
-    await start({
-      quote: async (symbols) => {
-        seen.push(symbols);
-        return symbols.map((symbol) => ({ symbol, regularMarketPrice: 10, currency: "USD" }));
-      },
-      chart: async () => ({}),
-    });
-
-    const symbols = Array.from({ length: 101 }, (_, i) => `S${i}`);
-    const verdicts = await socketProbe(symbols);
-
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).toHaveLength(100);
-    expect(seen[1]).toHaveLength(1);
-    expect(verdicts.get("S0")).toEqual({ status: "ok", quoteType: null });
-    expect(verdicts.get("S100")).toEqual({ status: "ok", quoteType: null });
-  });
-
   it("keeps the second chunk's verdict, non-usd included, when only the first chunk's request throws", async () => {
-    // proof socketProbe has no `break` after a failed batch — a real timeout on the last chunk couldn't pin this, so a thrown failure instead
+    // proof probe has no `break` after a failed batch — a real timeout on the last chunk couldn't pin this, so a thrown failure instead
     let call = 0;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await start({
@@ -526,7 +551,7 @@ describe("socketProbe", () => {
     });
 
     const symbols = Array.from({ length: 101 }, (_, i) => `S${i}`);
-    const verdicts = await socketProbe(symbols);
+    const verdicts = await socketProvider().probe(symbols);
     warn.mockRestore();
 
     expect(verdicts.get("S0")).toEqual({ status: "unavailable" });
@@ -537,20 +562,23 @@ describe("socketProbe", () => {
 });
 
 describe("socketProvider()'s own construction", () => {
-  it("reads no configuration until a method is actually called", async () => {
-    // .not.toThrow() alone can't tell "reads no config" from "reads it and happens not to throw" — spying on the import pins the real claim
-    const getConfigSpy = vi.spyOn(configModule, "getConfig");
+  it.each(["getQuotes", "probe"] as const)(
+    "reads no configuration until %s is actually called",
+    async (method) => {
+      // .not.toThrow() alone can't tell "reads no config" from "reads it and happens not to throw" — spying on the import pins the real claim
+      const getConfigSpy = vi.spyOn(configModule, "getConfig");
 
-    let provider: PriceProvider | undefined;
-    expect(() => {
-      provider = socketProvider();
-    }).not.toThrow();
-    expect(getConfigSpy).not.toHaveBeenCalled();
+      let provider: PriceProvider | undefined;
+      expect(() => {
+        provider = socketProvider();
+      }).not.toThrow();
+      expect(getConfigSpy).not.toHaveBeenCalled();
 
-    await start({ quote: async () => [], chart: async () => ({}) });
-    await provider!.getQuotes(["VTI"]);
-    expect(getConfigSpy).toHaveBeenCalled();
+      await start({ quote: async () => [], chart: async () => ({}) });
+      await provider![method](["VTI"]);
+      expect(getConfigSpy).toHaveBeenCalled();
 
-    getConfigSpy.mockRestore();
-  });
+      getConfigSpy.mockRestore();
+    },
+  );
 });

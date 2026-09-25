@@ -21,14 +21,16 @@ import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { refusalOf } from "./support/refusal.ts";
 
 import type { TestContext } from "./support/database.ts";
-import type { ProbeSymbols } from "~/lib/price-provider.server";
+import type { PriceProvider } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
 /** Probe answering ok for every symbol, counting calls — each call carries every symbol asked in
  * one go, so "probed once" is checked on the call list, not a count. quoteType mirrors what a
  * provider says (§4.4) — null here would pass while telling the screen everything is unclassifiable. */
-function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; calls: string[][] } {
+function okProbe(
+  quoteType: string | null = "EQUITY",
+): { probe: PriceProvider["probe"]; calls: string[][] } {
   const calls: string[][] = [];
   return {
     calls,
@@ -39,15 +41,15 @@ function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; ca
   };
 }
 
-const unavailableProbe: ProbeSymbols = async (symbols) =>
+const unavailableProbe: PriceProvider["probe"] = async (symbols) =>
   new Map(symbols.map((symbol) => [symbol, { status: "unavailable" } as const]));
 
 const foreignProbe =
-  (currency: string): ProbeSymbols =>
+  (currency: string): PriceProvider["probe"] =>
   async (symbols) =>
     new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency } as const]));
 
-const forbiddenProbe: ProbeSymbols = async (symbols) => {
+const forbiddenProbe: PriceProvider["probe"] = async (symbols) => {
   throw new Error(`The probe was called for ${symbols.join(", ")}, and this path must not probe.`);
 };
 
@@ -505,7 +507,7 @@ describe("resolveAll — the USD probe", () => {
       const { db, seedClassification } = ctx;
       const draftId = await aDraft(ctx);
       const classification = await seedClassification();
-      const probe: ProbeSymbols = async () =>
+      const probe: PriceProvider["probe"] = async () =>
         new Map([
           ["VTI", { status: "ok", quoteType: "ETF" }],
           ["MSFT", { status: "ok", quoteType: "EQUITY" }],
@@ -554,7 +556,7 @@ describe("resolveAll — the USD probe", () => {
       const { db, seedClassification } = ctx;
       const draftId = await aDraft(ctx);
       const classification = await seedClassification();
-      const probe: ProbeSymbols = async (symbols) =>
+      const probe: PriceProvider["probe"] = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
 
       const refusal = await refusalOf(() =>
@@ -587,7 +589,7 @@ describe("resolveAll — the USD probe", () => {
       const { db, seedClassification } = ctx;
       const draftId = await aDraft(ctx);
       const classification = await seedClassification();
-      const probe: ProbeSymbols = async (symbols) =>
+      const probe: PriceProvider["probe"] = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
 
       const answerFor = (priceSource: "feed" | "manual") =>
@@ -651,7 +653,7 @@ describe("resolveAll — the USD probe", () => {
       const draftId = await aDraft(ctx);
       const classification = await seedClassification();
       const calls: string[][] = [];
-      const probe: ProbeSymbols = async (symbols) => {
+      const probe: PriceProvider["probe"] = async (symbols) => {
         calls.push(symbols);
         return new Map([
           ["VTI", { status: "ok", quoteType: "ETF" }],
@@ -704,7 +706,7 @@ describe("resolveAll — the USD probe", () => {
       const draftId = await aDraft(ctx);
       // Not hypothetical — a symbol failing the worker's pattern check is dropped before the call.
       const classification = await seedClassification();
-      const silentProbe: ProbeSymbols = async () => new Map();
+      const silentProbe: PriceProvider["probe"] = async () => new Map();
 
       const resolved = await resolveAll(
         draftId,
@@ -744,7 +746,7 @@ describe("resolveAll — the USD probe", () => {
       // Zero-symbol ask over the socket is a round trip the worker refuses anyway.
       const classification = await seedClassification();
       const calls: string[][] = [];
-      const probe: ProbeSymbols = async (symbols) => {
+      const probe: PriceProvider["probe"] = async (symbols) => {
         calls.push(symbols);
         return new Map();
       };

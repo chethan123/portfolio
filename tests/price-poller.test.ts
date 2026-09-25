@@ -67,6 +67,9 @@ function fakeProvider(): PriceProvider & { asked: string[][]; askedHistory: stri
       askedHistory.push(symbol);
       return { status: "no-history" };
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 
@@ -78,6 +81,9 @@ function brokenProvider(): PriceProvider {
     },
     async getDailyCloses(): Promise<never> {
       throw new Error("429 Too Many Requests");
+    },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
     },
   };
 }

@@ -20,7 +20,7 @@ import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
 import { PriceFreshness } from "../components/price-freshness.tsx";
-import { asOfView } from "../lib/prices.server.ts";
+import { asOfView } from "../lib/price-freshness.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/income";

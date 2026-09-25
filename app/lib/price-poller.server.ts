@@ -17,8 +17,7 @@
  */
 import { getConfig } from "../../server/config.ts";
 import { isScheduledQuoteWindow } from "./market-hours.ts";
-import { socketProvider } from "./provider-socket.server.ts";
-import { runRefresh, type RefreshRun } from "./refresh.server.ts";
+import { defaultProvider, runRefresh, type RefreshRun } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
 
 import type { BackfillReport } from "./prices.server.ts";
@@ -232,13 +231,13 @@ export function pinPricePoller(build: () => PricePoller): void {
  * included, where a loader would not (`/healthz` has no `default`/`ErrorBoundary`, so its parent
  * loader never runs). No immediate poll: a crash-looping container would fetch on every boot.
  * `provider` is resolved lazily, inside the build {@link pinPricePoller} calls within its `try`, so
- * a middleware calling this on every request never lets a throw from building `socketProvider()`
+ * a middleware calling this on every request never lets a throw from building `defaultProvider()`
  * escape as an uncaught response.
  */
 export function startPricePoller(provider?: PriceProvider): void {
   pinPricePoller(() =>
     createPricePoller({
-      provider: provider ?? socketProvider(),
+      provider: provider ?? defaultProvider(),
       clock: () => new Date(),
       readCadence: readRefreshCadence,
       refresh: runRefresh,

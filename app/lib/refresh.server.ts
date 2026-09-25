@@ -1,5 +1,6 @@
 /**
- * One refresh end to end: the lock, the provider call, and the mapping to what a caller renders.
+ * One refresh end to end: the lock, the provider call, the mapping to what a caller renders, and
+ * the provider every caller takes by default.
  * The only place `withRefreshLock` wraps `refreshPrices`.
  */
 import { getConfig } from "../../server/config.ts";
@@ -38,18 +39,23 @@ export type RefreshRun =
   | { status: "busy" }
   | { status: "error" };
 
+/** The adapter every caller takes unless handed one: a provider swap is this one edit. */
+export function defaultProvider(): PriceProvider {
+  return socketProvider();
+}
+
 /**
  * Never throws, and the route depends on that: a throw out of an action replaces the whole page,
  * and an inline failure with the figures left standing is what the control promises (story 18).
  * `null` from {@link withRefreshLock} is `busy`. `error` is the lock or the database only — a
  * provider failure returns inside a `done` run (`providerFailed`, or `backfill.batchFailed`).
- * The `socketProvider()` default is a default parameter, evaluated before the `try`: building one
+ * The `defaultProvider()` default is a default parameter, evaluated before the `try`: building one
  * must never throw (`provider-socket.server.ts` keeps that constraint).
  */
 export async function runRefresh(
   { quotes }: { quotes: boolean },
   now: Date,
-  provider: PriceProvider = socketProvider(),
+  provider: PriceProvider = defaultProvider(),
 ): Promise<RefreshRun> {
   try {
     const result = await withRefreshLock(() =>

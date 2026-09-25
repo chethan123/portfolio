@@ -11,18 +11,17 @@ import { isWellFormedSymbol } from "../../server/symbol-pattern.ts";
 import {
   CurrencyRefused,
   isMissingHistory,
+  matchKey,
   probeVerdicts,
   ProviderUnreachable,
   toProviderHistory,
   toProviderQuote,
   type HistoryRange,
   type PriceProvider,
-  type ProbeSymbols,
   type ProviderHistory,
   type ProviderQuote,
   type SymbolProbe,
 } from "./price-provider.server.ts";
-import { matchKey } from "./prices.server.ts";
 import { socketRequest } from "./socket-transport.server.ts";
 
 type AskKind = "quotes" | "history";
@@ -97,7 +96,7 @@ export async function ask(
       throw new Error(`${kind} response from the worker exceeded ${cap} bytes`);
     }
     // A mid-stream reset, e.g.: not a connect failure, so never ProviderUnreachable — the caller's
-    // own retry-vs-fail-batch logic (socketProbe) must tell it apart from a listener that's simply gone.
+    // own retry-vs-fail-batch logic (probe) must tell it apart from a listener that's simply gone.
     throw failure.cause;
   }
 
@@ -159,6 +158,25 @@ function wellFormedSymbols(symbols: string[]): string[] {
   return good;
 }
 
+type QuoteBatch = { batch: string[]; fetchedAt: Date } & ({ raw: unknown } | { error: unknown });
+
+/** The one `/quotes` batch loop; `getQuotes` and `probe` each keep their own failure policy over it. */
+async function* quoteBatches(symbols: string[], budgetMs: number): AsyncGenerator<QuoteBatch> {
+  const wellFormed = wellFormedSymbols(symbols);
+  const fetchedAt = new Date();
+
+  // Sequential: pacing costs one unnoticed round trip, against a worker whose `maxConnections` is eight.
+  for (const batch of batchesOf(wellFormed)) {
+    let answer: { raw: unknown } | { error: unknown };
+    try {
+      answer = { raw: await ask("quotes", { symbols: batch }, { budgetMs }) };
+    } catch (error) {
+      answer = { error };
+    }
+    yield { batch, fetchedAt, ...answer };
+  }
+}
+
 /**
  * **Must not throw when built, only when called**: it is `runRefresh`'s default parameter, evaluated
  * before that function's `try`, so a throw here would reach the route's error boundary.
@@ -166,17 +184,12 @@ function wellFormedSymbols(symbols: string[]): string[] {
 export function socketProvider(): PriceProvider {
   return {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
-      const wellFormed = wellFormedSymbols(symbols);
-      if (wellFormed.length === 0) return [];
-
-      const fetchedAt = new Date();
       const quotes: ProviderQuote[] = [];
 
-      // Sequential: pacing costs one unnoticed round trip, against a worker whose `maxConnections` is eight.
-      for (const batch of batchesOf(wellFormed)) {
-        const raw = await ask("quotes", { symbols: batch });
+      for await (const { fetchedAt, ...answer } of quoteBatches(symbols, BUDGET_MS.quotes)) {
+        if ("error" in answer) throw answer.error;
 
-        for (const entry of Array.isArray(raw) ? raw : []) {
+        for (const entry of Array.isArray(answer.raw) ? answer.raw : []) {
           try {
             const quote = toProviderQuote(entry, fetchedAt);
             if (quote !== null) quotes.push(quote);
@@ -204,38 +217,33 @@ export function socketProvider(): PriceProvider {
         throw error;
       }
     },
+
+    /** Batches are independent: only a failed batch's symbols become `unavailable`. */
+    async probe(symbols: string[]): Promise<Map<string, SymbolProbe>> {
+      const verdicts = new Map<string, SymbolProbe>();
+
+      for await (const { batch, fetchedAt, ...answer } of quoteBatches(symbols, PROBE_BUDGET_MS)) {
+        try {
+          if ("error" in answer) throw answer.error;
+          for (const [symbol, verdict] of probeVerdicts(batch, answer.raw, fetchedAt)) {
+            verdicts.set(symbol, verdict);
+          }
+        } catch (error) {
+          // The only other trace of a lost verdict is an instrument that never prices (`docs/operating.md`).
+          console.warn(
+            `Price probe failed for a batch of ${batch.length} symbols; created anyway and priced by the next refresh:`,
+            error,
+          );
+          for (const symbol of batch) verdicts.set(symbol, { status: "unavailable" });
+        }
+      }
+
+      // A symbol the pattern refused never reached a batch: unavailable, as an unknown ticker is.
+      for (const symbol of symbols) {
+        if (!verdicts.has(symbol)) verdicts.set(symbol, { status: "unavailable" });
+      }
+
+      return verdicts;
+    },
   };
 }
-
-/**
- * Batches are independent: only a failed batch's symbols become `unavailable`. Never throws — a
- * provider failure must not block creating the instrument.
- */
-export const socketProbe: ProbeSymbols = async (symbols) => {
-  const wellFormed = wellFormedSymbols(symbols);
-  const fetchedAt = new Date();
-  const verdicts = new Map<string, SymbolProbe>();
-
-  for (const batch of batchesOf(wellFormed)) {
-    try {
-      const raw = await ask("quotes", { symbols: batch }, { budgetMs: PROBE_BUDGET_MS });
-      for (const [symbol, verdict] of probeVerdicts(batch, raw, fetchedAt)) {
-        verdicts.set(symbol, verdict);
-      }
-    } catch (error) {
-      // The only other trace of a lost verdict is an instrument that never prices (`docs/operating.md`).
-      console.warn(
-        `Price probe failed for a batch of ${batch.length} symbols; created anyway and priced by the next refresh:`,
-        error,
-      );
-      for (const symbol of batch) verdicts.set(symbol, { status: "unavailable" });
-    }
-  }
-
-  // A symbol the pattern refused never reached a batch: unavailable, as an unknown ticker is.
-  for (const symbol of symbols) {
-    if (!verdicts.has(symbol)) verdicts.set(symbol, { status: "unavailable" });
-  }
-
-  return verdicts;
-};

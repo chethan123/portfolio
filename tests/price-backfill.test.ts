@@ -501,6 +501,9 @@ function fakeProvider(
 
       return answer(symbol);
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 

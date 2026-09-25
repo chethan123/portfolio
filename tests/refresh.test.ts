@@ -38,6 +38,9 @@ function fakeProvider(quotes: ProviderQuote[] = []): PriceProvider {
     async getDailyCloses() {
       return { status: "no-history" };
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 
@@ -49,6 +52,9 @@ function brokenQuotesProvider(): PriceProvider {
     },
     async getDailyCloses() {
       return { status: "no-history" };
+    },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
     },
   };
 }

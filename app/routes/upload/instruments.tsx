@@ -16,7 +16,7 @@ import {
   resolutionScreen,
   resolveAll,
 } from "~/lib/instrument-resolution.server";
-import { socketProbe } from "~/lib/provider-socket.server";
+import { defaultProvider } from "~/lib/refresh.server";
 import { sameRawStrings } from "~/lib/raw-string";
 import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
 
@@ -100,7 +100,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     await resolveAll(
       draft.id,
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
-      { probe: socketProbe },
+      { probe: defaultProvider().probe },
     );
 
     return redirect(`/upload/${draft.id}/review${stale}`);

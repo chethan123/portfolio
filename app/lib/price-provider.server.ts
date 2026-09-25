@@ -8,7 +8,9 @@ import { z } from "zod";
 
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
-import { matchKey } from "./prices.server.ts";
+
+/** Match form only — the stored symbol stays as typed (DESIGN.md §4.3). */
+export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 
 /** One instrument's price. Only `price` is required; missing means the symbol did not resolve (§6.2). */
 export type ProviderQuote = {
@@ -52,6 +54,8 @@ export type PriceProvider = {
     range: HistoryRange,
     marketTimeZone: string,
   ): Promise<ProviderHistory>;
+  /** A verdict per symbol asked, never a throw: a failed provider must not block an instrument. */
+  probe(symbols: string[]): Promise<Map<string, SymbolProbe>>;
 };
 
 /** No answer to be had. `backfillCloses` skips the ledger: ledgering would defer a batch a day each. */
@@ -318,8 +322,6 @@ export type SymbolProbe =
     }
   | { status: "non-usd"; currency: string }
   | { status: "unavailable" };
-
-export type ProbeSymbols = (symbols: string[]) => Promise<Map<string, SymbolProbe>>;
 
 /** On raw entries, not `getQuotes`, which collapses a refusal into an absence — the probe needs it named. */
 export function probeVerdicts(
