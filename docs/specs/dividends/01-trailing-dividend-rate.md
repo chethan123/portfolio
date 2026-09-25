@@ -62,17 +62,25 @@ year** — rather than implying the sum is itself the forward figure. No new ter
   ex-date, so a coarser interval collapses every payment sharing a bucket into one.** A monthly
   payer loses distributions: SGOV, paying monthly, returns 6 events at `3mo` against 12 at `1d`.
   A quarterly payer has one payment per bucket and loses nothing — ITOT returns 4 events either
-  way — which is exactly what made `3mo` look correct during design. Use `interval: "1d"`; thirteen
-  months of daily bars is well inside the body cap, so the fine grain costs nothing worth trading
+  way — which is exactly what made `3mo` look correct during design. Use `interval: "1d"`; two years
+  of daily bars is well inside the body cap, so the fine grain costs nothing worth trading
   away for a saving that was illusory anyway.
 - `events` is a passthrough string option (`chart.schema.js:547-549`).
 - `chart()` **throws** before fetching on an unparseable `period1` or `period1 === period2`
   (`chart.js:183-196`). Our `from` is always `YYYY-MM-DD`, so this cannot fire; noted so nobody
   "fixes" it later.
+- **`period1` bounds which events come back, not just which bars.** Verified live 2026-09-25: ITOT
+  at `period1` 393 days back returns 5 dividend events, oldest 2025-09-16; at 730 days back it
+  returns 9, oldest 2024-09-25. So the range asked for decides what evidence of paying at all is
+  *available* to the parser — which is why it is a separate constant from the window summed
+  (`DIVIDEND_EVIDENCE_DAYS`, below).
 - A genuine non-payer and one nobody has attached dividend history to look identical: BRK-B (pays
   nothing) and VMFXX/SWVXX/VMRXX (money-market funds paying 4-5%, verified live 2026-09-25) all omit
   `events` entirely from a chart that still carries bars. Absence therefore cannot be read as a
   measured zero — only a *present*, readable block, even one listing no dividends, earns one.
+  **This is the reason the evidence range must be wide**: the refusal that protects a money-market
+  fund's rate would otherwise also protect the rate of a payer that stopped, whose last payment fell
+  outside a narrow `period1` and whose chart therefore arrives in the identical shape.
 
 ### The trailing window, and the drift extension
 
@@ -88,19 +96,32 @@ export const TRAILING_WINDOW_DAYS = 365;
 export const DRIFT_EXTENSION_DAYS = 21;
 ```
 
-A third, `DIVIDEND_FETCH_LEAD_DAYS = 7`, lives in `provider-socket.server.ts` — only
-`getTrailingDividend` uses it, to widen `period1`. It is not part of the arithmetic and the sweep
+A third, `DIVIDEND_EVIDENCE_DAYS = 730`, lives in `provider-socket.server.ts` — only
+`getTrailingDividend` uses it, to form `period1`. It is not part of the arithmetic and the sweep
 never sees it, so it must NOT be declared a second time in `prices.server.ts`.
 
-**Where each date is computed.** `refreshTrailingDividends` forms the **wider** bound
+**Two ranges, and they answer different questions.** The **evidence** range (`period1`, two years)
+answers *does this instrument pay at all?*; the **sum** window (`since`, 386 days, narrowed to 365 by
+the parser) answers *what did it pay this year?*. They were briefly the same range — `period1` was
+`since` less a 7-day lead — and that collapse is a bug: because `period1` also bounds which events
+Yahoo returns, an instrument that stopped paying 400 days ago had no event in the payload, arrived as
+bars with no `events` block, and was refused as `no-data` (the money-market rule above), keeping its
+last measured rate forever instead of falling to `$0`. Two years of evidence puts that final payment
+in the payload, where the sum window excludes it and the rate reads `$0`. A money-market fund has no
+events at *any* range, so it is still refused and still keeps its rate — which is the point. **Do not
+re-derive one range from the other.** The old 7-day lead existed only as slack for a UTC `period1`
+against a market-date `since`; 730 days subsumes it, so there is one constant, not two.
+
+**Where each date is computed.** `refreshTrailingDividends` forms the **wider sum** bound
 `since = addDays(marketDateOf(now, tz), -(TRAILING_WINDOW_DAYS + DRIFT_EXTENSION_DAYS))` using the
 existing `addDays` (`app/lib/chart-range.ts:94`) — do not hand-roll day arithmetic. It passes `since`
-to `getTrailingDividend`, which subtracts `DIVIDEND_FETCH_LEAD_DAYS` to form `period1` before calling
-the socket. The wider bound is what crosses the socket deliberately: the parser cannot fall back to
-events it never received. `toProviderDividends` then derives the **core** bound from it,
-`addDays(since, DRIFT_EXTENSION_DAYS)`, which is `now - 365`. Both bounds are exclusive, and both
-compare **market dates** (`marketDateOf`, as `toProviderHistory` dates its bars) rather than raw
-instants, so the edge is deterministic rather than a function of time-of-day.
+to `getTrailingDividend`, which passes it through to the parser **unchanged** and forms `period1`
+separately, as `addDays(marketDateOf(now, tz), -DIVIDEND_EVIDENCE_DAYS)`. `toProviderDividends` then
+derives the **core** bound from `since`, `addDays(since, DRIFT_EXTENSION_DAYS)`, which is `now - 365`.
+Both sum bounds are exclusive, and both compare **market dates** (`marketDateOf`, as
+`toProviderHistory` dates its bars) rather than raw instants, so the edge is deterministic rather than
+a function of time-of-day. Two years of daily bars is ~90 KB (502 bars, measured live), against
+`BODY_CAP_BYTES.dividends` of 512 KiB — the cap does not move.
 
 **The rule.**
 
@@ -144,9 +165,14 @@ that switched from annual to quarterly now keeps every payment inside its traili
 
 **Which stopped payers read $0.** A still-trading instrument that stopped paying empties the core
 year, falls out of the extension too, and reads `$0` 386 days after its last payment — about three
-weeks later than a plain window would. A *delisted* one returns no bars or "No data found", which is
-`no-data` — a refusal, so the last measured rate is kept, not zeroed. Those are different outcomes
-on purpose.
+weeks later than a plain window would. **This depends on the two-year evidence range**: the zero is
+measured from a present `events` block whose only payment the sum window then drops, and it is
+reachable only because `period1` reaches back past that payment. Narrow `period1` to the summed year
+and the same instrument arrives as bars with no `events` block — the money-market shape — and is
+refused instead, keeping its old rate indefinitely. A payer that stopped more than two years ago does
+keep its last rate, and that is the deliberate edge of the range. A *delisted* one returns no bars or
+"No data found", which is `no-data` — a refusal, so the last measured rate is kept, not zeroed. Those
+are different outcomes on purpose.
 
 ### Shape
 
@@ -263,9 +289,9 @@ case to different literals (`no-history` and `no-data`). Each `get*` parses and 
 
 - `DIVIDEND_BATCH_SIZE = 5`, `DIVIDEND_STALE_DAYS = 7`, `DIVIDEND_RETRY_DAYS = 1`. All numbers of
   days, not interval strings — the bounds are computed in JS and bound as `Date`s.
-  `DIVIDEND_FETCH_LEAD_DAYS = 7` (`period1` = `since` less the lead) lives in
-  `provider-socket.server.ts`, not here — see above; it is a socket-side widening, not a bound this
-  module computes. The migration's `interval '7 days'` is the same 7 and is kept in step by hand.
+  `DIVIDEND_EVIDENCE_DAYS = 730` (`period1` = today's market date less it) lives in
+  `provider-socket.server.ts`, not here — see above; it is the socket-side evidence range, not a
+  bound this module computes, and it is never derived from `since`. The migration's `interval '7 days'` is the same 7 and is kept in step by hand.
 - `DIVIDEND_OUTCOMES` as a `const` object mirroring `BACKFILL_OUTCOMES` (`:91-98`), kept in step by
   hand with the migration's check constraint
 - `selectDividendCandidates(db, now)` — **currently held** feed instruments with a symbol, at a
@@ -492,7 +518,8 @@ historical and is not edited.
       permanent understatement, the regression that must not come back
 - [ ] Twelve monthly payments all sum
 - [ ] A thirteenth monthly payment, in the extension rather than the year, is ignored
-- [ ] A payer whose last distribution was 400 days ago reads `0.0000`
+- [ ] A payer whose last distribution was 400 days ago, that payment being the only one in the
+      events block, reads `0.0000` — the case the two-year evidence range exists to make reachable
 - [ ] A split inside the window changes nothing — no ratio is applied
 - [ ] `date` arriving as an ISO string parses (the socket JSON case), not only as a `Date`
 - [ ] One unparseable event refuses the whole response rather than summing what parsed
@@ -515,6 +542,8 @@ historical and is not edited.
 
 **The worker and the socket**
 - [ ] `/dividends` calls `chart` with `interval "1d"` and `events "div"`, and `/history` still calls it with `"1d"`/`"split"`
+- [ ] `getTrailingDividend` asks for a `from` **two years** back — the evidence range — while the
+      `since` it hands the parser stays the 386-day sum bound
 - [ ] The 21st `/dividends` call inside 60 seconds is refused `429`, and its budget is independent of `/history`'s
 - [ ] A "No data found" throw from the provider becomes `no-data`, not a thrown refresh
 - [ ] A non-USD chart becomes the `non_usd` outcome

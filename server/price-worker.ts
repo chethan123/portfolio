@@ -62,7 +62,9 @@ const chartBodySchema = z.object({
  * `events.dividends` by the bar bucket, not the ex-date, so a coarser interval collapses every
  * payment sharing a bucket into one — `interval=3mo` returns 6 of SGOV's 12 monthly distributions
  * where `1d` returns all 12. A quarterly payer has one per bucket and loses nothing, which is what
- * makes the coarse interval look safe. Thirteen months of daily bars is ~40 KB, well inside the cap.
+ * makes the coarse interval look safe. Two years of daily bars — the evidence range
+ * `DIVIDEND_EVIDENCE_DAYS` asks for (`app/lib/provider-socket.server.ts`) — is ~90 KB, well inside
+ * the cap.
  */
 const CHART_REQUESTS = {
   history: { interval: "1d", events: "split" },

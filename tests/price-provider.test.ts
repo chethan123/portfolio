@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { addDays } from "~/lib/chart-range";
+import { marketDateOf } from "~/lib/market-hours";
 import {
   CurrencyRefused,
   probeVerdicts,
@@ -893,6 +894,15 @@ describe("asking the worker for one symbol's history", () => {
 // derives its 365-day core from it — 2025-09-25 — and only falls back to this one when that is empty.
 const SINCE = "2025-09-04";
 
+// The evidence range `getTrailingDividend` opens instead: two years from today's market date, so a
+// payer that stopped inside the last two years still has its final payment in the payload. It is a
+// different question from the 386-day bound above, which is what the payload is then summed over.
+const TODAY = marketDateOf(new Date(), NEW_YORK);
+const EVIDENCE_FROM = addDays(TODAY, -730);
+
+const daysBack = (date: string): number =>
+  Math.round((Date.parse(`${TODAY}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86_400_000);
+
 // One bar, because a chart with none is a delisted ticker rather than a non-payer.
 const A_BAR = [bar("2026-09-22", 100)];
 
@@ -979,8 +989,9 @@ describe("summing the trailing year of distributions", () => {
   });
 
   it("reads a zero for a payer whose last distribution was 400 days ago, past the extension too", () => {
-    // still trading, stopped paying: the trailing year is empty and so is the extension it falls
-    // back to, so the zero is measured rather than assumed — 386 days after the last payment (§14)
+    // still trading, stopped paying: the two-year evidence range is what puts that last payment in
+    // the payload at all, so the events block is present and the zero is measured rather than
+    // assumed — the trailing year is empty and so is the extension it falls back to (§14)
     expect(perShareOf([dividend("2025-08-21", 1)])).toBe("0.0000");
   });
 
@@ -1193,9 +1204,7 @@ describe("summing the trailing year of distributions", () => {
 });
 
 describe("asking the worker for one symbol's distributions", () => {
-  it("asks for daily bars and dividend events, over a period1 widened past the window", async () => {
-    // widened by the fetch lead only: an event dated exactly `since` has to be in the payload for
-    // the parser to be the thing that excludes it
+  it("asks for daily bars and dividend events, over a period1 two years back", async () => {
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
 
     await start(
@@ -1208,9 +1217,30 @@ describe("asking the worker for one symbol's distributions", () => {
     const result = await socketProvider().getTrailingDividend(" itot ", SINCE, NEW_YORK);
 
     expect(seen).toEqual([
-      { symbol: "ITOT", options: { period1: "2025-08-28", interval: "1d", events: "div" } },
+      { symbol: "ITOT", options: { period1: EVIDENCE_FROM, interval: "1d", events: "div" } },
     ]);
     expect(result).toEqual({ status: "ok", perShare: "1.5000" });
+  });
+
+  it("asks over two years of events while `since` still bounds the year that is summed", async () => {
+    // the two ranges answer different questions: Yahoo returns only the events inside `period1`, so
+    // a range that barely covered the summed year would leave a payer that stopped 400 days ago with
+    // bars and no events block — a refusal keeping its last rate, indistinguishable from VMFXX
+    const seen: ChartRequest[] = [];
+
+    await start(
+      clientCharting(async (_symbol, options) => {
+        seen.push(options);
+        // one payment, 400 days old: in the payload because of the evidence range, out of the sum
+        return chartOf({ dividends: [dividend("2025-08-21", 1)], quotes: A_BAR });
+      }),
+    );
+
+    const result = await socketProvider().getTrailingDividend("STOPPED", SINCE, NEW_YORK);
+
+    // two years of evidence, not the 393 days the summed year needs
+    expect(daysBack(seen[0]?.period1 ?? TODAY)).toBe(730);
+    expect(result).toEqual({ status: "ok", perShare: "0.0000" });
   });
 
   it("answers no-data for the error a delisted symbol throws, so the last rate is kept", async () => {
