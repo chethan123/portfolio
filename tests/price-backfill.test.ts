@@ -505,6 +505,9 @@ function fakeProvider(
     async getTrailingDividend() {
       return { status: "no-data" };
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 

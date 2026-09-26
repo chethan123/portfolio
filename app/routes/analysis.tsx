@@ -22,7 +22,7 @@ import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import { PriceFreshness } from "../components/price-freshness.tsx";
-import { asOfView } from "../lib/prices.server.ts";
+import { asOfView } from "../lib/price-freshness.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/analysis";

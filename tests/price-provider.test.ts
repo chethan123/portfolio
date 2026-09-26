@@ -16,7 +16,7 @@ import {
   type HistoryRange,
   type ProviderDividends,
 } from "~/lib/price-provider.server";
-import { socketProbe, socketProvider } from "~/lib/provider-socket.server";
+import { socketProvider } from "~/lib/provider-socket.server";
 
 import { startWorker } from "../server/price-worker.ts";
 
@@ -355,107 +355,11 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
       ]),
     );
   });
-});
 
-describe("probing symbols at creation time", () => {
-  // `chart` exists only so the fake satisfies YahooClient's shape — socketProbe never calls it
-  const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>): YahooClient => ({
-    quote,
-    chart: () => {
-      throw new Error("not used in these tests");
-    },
-  });
+  it("leaves the asked symbol unavailable for an entry toProviderQuote does not recognise", () => {
+    const verdicts = probeVerdicts(["VTI"], [{ nothing: "useful" }], FETCHED_AT);
 
-  it("answers ok for a symbol that resolves in USD", async () => {
-    await start(
-      clientAnswering(async () => [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }]),
-    );
-
-    const verdicts = await socketProbe(["VTI"]);
-
-    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
-  });
-
-  it("carries what the provider calls the instrument, for the row it creates", async () => {
-    await start(
-      clientAnswering(async () => [
-        { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" },
-      ]),
-    );
-
-    const verdicts = await socketProbe(["VTI"]);
-
-    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: "ETF" });
-  });
-
-  it("carries the provider's currency when the quote is not in USD", async () => {
-    // must not flatten to "unavailable" — can't be built on getQuotes, where a refusal is just an absent quote
-    await start(
-      clientAnswering(async () => [{ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" }]),
-    );
-
-    const verdicts = await socketProbe(["VOD.L"]);
-
-    expect(verdicts.get("VOD.L")).toEqual({ status: "non-usd", currency: "GBP" });
-  });
-
-  it("answers unavailable for a symbol the provider does not know", async () => {
-    await start(clientAnswering(async () => []));
-
-    const verdicts = await socketProbe(["MISTYPED"]);
-
-    expect(verdicts.get("MISTYPED")).toEqual({ status: "unavailable" });
-  });
-
-  it("answers unavailable for every symbol asked rather than throwing when the provider fails", async () => {
-    // provider error/timeout must not block creation (0004) — probe never throws
-    await start(
-      clientAnswering(async () => {
-        throw new Error("socket hang up");
-      }),
-    );
-
-    const verdicts = await socketProbe(["VTI", "VXUS"]);
-
-    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
-    expect(verdicts.get("VXUS")).toEqual({ status: "unavailable" });
-  });
-
-  it("answers unavailable for a payload that is not even a list", async () => {
-    await start(clientAnswering(async () => ({ quotes: [] })));
-
-    const verdicts = await socketProbe(["VTI"]);
-
-    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
-  });
-
-  it("answers unavailable for an entry it does not recognise", async () => {
-    await start(clientAnswering(async () => [{ nothing: "useful" }]));
-
-    const verdicts = await socketProbe(["VTI"]);
-
-    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
-  });
-
-  it("costs one call carrying every symbol asked", async () => {
-    const calls: string[][] = [];
-    await start(
-      clientAnswering(async (symbols) => {
-        calls.push(symbols);
-        return [
-          { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" },
-          { symbol: "VXUS", regularMarketPrice: 60.2, currency: "USD" },
-          { symbol: "BND", regularMarketPrice: 72.1, currency: "USD" },
-        ];
-      }),
-    );
-
-    const verdicts = await socketProbe(["VTI", "VXUS", "BND"]);
-
-    expect(calls).toEqual([["VTI", "VXUS", "BND"]]);
-    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
-    expect(verdicts.get("VXUS")).toEqual({ status: "ok", quoteType: null });
-    expect(verdicts.get("BND")).toEqual({ status: "ok", quoteType: null });
+    expect(verdicts).toEqual(new Map([["VTI", { status: "unavailable" }]]));
   });
 });
 

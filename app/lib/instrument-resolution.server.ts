@@ -8,7 +8,7 @@ import { getDb, inTransaction, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError } from "./input.server.ts";
 import { foldLots } from "./statement.ts";
 
-import type { ProbeSymbols } from "./price-provider.server.ts";
+import type { PriceProvider } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
 import type { AssetClass } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
@@ -200,7 +200,7 @@ export type ResolvedAlias = {
 
 // probe is required, not defaulted, so production can't reach the network by omission; tests stub it.
 export type ResolutionDeps = {
-  probe: ProbeSymbols;
+  probe: PriceProvider["probe"];
 };
 
 type CreatePlan = {
@@ -458,7 +458,7 @@ export async function resolveAll(
   ];
 
   // A manual-only submission (the common case) makes no provider call at all, by construction.
-  const verdicts: Awaited<ReturnType<ProbeSymbols>> =
+  const verdicts: Awaited<ReturnType<PriceProvider["probe"]>> =
     feedSymbols.length > 0 ? await deps.probe(feedSymbols) : new Map();
 
   for (const [index, plan] of plans.entries()) {

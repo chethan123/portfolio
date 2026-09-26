@@ -8,11 +8,12 @@ import { sql } from "kysely";
 
 import { addDays } from "./chart-range.ts";
 import { getDb, getPool, inTransaction, type Database } from "./db.server.ts";
-import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
+import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import {
   DRIFT_EXTENSION_DAYS,
   ProviderUnreachable,
   TRAILING_WINDOW_DAYS,
+  matchKey,
 } from "./price-provider.server.ts";
 import type {
   HistoryRange,
@@ -683,9 +684,6 @@ function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> 
   return map;
 }
 
-/** Match form only — the stored symbol stays as typed (§4.3). */
-export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
-
 /**
  * Fetch every feed instrument's price and store it. One transaction — not for atomicity against
  * readers (`holding_valued` tolerates a half-priced portfolio) but so a crash midway cannot leave
@@ -1012,40 +1010,4 @@ async function writeBackfillAttempt(
       error: attempt.error,
     })
     .execute();
-}
-
-/** Oldest `as_of` among priced holdings (§11): the newest hides one failing for a week. */
-export async function priceFreshness(
-  db: Kysely<Database> = getDb(),
-): Promise<{ oldest: Date | null; stale: number; priced: number }> {
-  const row = await db
-    .selectFrom("holding_valued")
-    .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
-    // `fixed` would pin `oldest` to the install timestamp forever.
-    .where("holding_valued.price_source", "=", "feed")
-    .select([
-      sql<Date | null>`min(quote.as_of)`.as("oldest"),
-      sql<string>`count(distinct holding_valued.instrument_id) filter (where holding_valued.is_stale)`.as(
-        "stale",
-      ),
-      sql<string>`count(distinct holding_valued.instrument_id)`.as("priced"),
-    ])
-    .executeTakeFirst();
-
-  return {
-    oldest: row?.oldest ?? null,
-    // Cardinalities, not money — `Number` is safe here.
-    stale: Number(row?.stale ?? 0),
-    priced: Number(row?.priced ?? 0),
-  };
-}
-
-/** The as-of caption in one place — every screen must answer it the same way. */
-export async function asOfView(
-  marketTimeZone: string,
-  db: Kysely<Database> = getDb(),
-): Promise<{ stamp: string | null; stale: number }> {
-  const { oldest, stale } = await priceFreshness(db);
-
-  return { stamp: oldest === null ? null : marketStampOf(oldest, marketTimeZone), stale };
 }

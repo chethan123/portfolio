@@ -2,7 +2,8 @@
 import { sql } from "kysely";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-import { refreshQuotes, priceFreshness } from "~/lib/prices.server";
+import { priceFreshness } from "~/lib/price-freshness.server";
+import { refreshQuotes } from "~/lib/prices.server";
 import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -29,6 +30,9 @@ function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[
     async getTrailingDividend() {
       return { status: "no-data" };
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 
@@ -42,6 +46,9 @@ function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
     },
     async getTrailingDividend(): Promise<never> {
       throw new Error(message);
+    },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
     },
   };
 }

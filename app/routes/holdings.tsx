@@ -64,7 +64,7 @@ import type { DeltaDirection } from "~/lib/money";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import { PriceFreshness, type FreshnessView } from "../components/price-freshness.tsx";
-import { asOfView } from "../lib/prices.server.ts";
+import { asOfView } from "../lib/price-freshness.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/holdings";

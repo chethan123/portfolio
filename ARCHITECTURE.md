@@ -106,7 +106,7 @@ is reached four ways, over three worker routes against two Yahoo endpoints: the 
 *chart* fetch, the last two made on the same refresh (ADR-0011) but through separate worker routes —
 `/history` and `/dividends`, each with its own body cap and rate limiter — though both call Yahoo's
 single chart endpoint, all three off the request path entirely,
-and `socketProbe`, a currency check over every symbol one submission creates, run *inside* the form
+and `probe`, a currency check over every symbol one submission creates, run *inside* the form
 submission that creates them (§6.1). The last is the only place a third party can make a person wait.
 All four go through the one interface in §7.5,
 precisely because the endpoint is unofficial and expected to break. **Google** is the `gate`
@@ -417,9 +417,10 @@ table with a single grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1022` (`priceFreshness`) selects from `holding_valued`, not to value anything,
-  but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
-  'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
+- `price-freshness.server.ts` (`priceFreshness`; `asOfView`, which every screen's as-of line goes
+  through, renders it) selects from `holding_valued`, not to value anything, but to scope the "as of" line to
+  instruments held in an open account, filtered to `price_source = 'feed'`. It reads `quote.as_of`
+  and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectDividendCandidates`) selects ids, a symbol and a stamp from
   `holding_valued`, not to value anything; it computes no money either. It takes no `OwnerFilter` for
   the same reason the backfill bullet below gives — a sweep candidate is a fact about the instance's
@@ -1185,7 +1186,7 @@ sequenceDiagram
     IR->>IR: validate ALL, collect field-level refusals
     Note right of IR: Nothing is written unless everything<br/>passes: a refusal must re-render the<br/>same list of questions it was asked.
     alt creating a feed instrument
-        IR->>W: socketProbe(every new feed symbol) over the unix socket
+        IR->>W: probe(every new feed symbol) over the unix socket
         W->>Y: one quote call for the batch
         Y-->>W: raw quotes
         W-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
@@ -1497,7 +1498,8 @@ view, which is the honest answer and the one the coverage counts are built to re
 **The freshness line reports the *oldest* `as_of`, not the newest.** A portfolio where ninety-nine
 instruments updated a second ago and one has been failing for a week would report itself current under
 a newest-first reading, which is exactly the "silently showing yesterday's net worth as though it
-were live" failure this application refuses. Two more properties of `priceFreshness` are load-bearing:
+were live" failure this application refuses. Two more properties of `priceFreshness`
+(`price-freshness.server.ts`) are load-bearing:
 
 - It excludes `fixed` and `manual` sources. Every bank and loan account holds the seeded `USD` row,
   whose `as_of` is written once at install; without that filter the "as of" line would be pinned to
@@ -1894,12 +1896,13 @@ hand right after any change to the host's engine or container runtime.
         │    getQuotes(symbols: string[]): Promise<ProviderQuote[]>                                      │
         │    getDailyCloses(symbol: string, range, tz: string): Promise<History>                         │
         │    getTrailingDividend(symbol: string, since: IsoDate, tz: string): Promise<ProviderDividends> │
+        │    probe(symbols: string[]): Promise<Map<string, SymbolProbe>>                                 │
         └───────────────────────┬────────────────────────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
         socketProvider()               the tests' fake
-        dials the worker's socket      implements all three and nothing else;
-        (provider-socket.server.ts:175) no test reaches the network
+        dials the worker's socket      implements all four and nothing else;
+                                       no test reaches the network
 ```
 
 One seam, two implementations either side of a process boundary, not the two boxes above, which are
@@ -1914,7 +1917,7 @@ is an unofficial client for an endpoint Yahoo never published, with no SLA. What
 is that swapping it is a day's work, which is only true while `server/yahoo-client.ts` is the sole
 importer of the library (ARCHITECTURE.md §4.2's single-site table), reached only from `worker` since
 [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moved the app behind the unix socket:
-`socketProvider()` above never imports the library at all. Both methods are required, not optional: a
+`socketProvider()` above never imports the library at all. All four are required, not optional: a
 provider that cannot answer history is not this application's provider, and an optional method would
 let a batch be skipped with nothing saying so. Two tests (`tests/yahoo-client.test.ts:66`, `:81`) pin
 the static-versus-instance shape the client depends on: `yahoo-finance2`'s default export is the
@@ -1932,11 +1935,11 @@ These conversions happen at this boundary and nowhere else:
   would be one more place to forget.
 - **The payload is parsed through Zod**, so a shape change is a refusal rather than a `NaN`.
 - **The currency guard.** A non-USD quote is refused. `getQuotes` turns that into an *absent* quote,
-  because a refresh must not lose ninety-nine prices over one foreign listing. `socketProbe`, used at
-  instrument creation, returns it *named* per symbol, because there the caller is a person creating
-  instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
-  the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
-  before a figure is read.
+  because a refresh must not lose ninety-nine prices over one foreign listing. `probe`
+  (`socketProvider().probe`), used at instrument creation, returns it *named* per symbol, because
+  there the caller is a person creating instruments, and collapsing "a currency we refuse" into "the
+  provider had a bad day" would destroy the one distinction they can act on. `getDailyCloses`
+  refuses a non-USD history the same way, before a figure is read.
 - **The split un-adjust**, on history only. The feed restates closes through later splits while a
   statement records shares as held on the day, so each close is multiplied back by the ratio of every
   split later than it. It happens *here*, at the seam, on `money.ts`'s `BigInt` units with one
@@ -2418,14 +2421,15 @@ open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-r
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping, scoped by institution or, null, by the multi-account draft alone (ADR-0015) |
 | `statement-routing.server.ts` | The multi-account upload's one matcher (spec 0023, ADR-0015): `routeStatement`, pure, takes a clean multi-account parse, the open and closed accounts, and the draft's answers, and groups rows by the open account whose recorded number matches, a recorded number always outranking an answer. Groups come out in ascending account id, the commit's lock order. Every step after columns reads its groups; nothing downstream re-matches |
 | `review-form.ts` | The review form's one key scheme, drawn and verified (specs 0024 §5, 0028): `sectionKey` and `reviewedFields` for the page and the tests, and `verifyBinding`, the pure comparison the commit makes once under its locks, with the reason order. Browser-safe: types only from `.server` modules |
-| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, the backfill and the dividend sweep: each one's candidate query, its batch, its ledger where it has one, and the composition every refresh runs |
-| `price-provider.server.ts` | The provider interface, all three methods, and the symbol probe. The methods include the raw entry a quote hands on for the archive, attached past every refusal, the split un-adjust a history goes through, and the trailing-year sum a dividend rate goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
-| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above, never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below. This module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
+| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the backfill and the dividend sweep: each one's candidate query, its batch, its ledger where it has one, and the composition every refresh runs |
+| `price-freshness.server.ts` | The as-of line every screen shows: `priceFreshness` (oldest feed quote among held instruments, and how many are stale) and `asOfView`, its one rendering. Reads `holding_valued` and `quote`, never writes (§4.2) |
+| `price-provider.server.ts` | The provider interface, its four methods and `matchKey`, and `probeVerdicts`, the pure verdicts `probe` answers with. The methods include the raw entry a quote hands on for the archive, attached past every refusal, the split un-adjust a history goes through, and the trailing-year sum a dividend rate goes through. The library itself is reached through `server/yahoo-client.ts`, its only importer |
+| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` implements all four methods, `getQuotes` and `probe` over one batch loop, dialing the worker's unix socket and handing its raw JSON to this module's own conversions above, never touching `yahoo-finance2` itself. The adapter `defaultProvider()` returns, as the app's default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md). `ask`'s own byte-level socket mechanics now live in `socket-transport.server.ts`, below. This module keeps every provider-specific behaviour: the budgets, the caps, and the `ProviderUnreachable`/error-text mapping |
 | `socket-transport.server.ts` | The unix-socket transport `ask` (above) and `worker-reachability.server.ts` (below) share (spec price-health/02), extracted rather than hand-copied, because a second copy of its settle-once guard, byte-cap, `connect`-errno branch, deadline branch and close-before-`end` guard is where a probe silently regains the hang it exists to detect. Returns a discriminated success/failure and knows no operator-facing wording; every caller's own errors are still its own |
 | `worker-reachability.server.ts` | `GET /healthz`'s `pricing.worker` key (spec price-health/02): a bounded (500 ms whole-exchange), cached (5 s), single-flight check that this app process's own read-only mount reaches the worker's listener, never Yahoo and never a quote/history admission. Deliberately memoises, unlike `provider-socket.server.ts` above; `createWorkerHealthProbe()` is the test seam, the module-level `workerHealthProbe` the one instance the app calls |
 | `price-health.ts` | `GET /healthz`'s `pricing.scheduler`, `pricing.quotes` and `pricing.ok` (spec price-health/03): the whole derivation from a flattened `PollerSnapshot` plus a `WorkerReachability` to the completed contract, table-shaped and tested without Postgres, timers or `globalThis`. Plain `.ts`, no database, no clock read (`now` is always a parameter): `price-poller.server.ts` imports its types, never the reverse, since this module ships to the browser |
 | `health-response.ts` | `GET /healthz`'s body and status in one pure function, so the four database × worker cases are testable without a route, a mock or the process-wide pool (spec price-health/02). The single site of the rule the whole slice rests on: `pricing` never gates the HTTP status, and only `database` and `migrations` do |
-| `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
+| `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. `defaultProvider()` is the one place a provider is named by default, for the poller, a refresh and the instruments step |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs. `createPricePoller` builds it as an instance (clock, cadence read, refresh and log injected, its `tick()` promise the completion signal); `startPricePoller` pins one on `globalThis` (spec 0025). The instance also carries `GET /healthz`'s scheduler and quote state (spec price-health/03): `lastTickStartedAt`, stamped by every tick and by whatever arms the timer, and `lastObservation`, the last tick that saw a provider outcome. Both are read out defensively by its `snapshot()`, through `readPollerSnapshot`, and turned into the published categories by `price-health.ts` |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward under the account lock (§7.2) |
 | `balances.server.ts` | Setting a single-position balance, inside the account lock (§7.2): the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |

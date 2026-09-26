@@ -70,6 +70,9 @@ function fakeProvider(): PriceProvider & { asked: string[][]; askedHistory: stri
     async getTrailingDividend() {
       return { status: "no-data" };
     },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
+    },
   };
 }
 
@@ -84,6 +87,9 @@ function brokenProvider(): PriceProvider {
     },
     async getTrailingDividend(): Promise<never> {
       throw new Error("429 Too Many Requests");
+    },
+    async probe() {
+      throw new Error("This provider is never asked to probe.");
     },
   };
 }

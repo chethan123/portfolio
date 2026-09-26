@@ -57,7 +57,7 @@ import { accountHoldings, accountTotal, type AccountKind } from "~/lib/valuation
 import { getConfig } from "../../server/config.ts";
 
 import { PriceFreshness } from "../components/price-freshness.tsx";
-import { asOfView } from "../lib/prices.server.ts";
+import { asOfView } from "../lib/price-freshness.server.ts";
 
 import type { Route } from "./+types/account";
 
