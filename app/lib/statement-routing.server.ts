@@ -57,14 +57,30 @@ export type RoutingProblem = {
   message: string;
 };
 
-export type RoutedStatement = {
-  accounts: RoutedAccount[]; // ascending id: the commit's lock order
-  problems: RoutingProblem[];
-  // Numbers no account records, first-line order: the accounts step's questions, answered or not.
-  unknownNumbers: string[];
-  // Those answered skip, first-line order: rows no account receives.
-  skippedNumbers: string[];
+export type NumberQuestion = {
+  number: string;
+  lines: number; // rows naming it, quantity-less ones included
+  instruments: string[]; // distinct, trimmed, first-line order
+  answer: string | null | undefined; // the draft's: an account id, null skips, undefined none
+  stale: string | null; // the stale-answer sentence, when the answer no longer holds
 };
+
+// questions: every number no account records, answered or not, first-line order, on both arms
+// that have them (the accounts screen shows the answers standing on a revisit).
+export type RoutedStatement =
+  | { step: "columns"; problems: RoutingProblem[] }
+  | {
+      step: "accounts";
+      problems: RoutingProblem[]; // the ones asking again
+      unanswered: string[]; // numbers still owed an answer, first-line order
+      questions: NumberQuestion[];
+    }
+  | {
+      step: "routed";
+      accounts: RoutedAccount[]; // ascending id: the commit's lock order
+      questions: NumberQuestion[];
+      skippedNumbers: string[];
+    };
 
 // Decision 15: exact once trimmed. Every writer trims, and stores a blank as null; not relied on.
 export function recordedNumber(account: RoutableAccount): string | null {
@@ -242,5 +258,44 @@ export function routeStatement(
     });
   }
 
-  return { accounts, problems, unknownNumbers, skippedNumbers };
+  const questions = unknownNumbers.map((number): NumberQuestion => {
+    const positions = parsed.positions.filter((position) => position.accountNumber === number);
+    const combined = parsed.combined.filter((entry) => entry.accountNumber === number);
+    const lines =
+      positions.reduce(
+        (sum, position) =>
+          sum + (combined.find((entry) => entry.instrument === position.instrument)?.rowCount ?? 1),
+        0,
+      ) + parsed.skipped.filter((row) => row.accountNumber === number).length;
+    const stale = problems.find(
+      (problem) => problem.kind === "stale-answer" && problem.accountNumber === number,
+    );
+
+    return {
+      number,
+      lines,
+      instruments: [...new Set(positions.map((position) => position.instrument.trim()))],
+      answer: answers.get(number),
+      stale: stale?.message ?? null,
+    };
+  });
+
+  // Every number skipped is undone by answering one; a file with no position row only by remapping.
+  const asksAgain = (problem: RoutingProblem) =>
+    problem.kind === "unanswered" ||
+    problem.kind === "stale-answer" ||
+    (problem.kind === "nothing-to-record" && unknownNumbers.length > 0);
+
+  const columnsProblems = problems.filter((problem) => !asksAgain(problem));
+  if (columnsProblems.length > 0) return { step: "columns", problems: columnsProblems };
+  if (problems.length > 0) {
+    const owed = new Set(problems.map((problem) => problem.accountNumber));
+    return {
+      step: "accounts",
+      problems,
+      unanswered: unknownNumbers.filter((number) => owed.has(number)),
+      questions,
+    };
+  }
+  return { step: "routed", accounts, questions, skippedNumbers };
 }

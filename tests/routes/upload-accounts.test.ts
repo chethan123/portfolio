@@ -15,7 +15,7 @@ import {
 import { reviewedFields } from "~/lib/review-form";
 import { STALE_REVIEW_MESSAGE, rememberMapping } from "~/lib/uploads.server";
 
-import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { closeTestDatabase, scansOf, withDatabase } from "../support/database.ts";
 import { renumber } from "../support/fixtures.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, post, redirectTo } from "../support/routes.ts";
@@ -197,6 +197,20 @@ describe("answering the accounts step", () => {
         { account_number: MORTGAGE, account_id: null },
         { account_number: ROTH, account_id: roth.id },
       ]);
+    }),
+  );
+
+  it(
+    "reads the draft's answers once, taking its next step from the routing it wrote (spec 0030 §4)",
+    withDatabase(async (ctx) => {
+      const { roth } = await seedHousehold(ctx);
+      const draftId = await stage(ctx);
+      const before = await scansOf("upload_draft_account_answer", ctx.db);
+
+      await redirectTo(() => answer(draftId, answers(roth.id, "skip")));
+
+      // One routingInputs select, and the write's delete.
+      expect((await scansOf("upload_draft_account_answer", ctx.db)) - before).toBe(2);
     }),
   );
 
