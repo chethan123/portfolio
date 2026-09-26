@@ -10,6 +10,7 @@ import {
   routeStatement,
   type OpenAccount,
   type RoutableAccount,
+  type RoutedAccount,
   type RoutedStatement,
 } from "~/lib/statement-routing.server";
 
@@ -83,7 +84,16 @@ const unnumbered = (account: OpenAccount): OpenAccount => ({
   externalAccountNumber: null,
 });
 
-const holdings = ({ accounts }: RoutedStatement) =>
+// Narrows to one arm, failing the test on any other.
+const arm = <Step extends RoutedStatement["step"]>(
+  routed: RoutedStatement,
+  step: Step,
+): Extract<RoutedStatement, { step: Step }> => {
+  expect(routed.step).toBe(step);
+  return routed as Extract<RoutedStatement, { step: Step }>;
+};
+
+const holdings = ({ accounts }: { accounts: RoutedAccount[] }) =>
   accounts.map((account) => [
     account.accountId,
     account.accountNumber,
@@ -92,15 +102,17 @@ const holdings = ({ accounts }: RoutedStatement) =>
 
 describe("an unknown number (decision 2)", () => {
   it("routes by the draft's answer, and a skip answer drops the number's rows", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, unnumbered(roth), unnumbered(mortgage)],
-      answers: [
-        ["Z98-765432", "100"],
-        ["0045501234", null],
-      ],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, unnumbered(roth), unnumbered(mortgage)],
+        answers: [
+          ["Z98-765432", "100"],
+          ["0045501234", null],
+        ],
+      }),
+      "routed",
+    );
 
-    expect(routed.problems).toEqual([]);
     expect(holdings(routed)).toEqual([
       ["10", "Z12-345678", [["VTI", "120.000"], ["AAPL", "50.000"]]],
       ["100", "Z98-765432", [["VTI", "40.500"], ["FXAIX", "84.512"]]],
@@ -113,26 +125,33 @@ describe("an unknown number (decision 2)", () => {
     const answers: Array<[string, string | null]> = [["0045501234", null]];
 
     expect(
-      route(spreadsheetRows, spreadsheet, {
-        open: [individual, roth, unnumbered(mortgage)],
-        answers,
-      }).skippedNumbers,
+      arm(
+        route(spreadsheetRows, spreadsheet, {
+          open: [individual, roth, unnumbered(mortgage)],
+          answers,
+        }),
+        "routed",
+      ).skippedNumbers,
     ).toEqual(["0045501234"]);
     // Recorded number outranks the answer: its rows route, so nothing is skipped.
     expect(
-      route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage], answers })
-        .skippedNumbers,
+      arm(
+        route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage], answers }),
+        "routed",
+      ).skippedNumbers,
     ).toEqual([]);
   });
 
   it("routes by a recorded number and ignores an answer for it", () => {
     const joint: OpenAccount = { ...unnumbered(individual), id: "20", name: "Joint brokerage" };
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, roth, mortgage, joint],
-      answers: [["Z98-765432", "20"]],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, roth, mortgage, joint],
+        answers: [["Z98-765432", "20"]],
+      }),
+      "routed",
+    );
 
-    expect(routed.problems).toEqual([]);
     expect(routed.accounts.map((account) => [account.accountId, account.answered])).toEqual([
       ["9", false],
       ["10", false],
@@ -141,16 +160,18 @@ describe("an unknown number (decision 2)", () => {
   });
 
   it("reports an answer as stale once its account records a number or is closed", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, { ...roth, externalAccountNumber: "Z77-000000" }],
-      closed: [{ id: "30", name: "Old mortgage", externalAccountNumber: null }],
-      answers: [
-        ["Z98-765432", "100"],
-        ["0045501234", "30"],
-      ],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, { ...roth, externalAccountNumber: "Z77-000000" }],
+        closed: [{ id: "30", name: "Old mortgage", externalAccountNumber: null }],
+        answers: [
+          ["Z98-765432", "100"],
+          ["0045501234", "30"],
+        ],
+      }),
+      "accounts",
+    );
 
-    expect(holdings(routed).map(([id]) => id)).toEqual(["10"]);
     expect(routed.problems).toEqual([
       {
         kind: "stale-answer",
@@ -174,11 +195,13 @@ describe("an unknown number (decision 2)", () => {
   });
 
   it("reports each number neither recorded nor answered, at its first line", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, unnumbered(roth), unnumbered(mortgage)],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, unnumbered(roth), unnumbered(mortgage)],
+      }),
+      "accounts",
+    );
 
-    expect(holdings(routed).map(([id]) => id)).toEqual(["10"]);
     expect(
       routed.problems.map((problem) => [problem.kind, problem.accountNumber, problem.row]),
     ).toEqual([
@@ -187,28 +210,31 @@ describe("an unknown number (decision 2)", () => {
     ]);
   });
 
-  it("lists every number no account records as a question, answered or not, leaving out a closed-only one", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [unnumbered(individual), unnumbered(roth)],
-      closed: [{ id: "3", name: "Old mortgage", externalAccountNumber: "0045501234" }],
-      answers: [["Z98-765432", "100"]],
-    });
+  it("lists every number no account records as a question, answered or not, leaving out a recorded one", () => {
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [unnumbered(individual), unnumbered(roth), mortgage],
+        answers: [["Z98-765432", "100"]],
+      }),
+      "accounts",
+    );
 
-    // The closed-only number is the file's refusal, not the accounts step's question.
-    expect(routed.unknownNumbers).toEqual(["Z12-345678", "Z98-765432"]);
+    expect(routed.questions.map(({ number }) => number)).toEqual(["Z12-345678", "Z98-765432"]);
   });
 
   it("reports nothing to record when every number is skipped", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [unnumbered(individual)],
-      answers: [
-        ["Z12-345678", null],
-        ["Z98-765432", null],
-        ["0045501234", null],
-      ],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [unnumbered(individual)],
+        answers: [
+          ["Z12-345678", null],
+          ["Z98-765432", null],
+          ["0045501234", null],
+        ],
+      }),
+      "accounts",
+    );
 
-    expect(routed.accounts).toEqual([]);
     expect(routed.problems).toEqual([
       {
         kind: "nothing-to-record",
@@ -222,15 +248,17 @@ describe("an unknown number (decision 2)", () => {
   });
 
   it("refuses one account given to two numbers (decision 12)", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, unnumbered(roth)],
-      answers: [
-        ["Z98-765432", "100"],
-        ["0045501234", "100"],
-      ],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, unnumbered(roth)],
+        answers: [
+          ["Z98-765432", "100"],
+          ["0045501234", "100"],
+        ],
+      }),
+      "accounts",
+    );
 
-    expect(holdings(routed).map(([id]) => id)).toEqual(["10"]);
     expect(routed.problems.map((problem) => [problem.kind, problem.accountNumber])).toEqual([
       ["stale-answer", "Z98-765432"],
       ["stale-answer", "0045501234"],
@@ -260,13 +288,15 @@ describe("owedAsPositive (decision 6)", () => {
   };
 
   it("negates only rows routed to an owed account, its combined entries and weighted basis included", () => {
-    const routed = route(
-      rows,
-      { ...inline, owedAsPositive: true, columns: { ...inline.columns, costBasis: "Basis" } },
-      { open: [loan, brokerage] },
+    const routed = arm(
+      route(
+        rows,
+        { ...inline, owedAsPositive: true, columns: { ...inline.columns, costBasis: "Basis" } },
+        { open: [loan, brokerage] },
+      ),
+      "routed",
     );
 
-    expect(routed.problems).toEqual([]);
     const [owed, held] = routed.accounts;
 
     // (10×100 + 30×200) = 7000, in 10^-12 units, flipped with the quantity
@@ -288,7 +318,10 @@ describe("owedAsPositive (decision 6)", () => {
   });
 
   it("negates nothing when the box is unticked, a liability's rows included", () => {
-    const routed = route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage] });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage] }),
+      "routed",
+    );
 
     expect(routed.accounts[0]?.positions.map((position) => position.quantity)).toEqual([
       "312450.00",
@@ -307,9 +340,11 @@ describe("the as-of date (decision 8)", () => {
   const ira: OpenAccount = { id: "6", name: "IRA", externalAccountNumber: "B2", kind: "ira" };
 
   it("resolves each account's date from its own rows", () => {
-    const routed = route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage] });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, { open: [individual, roth, mortgage] }),
+      "routed",
+    );
 
-    expect(routed.problems).toEqual([]);
     expect(routed.accounts.map((account) => [account.accountId, account.asOfDate])).toEqual([
       ["9", "2026-07-15"],
       ["10", "2026-07-31"],
@@ -318,18 +353,21 @@ describe("the as-of date (decision 8)", () => {
   });
 
   it("refuses rows of one account disagreeing on the date, naming the account, and a skipped number's dates refuse nothing", () => {
-    const routed = route(
-      [
-        ["Account", "Symbol", "Qty", "As Of"],
-        ["A1", "VTI", "1", "2026-07-31"],
-        ["B2", "VTI", "1", "06/30/2026"],
-        ["A1", "BND", "1", "2026-06-30"],
-        ["B2", "BND", "1", "2026-06-30"],
-        ["C3", "VTI", "1", "2026-05-31"],
-        ["C3", "BND", "1", "not a date"],
-      ],
-      dated,
-      { open: [joint, ira], answers: [["C3", null]] },
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty", "As Of"],
+          ["A1", "VTI", "1", "2026-07-31"],
+          ["B2", "VTI", "1", "06/30/2026"],
+          ["A1", "BND", "1", "2026-06-30"],
+          ["B2", "BND", "1", "2026-06-30"],
+          ["C3", "VTI", "1", "2026-05-31"],
+          ["C3", "BND", "1", "not a date"],
+        ],
+        dated,
+        { open: [joint, ira], answers: [["C3", null]] },
+      ),
+      "columns",
     );
 
     expect(routed.problems).toEqual([
@@ -343,20 +381,19 @@ describe("the as-of date (decision 8)", () => {
           '"2026-06-30" on line 4 — and a statement is a photograph of one day.',
       },
     ]);
-    expect(routed.accounts.map((account) => [account.accountId, account.asOfDate])).toEqual([
-      ["5", null],
-      ["6", "2026-06-30"],
-    ]);
   });
 
   it("refuses an as-of cell that is not a date, naming the account", () => {
-    const routed = route(
-      [
-        ["Account", "Symbol", "Qty", "As Of"],
-        ["A1", "VTI", "1", "July 31, 2026"],
-      ],
-      dated,
-      { open: [joint] },
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty", "As Of"],
+          ["A1", "VTI", "1", "July 31, 2026"],
+        ],
+        dated,
+        { open: [joint] },
+      ),
+      "columns",
     );
 
     expect(routed.problems).toEqual([
@@ -368,13 +405,15 @@ describe("the as-of date (decision 8)", () => {
   });
 
   it("leaves every account's date null when the column is unmapped, so one typed date applies", () => {
-    const routed = route(
-      spreadsheetRows,
-      { ...spreadsheet, columns: { ...spreadsheet.columns, asOf: null } },
-      { open: [individual, roth, mortgage] },
+    const routed = arm(
+      route(
+        spreadsheetRows,
+        { ...spreadsheet, columns: { ...spreadsheet.columns, asOf: null } },
+        { open: [individual, roth, mortgage] },
+      ),
+      "routed",
     );
 
-    expect(routed.problems).toEqual([]);
     expect(routed.accounts.map((account) => account.asOfDate)).toEqual([null, null, null]);
   });
 });
@@ -382,7 +421,7 @@ describe("the as-of date (decision 8)", () => {
 describe("a blank account number (decision 13)", () => {
   it("refuses the file, listing each blank line with its instrument", () => {
     const { rows } = readCsv(fixture("multi-account-blank-number.csv"));
-    const routed = route(rows, spreadsheet, { open: [individual, mortgage] });
+    const routed = arm(route(rows, spreadsheet, { open: [individual, mortgage] }), "columns");
 
     expect(routed.problems).toEqual([
       {
@@ -396,15 +435,18 @@ describe("a blank account number (decision 13)", () => {
       },
     ]);
 
-    const twice = route(
-      [
-        ["Account", "Symbol", "Qty"],
-        ["", "VTI", "1"],
-        ["B1", "BND", "1"],
-        [" ", "VXUS", "2"],
-      ],
-      inline,
-      { open: [{ ...individual, externalAccountNumber: "B1" }] },
+    const twice = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty"],
+          ["", "VTI", "1"],
+          ["B1", "BND", "1"],
+          [" ", "VXUS", "2"],
+        ],
+        inline,
+        { open: [{ ...individual, externalAccountNumber: "B1" }] },
+      ),
+      "columns",
     );
     expect(twice.problems[0]?.message).toBe(
       'Lines 2 ("VTI") and 4 ("VXUS") have no account number, and a file of several accounts ' +
@@ -415,13 +457,15 @@ describe("a blank account number (decision 13)", () => {
 
 describe("a number recorded on a closed account (decision 14)", () => {
   it("refuses a number recorded only on a closed account, naming the account", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, roth],
-      closed: [{ id: "3", name: "Old mortgage", externalAccountNumber: "0045501234" }],
-      answers: [["0045501234", null]],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, roth],
+        closed: [{ id: "3", name: "Old mortgage", externalAccountNumber: "0045501234" }],
+        answers: [["0045501234", null]],
+      }),
+      "columns",
+    );
 
-    expect(holdings(routed).map(([id]) => id)).toEqual(["10", "100"]);
     expect(routed.problems).toEqual([
       {
         kind: "closed-number",
@@ -436,12 +480,14 @@ describe("a number recorded on a closed account (decision 14)", () => {
   });
 
   it("routes a number recorded on both a closed and an open account to the open one", () => {
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [individual, roth, mortgage],
-      closed: [{ id: "2", name: "Old Roth IRA", externalAccountNumber: "Z98-765432" }],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, roth, mortgage],
+        closed: [{ id: "2", name: "Old Roth IRA", externalAccountNumber: "Z98-765432" }],
+      }),
+      "routed",
+    );
 
-    expect(routed.problems).toEqual([]);
     expect(holdings(routed).map(([id, number]) => [id, number])).toEqual([
       ["9", "0045501234"],
       ["10", "Z12-345678"],
@@ -452,24 +498,26 @@ describe("a number recorded on a closed account (decision 14)", () => {
 
 describe("matching (decision 15)", () => {
   it("matches exactly once trimmed, never folding case or leading zeros", () => {
-    const routed = route(
-      [
-        ["Account", "Symbol", "Qty"],
-        ["Z12-345678", "VTI", "1"],
-        ["z98-765432", "BND", "1"],
-        ["123456", "VXUS", "1"],
-      ],
-      inline,
-      {
-        open: [
-          { ...individual, externalAccountNumber: "  Z12-345678 " },
-          roth,
-          { ...mortgage, id: "15", externalAccountNumber: "00123456" },
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty"],
+          ["Z12-345678", "VTI", "1"],
+          ["z98-765432", "BND", "1"],
+          ["123456", "VXUS", "1"],
         ],
-      },
+        inline,
+        {
+          open: [
+            { ...individual, externalAccountNumber: "  Z12-345678 " },
+            roth,
+            { ...mortgage, id: "15", externalAccountNumber: "00123456" },
+          ],
+        },
+      ),
+      "accounts",
     );
 
-    expect(holdings(routed)).toEqual([["10", "Z12-345678", [["VTI", "1"]]]]);
     expect(routed.problems.map((problem) => [problem.kind, problem.accountNumber])).toEqual([
       ["unanswered", "z98-765432"],
       ["unanswered", "123456"],
@@ -484,21 +532,23 @@ describe("matching (decision 15)", () => {
   });
 
   it("refuses a number two open accounts record once trimmed, naming both and routing its rows to neither", () => {
-    const routed = route(
-      [
-        ["Account", "Symbol", "Qty"],
-        ["A-1", "VTI", "1"],
-      ],
-      inline,
-      {
-        open: [
-          { ...roth, externalAccountNumber: " A-1" },
-          { ...mortgage, externalAccountNumber: "A-1" },
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty"],
+          ["A-1", "VTI", "1"],
         ],
-      },
+        inline,
+        {
+          open: [
+            { ...roth, externalAccountNumber: " A-1" },
+            { ...mortgage, externalAccountNumber: "A-1" },
+          ],
+        },
+      ),
+      "columns",
     );
 
-    expect(routed.accounts).toEqual([]);
     expect(routed.problems).toEqual([
       {
         kind: "shared-number",
@@ -521,26 +571,31 @@ describe("the groups", () => {
       externalAccountNumber: "S-0001",
       kind: "bank",
     };
-    const routed = route(spreadsheetRows, spreadsheet, {
-      open: [savings, individual, roth, mortgage, unnumbered({ ...roth, id: "2" })],
-    });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [savings, individual, roth, mortgage, unnumbered({ ...roth, id: "2" })],
+      }),
+      "routed",
+    );
 
-    expect(routed.problems).toEqual([]);
     expect(routed.accounts.map((account) => account.accountId)).not.toContain("1");
     expect(routed.accounts.map((account) => account.accountId)).not.toContain("2");
   });
 
   it("gives each account the skipped lines its number states, leaving the rest to the file", () => {
-    const routed = route(
-      [
-        ["Account", "Symbol", "Qty"],
-        ["Z12-345678", "VTI", "10"],
-        ["Z12-345678", "CASH", "--"],
-        ["Z98-765432", "FXAIX", "1"],
-        ["", "Total", "--"],
-      ],
-      inline,
-      { open: [individual, roth] },
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty"],
+          ["Z12-345678", "VTI", "10"],
+          ["Z12-345678", "CASH", "--"],
+          ["Z98-765432", "FXAIX", "1"],
+          ["", "Total", "--"],
+        ],
+        inline,
+        { open: [individual, roth] },
+      ),
+      "routed",
     );
 
     expect(routed.accounts.map((account) => [account.accountId, account.skipped])).toEqual([
@@ -551,8 +606,190 @@ describe("the groups", () => {
 
   it("comes out in ascending account id order, so 9 precedes 10 and 100", () => {
     // file order and text order both give 10, 100, 9; the commit locks in this order
-    const routed = route(spreadsheetRows, spreadsheet, { open: [roth, individual, mortgage] });
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, { open: [roth, individual, mortgage] }),
+      "routed",
+    );
 
     expect(routed.accounts.map((account) => account.accountId)).toEqual(["9", "10", "100"]);
+  });
+});
+
+describe("the step each problem belongs to (spec 0030)", () => {
+  const dated = { ...inline, columns: { ...inline.columns, asOf: "As Of" } };
+  const a1: OpenAccount = { ...individual, externalAccountNumber: "A1" };
+  const oldMortgage = { id: "30", name: "Old mortgage", externalAccountNumber: "0045501234" };
+
+  it.each([
+    [
+      "blank-number",
+      "columns",
+      "",
+      () =>
+        route(
+          [
+            ["Account", "Symbol", "Qty"],
+            ["", "VTI", "1"],
+            ["A1", "BND", "1"],
+          ],
+          inline,
+          { open: [a1] },
+        ),
+    ],
+    [
+      "shared-number",
+      "columns",
+      "",
+      () =>
+        route(
+          [
+            ["Account", "Symbol", "Qty"],
+            ["A1", "VTI", "1"],
+          ],
+          inline,
+          { open: [a1, { ...roth, externalAccountNumber: "A1" }] },
+        ),
+    ],
+    [
+      "closed-number",
+      "columns",
+      "",
+      () =>
+        route(spreadsheetRows, spreadsheet, { open: [individual, roth], closed: [oldMortgage] }),
+    ],
+    [
+      "unanswered",
+      "accounts",
+      "",
+      () =>
+        route(spreadsheetRows, spreadsheet, { open: [individual, roth, unnumbered(mortgage)] }),
+    ],
+    [
+      "stale-answer",
+      "accounts",
+      "",
+      () =>
+        route(spreadsheetRows, spreadsheet, {
+          open: [individual, roth],
+          closed: [{ ...oldMortgage, externalAccountNumber: null }],
+          answers: [["0045501234", "30"]],
+        }),
+    ],
+    [
+      "as-of",
+      "columns",
+      "",
+      () =>
+        route(
+          [
+            ["Account", "Symbol", "Qty", "As Of"],
+            ["A1", "VTI", "1", "2026-07-31"],
+            ["A1", "BND", "1", "2026-06-30"],
+          ],
+          dated,
+          { open: [a1] },
+        ),
+    ],
+    [
+      "nothing-to-record",
+      "accounts",
+      " when every number is skipped",
+      () =>
+        route(spreadsheetRows, spreadsheet, {
+          open: [unnumbered(individual)],
+          answers: [
+            ["Z12-345678", null],
+            ["Z98-765432", null],
+            ["0045501234", null],
+          ],
+        }),
+    ],
+    [
+      "nothing-to-record",
+      "columns",
+      " when no row states a position",
+      () =>
+        route(
+          [
+            ["Account", "Symbol", "Qty"],
+            ["A1", "CASH", "--"],
+          ],
+          inline,
+          { open: [a1] },
+        ),
+    ],
+  ] as const)("puts %s on the %s step%s", (kind, step, _when, routed) => {
+    expect(arm(routed(), step).problems.map((problem) => problem.kind)).toEqual([kind]);
+  });
+
+  it("puts a file with both a columns and an accounts problem on the columns step, with only the columns one", () => {
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, unnumbered(roth)],
+        closed: [oldMortgage],
+      }),
+      "columns",
+    );
+
+    expect(routed.problems.map((problem) => [problem.kind, problem.accountNumber])).toEqual([
+      ["closed-number", "0045501234"],
+    ]);
+  });
+
+  it("owes answers in first-line order, a stale number on an earlier line before an unanswered one", () => {
+    const routed = arm(
+      route(spreadsheetRows, spreadsheet, {
+        open: [individual, { ...roth, externalAccountNumber: "Z77-000000" }],
+        answers: [["Z98-765432", "100"]],
+      }),
+      "accounts",
+    );
+
+    expect(routed.unanswered).toEqual(["Z98-765432", "0045501234"]);
+  });
+
+  it("asks each unknown number with its lines, trimmed instruments, standing answer and stale sentence", () => {
+    const routed = arm(
+      route(
+        [
+          ["Account", "Symbol", "Qty"],
+          ["A1", "VTI", "10"],
+          ["B2", "BND", "5"],
+          ["A1", "VTI", "5"],
+          ["A1", "CASH", "--"],
+          ["C3", "VXUS", "1"],
+          ["D4", "VTI", "1"],
+          ["A1", " BND ", "2"],
+          ["D4", "VTI", "3"],
+        ],
+        inline,
+        {
+          open: [unnumbered(individual), roth],
+          closed: [{ ...oldMortgage, externalAccountNumber: null }],
+          answers: [
+            ["A1", "10"],
+            ["B2", null],
+            ["D4", "30"],
+          ],
+        },
+      ),
+      "accounts",
+    );
+
+    expect(routed.questions).toEqual([
+      // two VTI rows combined, one BND, one skipped CASH
+      { number: "A1", lines: 4, instruments: ["VTI", "BND"], answer: "10", stale: null },
+      { number: "B2", lines: 1, instruments: ["BND"], answer: null, stale: null },
+      { number: "C3", lines: 1, instruments: ["VXUS"], answer: undefined, stale: null },
+      {
+        number: "D4",
+        lines: 2,
+        instruments: ["VTI"],
+        answer: "30",
+        stale:
+          'This upload gave account number "D4" to Old mortgage, which is closed. Choose again ' +
+          "for it.",
+      },
+    ]);
   });
 });

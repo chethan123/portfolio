@@ -26,7 +26,7 @@ import {
 } from "./accounts.server.ts";
 import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
-import { readCsv } from "./csv.ts";
+import { readCsv, type CsvRead } from "./csv.ts";
 import { couldBeId } from "./database-id.ts";
 import {
   getDb,
@@ -54,6 +54,7 @@ import { foldLots, parseStatement, statementMapping } from "./statement.ts";
 import {
   recordedNumber,
   routeStatement,
+  type NumberQuestion,
   type RoutedAccount,
   type RoutedStatement,
   type RoutingProblem,
@@ -364,24 +365,6 @@ async function routeDraft(
   return routeStatement(parsed, mapping, await routingInputs(draftId, db));
 }
 
-// By the step that owns each: an answer missing or gone stale, or every unknown number skipped,
-// is the accounts step's; blank, shared or closed-only numbers and disagreeing dates are the
-// file's.
-function refusalsByStep(routing: RoutedStatement): {
-  columns: RoutingProblem[];
-  accounts: RoutingProblem[];
-} {
-  const asksAgain = (problem: RoutingProblem) =>
-    problem.kind === "unanswered" ||
-    problem.kind === "stale-answer" ||
-    (problem.kind === "nothing-to-record" && routing.unknownNumbers.length > 0);
-
-  return {
-    columns: routing.problems.filter((problem) => !asksAgain(problem)),
-    accounts: routing.problems.filter(asksAgain),
-  };
-}
-
 // A multi-account mapping for a draft with no account, a single-account one otherwise: the other
 // kind would be routed, or not, against the wrong accounts and remembered in the wrong scope.
 function fitsDraft(mapping: StatementMapping, draft: UploadDraft): boolean {
@@ -427,9 +410,9 @@ export async function rememberMapping(
 
   let asksAccounts = false;
   if (parsed.multiAccount === true) {
-    const refused = refusalsByStep(await routeDraft(parsed, mapping, draft.id, db));
-    if (refused.columns.length > 0) return { problems: refused.columns };
-    asksAccounts = refused.accounts.length > 0;
+    const routing = await routeDraft(parsed, mapping, draft.id, db);
+    if (routing.step === "columns") return { problems: routing.problems };
+    asksAccounts = routing.step === "accounts";
   }
 
   // Every string in the file, a multi-account one's across all its accounts, a skipped number's
@@ -498,19 +481,27 @@ export type DraftParse =
       skippedNumbers: string[];
     };
 
+export type DraftFile = CsvRead & { savedMapping: StatementMapping | null };
+
+// Saved mapping forces its recorded delimiter, so a re-read can't disagree with the original sniff.
+export function draftFile(draft: UploadDraft): DraftFile {
+  const saved = statementMapping.safeParse(draft.mapping);
+  const savedMapping = saved.success ? saved.data : null;
+  return { ...readCsv(draft.bytes, savedMapping?.delimiter), savedMapping };
+}
+
 // The draft's file under its saved mapping, or the columns step's problems.
 function savedParse(
   draft: UploadDraft,
+  { rows, savedMapping }: DraftFile,
 ): { mapping: StatementMapping; parsed: ParsedStatement } | { problems: ParseProblem[] } {
-  const saved = statementMapping.safeParse(draft.mapping);
-  if (!saved.success || !fitsDraft(saved.data, draft)) return { problems: [] };
+  if (savedMapping === null || !fitsDraft(savedMapping, draft)) return { problems: [] };
 
-  const { rows } = readCsv(draft.bytes, saved.data.delimiter);
-  const parsed = parseStatement(rows, saved.data);
+  const parsed = parseStatement(rows, savedMapping);
 
   // A saved mapping only lands after a clean parse, so problems mean it predates a rule — remap.
   if (parsed.problems.length > 0) return { problems: parsed.problems };
-  return { mapping: saved.data, parsed };
+  return { mapping: savedMapping, parsed };
 }
 
 // The saved parse, and a multi-account draft's routing over the accounts and answers as they are
@@ -522,11 +513,12 @@ type DraftRead = {
   routing: { inputs: DraftRouting; statement: RoutedStatement } | null;
 };
 
-async function readDraft(
+async function routedRead(
   draft: UploadDraft,
+  file: DraftFile,
   db: Kysely<Database>,
 ): Promise<DraftRead | { problems: ParseProblem[] }> {
-  const saved = savedParse(draft);
+  const saved = savedParse(draft, file);
   if ("problems" in saved) return saved;
   const { mapping, parsed } = saved;
   if (parsed.multiAccount !== true) return { mapping, parsed, routing: null };
@@ -546,17 +538,10 @@ async function stepOf(
   let skippedNumbers: string[] = [];
   if (routing !== null) {
     const { statement } = routing;
-    const refused = refusalsByStep(statement);
-    if (refused.columns.length > 0) return { step: "columns", problems: refused.columns };
-    if (refused.accounts.length > 0) {
-      const owed = new Set(refused.accounts.map((problem) => problem.accountNumber));
-      return {
-        step: "accounts",
-        unanswered: statement.unknownNumbers.filter((number) => owed.has(number)),
-      };
-    }
+    if (statement.step === "columns") return { step: "columns", problems: statement.problems };
+    if (statement.step === "accounts") return { step: "accounts", unanswered: statement.unanswered };
     routed = statement.accounts;
-    accountsSkipped = statement.unknownNumbers.length === 0;
+    accountsSkipped = statement.questions.length === 0;
     skippedNumbers = statement.skippedNumbers;
   }
 
@@ -572,13 +557,22 @@ async function stepOf(
   return { step: null, parsed, mapping, routed, accountsSkipped, skippedNumbers };
 }
 
+// The one read a request takes its result from: the file as the columns step shows it, and the step.
+export async function readDraft(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<{ file: DraftFile; parse: DraftParse }> {
+  const file = draftFile(draft);
+  const read = await routedRead(draft, file, db);
+  if ("problems" in read) return { file, parse: { step: "columns", problems: read.problems } };
+  return { file, parse: await stepOf(read, draft, db) };
+}
+
 export async function parseDraft(
   draft: UploadDraft,
   db: Kysely<Database> = getDb(),
 ): Promise<DraftParse> {
-  const read = await readDraft(draft, db);
-  if ("problems" in read) return { step: "columns", problems: read.problems };
-  return stepOf(read, draft, db);
+  return (await readDraft(draft, db)).parse;
 }
 
 export type BlockedDraft = {
@@ -634,17 +628,13 @@ export class DraftNotReadyError extends Error {
 // /upload/:id/accounts's skip choice (spec 0023 decision 2); any other value names an account.
 export const SKIP_NUMBER = "skip";
 
-export type AccountQuestion = {
-  number: string;
-  lines: number; // rows naming it, quantity-less ones included
-  instruments: string[]; // distinct, trimmed, first-line order
+export type AccountQuestion = Omit<NumberQuestion, "answer"> & {
   // The draft's answer in the form's terms: an account id, SKIP_NUMBER, or "" for none or stale.
   answer: string;
-  stale: string | null; // the router's sentence
 };
 
 export type AccountsScreen = {
-  // parseDraft's, from the read the questions come from, so the route's redirect agrees with them.
+  // stepOf's, over the read the questions come from, so the route's redirect agrees with them.
   step: DraftParse["step"];
   questions: AccountQuestion[];
   choices: PickerGroup[]; // grouped as /upload's picker
@@ -667,69 +657,26 @@ function boundedNumber(number: string): { number: string | null } | { refusal: s
   };
 }
 
-type NumberQuestions = {
-  mapping: StatementMapping;
-  parsed: MultiAccountStatement;
-  inputs: DraftRouting;
-  routing: RoutedStatement;
-};
-
-// Null when this step has nothing to ask yet: a single-account draft, or columns still owed.
-async function numberQuestions(
-  draft: UploadDraft,
-  db: Kysely<Database>,
-): Promise<NumberQuestions | null> {
-  const read = await readDraft(draft, db);
-  if ("problems" in read || read.routing === null || read.parsed.multiAccount !== true) {
-    return null;
-  }
-  const { inputs, statement } = read.routing;
-  if (refusalsByStep(statement).columns.length > 0) return null;
-
-  return { mapping: read.mapping, parsed: read.parsed, inputs, routing: statement };
-}
-
 // Every number no account records, answered or not, so a revisit shows the answers standing.
 export async function accountsScreen(
   draft: UploadDraft,
   db: Kysely<Database> = getDb(),
 ): Promise<AccountsScreen> {
-  const read = await readDraft(draft, db);
+  const read = await routedRead(draft, draftFile(draft), db);
   if ("problems" in read) return { step: "columns", questions: [], choices: [] };
   const { step } = await stepOf(read, draft, db);
-  const { parsed, routing } = read;
-  if (routing === null || step === "columns") return { step, questions: [], choices: [] };
-  const { inputs, statement } = routing;
+  const { routing } = read;
+  if (routing === null || routing.statement.step === "columns") {
+    return { step, questions: [], choices: [] };
+  }
 
-  const stale = new Map(
-    statement.problems.flatMap((problem) =>
-      problem.kind === "stale-answer" && problem.accountNumber !== null
-        ? [[problem.accountNumber, problem.message] as const]
-        : [],
-    ),
-  );
+  const questions = routing.statement.questions.map(({ answer, stale, ...question }) => ({
+    ...question,
+    answer: stale !== null || answer === undefined ? "" : (answer ?? SKIP_NUMBER),
+    stale,
+  }));
 
-  const questions = statement.unknownNumbers.map((number) => {
-    const positions = parsed.positions.filter((position) => position.accountNumber === number);
-    const combined = parsed.combined.filter((entry) => entry.accountNumber === number);
-    const lines =
-      positions.reduce(
-        (sum, position) =>
-          sum + (combined.find((entry) => entry.instrument === position.instrument)?.rowCount ?? 1),
-        0,
-      ) + parsed.skipped.filter((row) => row.accountNumber === number).length;
-    const answer = inputs.answers.get(number);
-
-    return {
-      number,
-      lines,
-      instruments: [...new Set(positions.map((position) => position.instrument.trim()))],
-      answer: answer === undefined || stale.has(number) ? "" : (answer ?? SKIP_NUMBER),
-      stale: stale.get(number) ?? null,
-    };
-  });
-
-  return { step, questions, choices: accountPickerGroups(numberlessOpen(inputs.open)) };
+  return { step, questions, choices: accountPickerGroups(numberlessOpen(routing.inputs.open)) };
 }
 
 // The accounts step's one write (spec 0023 decision 2), refused whole unless every answer holds.
@@ -742,10 +689,17 @@ export async function answerAccountNumbers(
   db: Kysely<Database> = getDb(),
 ): Promise<{ nextStep: "columns" | "accounts" | "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
-  const asked = await numberQuestions(draft, db);
-  const numbers = asked?.routing.unknownNumbers ?? [];
+  const read = await routedRead(draft, draftFile(draft), db);
+  if ("problems" in read) return { nextStep: "columns" };
+  const { mapping, parsed, routing } = read;
 
-  if (asked !== null && numbers.length > 0) {
+  if (
+    routing !== null &&
+    routing.statement.step !== "columns" &&
+    parsed.multiAccount === true &&
+    routing.statement.questions.length > 0
+  ) {
+    const numbers = routing.statement.questions.map(({ number }) => number);
     // Each answer posts its number: a form drawn over other numbers can't land one on another.
     if (numbers.some((number, index) => !sameRawStrings(posted[`number-${index}`] ?? "", number))) {
       throw ValidationError.form(
@@ -755,7 +709,7 @@ export async function answerAccountNumbers(
     }
 
     const offered = new Map(
-      numberlessOpen(asked.inputs.open).map((account) => [account.id, account]),
+      numberlessOpen(routing.inputs.open).map((account) => [account.id, account]),
     );
     const errors: Record<string, string> = {};
     const answers = new Map<string, string | null>();
@@ -795,8 +749,9 @@ export async function answerAccountNumbers(
 
     // Decision 8 on an answered number, refused on its field: at columns, where the router's
     // other date refusals go, it would leave no step to skip it from.
-    const routed = routeStatement(asked.parsed, asked.mapping, { ...asked.inputs, answers });
-    for (const problem of routed.problems) {
+    const inputs = { ...routing.inputs, answers };
+    const trial = routeStatement(parsed, mapping, inputs);
+    for (const problem of trial.step === "columns" ? trial.problems : []) {
       const index = numbers.indexOf(problem.accountNumber ?? "");
       if (problem.kind === "as-of" && index >= 0) {
         errors[`accountId-${index}`] ??= `${problem.message} Skip its rows instead.`;
@@ -805,7 +760,10 @@ export async function answerAccountNumbers(
     if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
     // Decision 2: refused here, where the answers are, rather than at review.
-    const nothing = routed.problems.find((problem) => problem.kind === "nothing-to-record");
+    const nothing =
+      trial.step === "accounts"
+        ? trial.problems.find((problem) => problem.kind === "nothing-to-record")
+        : undefined;
     if (nothing !== undefined) throw ValidationError.form(nothing.message);
 
     await inTransaction(db, async (trx) => {
@@ -845,9 +803,13 @@ export async function answerAccountNumbers(
         );
       }
     });
+
+    // The trial is the routing the write produced, so the next step needs no re-read.
+    const next = await stepOf({ mapping, parsed, routing: { inputs, statement: trial } }, draft, db);
+    return { nextStep: next.step ?? "review" };
   }
 
-  return { nextStep: (await parseDraft(draft, db)).step ?? "review" };
+  return { nextStep: (await stepOf(read, draft, db)).step ?? "review" };
 }
 
 type DiffInstrument = {

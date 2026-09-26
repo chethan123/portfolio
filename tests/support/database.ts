@@ -105,6 +105,16 @@ export async function backendPid(handle: Kysely<Database>): Promise<number> {
   return result.rows[0]!.pid;
 }
 
+/** Scans this transaction has made on a table, sequential and index alike (pg_stat_xact_user_tables). Pure reads leave no other trace, so a "reads once" rule is a delta of this. */
+export async function scansOf(table: string, handle: Kysely<Database>): Promise<number> {
+  const result = await sql<{ scans: number }>`
+    select (seq_scan + coalesce(idx_scan, 0))::int as scans
+    from pg_stat_xact_user_tables
+    where relname = ${table}
+  `.execute(handle);
+  return result.rows[0]?.scans ?? 0;
+}
+
 /** Polls pg_stat_activity (never a fixed delay) until pid is blocked on a lock, bounded so a deadlock fails loudly. `unless` is the statement expected to block: settling first is the race never contending, reported by name rather than as the timeout. */
 export async function waitUntilBlocked(
   watcher: Kysely<Database>,
