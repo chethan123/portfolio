@@ -58,6 +58,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0028](0028-the-review-binding-verify.md) | The review binding's verify half: one pure `verifyBinding` beside the encoder in `review-form.ts`, owning the rerouted, revision, reviewed-date, watermark and baseline comparisons and their order, called once by `commitUnderLocks` (architecture review 2026-09-24 §2.2) |
 | [0029](0029-the-provider-seam-straightened.md) | The provider seam straightened: `matchKey` beside the provider types so the seam no longer imports the price writer, `probe` a third `PriceProvider` method over one batch loop, one `defaultProvider()`, and `priceFreshness`/`asOfView` in their own reader module (architecture review 2026-09-24 §2.12) |
 | [0030](0030-the-router-owns-its-steps.md) | The router owns which step each routing problem belongs to and builds the accounts step's questions; `readDraft` the one read a wizard request takes its result from (architecture review 2026-09-24 §2.8) |
+| [0031](0031-the-wizard-resumes-through-one-translator.md) | One route-side translator, `resumeAt`, turns the step a draft is owed into the wizard's redirect and carries `?stale=true` by a required argument; `parseDraft` gets its own table test (architecture review 2026-09-24 §2.9) |
 
 ## The ticket directories
 

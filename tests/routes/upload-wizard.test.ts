@@ -1,7 +1,8 @@
 // Where a half-finished upload resumes, and a finished one refuses to land twice (ingest brief §2.1, §6.5, §7.4). Four URLs,
-// no client state — "how far did this draft get" must read entirely off the row (parseDraft), which has no test of its
-// own; the matrix below pins it. Breaking this strands a reader rather than writing a wrong number. The one write-shaped
-// risk is the re-POST after commit: 404, never a second recording, never a forged account id in the link back.
+// no client state — "how far did this draft get" must read entirely off the row (parseDraft, its own table in
+// parse-draft.test.ts); the matrix below pins where each route lands. Breaking this strands a reader rather than
+// writing a wrong number. The one write-shaped risk is the re-POST after commit: 404, never a second recording, never
+// a forged account id in the link back.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
