@@ -8,21 +8,20 @@ import {
   parseMappingForm,
   requiredColumns,
 } from "~/lib/column-mapping.server";
-import { defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
+import { defaultHeaderRow, headerRowChoices } from "~/lib/csv";
 import {
   NotFoundError,
   ValidationError,
   formFields,
   refused,
 } from "~/lib/input.server";
-import { statementMapping } from "~/lib/statement";
 import {
   STALE_REVIEW_MESSAGE,
+  draftFile,
   mappingScope,
-  parseDraft,
+  readDraft,
   rememberMapping,
   requireDraft,
-  type UploadDraft,
 } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
@@ -49,20 +48,14 @@ const COLUMN_CONTROLS = [
   { field: "accountNumber", caption: "Account number" },
 ] as const;
 
-// Saved mapping forces its recorded delimiter, so a re-read can't disagree with the original sniff.
-function readDraftFile(draft: UploadDraft) {
-  const saved = statementMapping.safeParse(draft.mapping);
-  const savedMapping = saved.success ? saved.data : null;
-  const { rows, delimiter } = readCsv(draft.bytes, savedMapping?.delimiter);
-
-  return { savedMapping, rows, delimiter };
-}
-
 export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
     const scope = await mappingScope(draft);
-    const { savedMapping, rows } = readDraftFile(draft);
+    // Parsed here too, not only on POST — a bounce from review/instruments needs to explain itself
+    // on arrival. Through readDraft: a multi-account file's routing refusals are this step's too.
+    const { file, parse } = await readDraft(draft);
+    const { savedMapping, rows } = file;
 
     // Precedence: explicit `header` param, then the saved mapping's row, then candidate detection.
     const headerParam = new URL(request.url).searchParams.get("header");
@@ -77,10 +70,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     const headerCells = rows[headerRow] ?? [];
 
-    // Parsed here too, not only on POST — a bounce from review/instruments needs to explain itself
-    // on arrival. Through parseDraft: a multi-account file's routing refusals are this step's too.
-    const savedParse = await parseDraft(draft);
-    const savedProblems = savedParse.step === "columns" ? savedParse.problems : [];
+    const savedProblems = parse.step === "columns" ? parse.problems : [];
 
     // Draft's own mapping wins over the remembered one — the lookup only runs when the draft has none.
     const remembered =
@@ -219,7 +209,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   try {
     const draft = await requireDraft(params.draftId);
-    const { rows, delimiter } = readDraftFile(draft);
+    const { rows, delimiter } = draftFile(draft);
 
     const mapping = parseMappingForm(values, rows, delimiter, await mappingScope(draft));
 
