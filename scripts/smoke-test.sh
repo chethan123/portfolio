@@ -898,6 +898,29 @@ auth_status="$(status_of "$BASE_URL/oauth2/auth")"
   fail "GET /oauth2/auth returned ${auth_status}, expected the gate's 401"
 printf 'GET /oauth2/auth -> %s from the gate\n' "$auth_status"
 
+# GHSA-hhqp-vx7f-5c6m: missing-CSRF callbacks must refuse without dumping credentials.
+log "Checking failed OAuth callbacks do not log credentials"
+callback_marker="$(openssl rand -hex 12)"
+callback_cookie="smoke-cookie-${callback_marker}"
+callback_bearer="smoke-bearer-${callback_marker}"
+callback_status="$(status_of \
+  -H "Cookie: audit_marker=${callback_cookie}" \
+  -H "Authorization: Bearer ${callback_bearer}" \
+  "$BASE_URL/oauth2/callback?state=security-smoke%3A%2F")"
+[[ "$callback_status" == "403" ]] ||
+  fail "missing-CSRF callback returned ${callback_status}, expected 403"
+gate_logs="$(docker compose logs --no-color gate)"
+[[ "$gate_logs" == *"unable to obtain CSRF cookie"* ]] ||
+  fail "the rejected callback did not reach the gate's CSRF check"
+[[ "$gate_logs" != *"${callback_cookie}"* && "$gate_logs" != *"${callback_bearer}"* ]] ||
+  fail "the rejected callback logged a credential marker"
+printf 'missing-CSRF callback -> 403; cookie and bearer values absent from gate logs\n'
+
+forged_status="$(status_of -H 'X-Auth-Request-Email: smoke-test@example.test' "$BASE_URL/")"
+[[ "$forged_status" == "302" ]] ||
+  fail "a forged identity header returned ${forged_status}, expected 302"
+printf 'forged identity header -> 302\n'
+
 # The one exemption still holds — if this ever needs credentials, every uptime monitor pointed here goes blind at once.
 expect_status 200
 

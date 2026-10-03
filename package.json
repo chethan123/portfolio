@@ -20,10 +20,10 @@
     "@react-router/node": "^7.18.2",
     "@react-router/serve": "^7.18.2",
     "@simplewebauthn/browser": "14.0.0",
-    "@simplewebauthn/server": "14.0.2",
+    "@simplewebauthn/server": "14.0.3",
     "isbot": "^5.2.1",
     "kysely": "^0.29.5",
-    "pg": "^8.23.0",
+    "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router": "^7.18.2",
@@ -39,9 +39,9 @@
     "@vitest/coverage-v8": "4.1.11",
     "kysely-codegen": "^0.20.0",
     "playwright": "^1.62.1",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

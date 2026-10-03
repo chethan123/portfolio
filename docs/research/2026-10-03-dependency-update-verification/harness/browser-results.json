@@ -1,0 +1,32 @@
+{
+  "base": "http://localhost:3311",
+  "completed": [
+    "desktop /",
+    "desktop /holdings",
+    "desktop /analysis",
+    "desktop /income",
+    "desktop /settings",
+    "desktop /settings/people",
+    "desktop /settings/accounts",
+    "desktop /settings/instruments",
+    "desktop /settings/tax",
+    "desktop /settings/prices",
+    "desktop /settings/display",
+    "desktop /settings/passkeys",
+    "masking toggle and reload persistence",
+    "owner filter",
+    "account create and edit",
+    "manual balance recorded and corrected to 1250",
+    "CSV upload, mapping, review, commit, and account receipt",
+    "display setting save and reload",
+    "mobile /",
+    "mobile /holdings",
+    "mobile /analysis",
+    "mobile /income",
+    "mobile /accounts/9",
+    "mobile /upload",
+    "real WebAuthn enrollment with Chromium virtual authenticator",
+    "lock and real WebAuthn unlock"
+  ],
+  "errors": []
+}

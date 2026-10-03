@@ -10,6 +10,7 @@ Keep original evidence and rejected options intact; add a dated follow-up when a
 
 ## Reports
 
+- [Dependency updates — verification](2026-10-03-dependency-update-verification.md) — 2026-10-03. Security dependency patches, automated checks, browser workflows and OAuth callback log-redaction regression.
 - [Architecture review — deepening opportunities, second pass](2026-09-24-architecture-review.md) — 2026-09-24. Thirteen candidates over ingest, pricing, the read path and the lock, one reopened refutation from the August review, and the stale line references found on the way; includes the visual report.
 - [Loading and responsiveness review](2026-09-20-loading-responsiveness-review.md) — 2026-09-20. Formatter reuse, chart serialization, pending-navigation feedback, and static-cache measurements; includes the visual report and reproduction evidence.
 - [Useful additions to Analysis](2026-09-11-analysis-visualization-opportunities.md) — 2026-09-11.
