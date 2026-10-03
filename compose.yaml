@@ -233,7 +233,7 @@ services:
   gate:
     # Pinned exactly: nobody watches this image and it guards everything.
     # `-alpine` because the distroless default has no wget for the healthcheck.
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine
     restart: unless-stopped
     logging: *container-logging
     environment:
@@ -293,7 +293,7 @@ services:
       start_period: 10s
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.6-alpine
     restart: unless-stopped
     logging: *container-logging
     # Own uid, not `app`'s 1000 — shared uids share bind-mount rights, and this is the worst service to join. 65532 = distroless "nonroot".
