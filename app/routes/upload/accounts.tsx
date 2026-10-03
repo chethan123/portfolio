@@ -1,12 +1,14 @@
-import { Form, Link, redirect } from "react-router";
+import { Form, Link } from "react-router";
 
 import { FieldError, FormError } from "~/components/error-message";
 import { NotFoundError, ValidationError, formFields, refused } from "~/lib/input.server";
+import { resumeAt, staleOf } from "~/lib/upload-resume.server";
 import {
   SKIP_NUMBER,
   STALE_REVIEW_MESSAGE,
   accountsScreen,
   answerAccountNumbers,
+  instrumentsStepSkipped,
   requireDraft,
 } from "~/lib/uploads.server";
 
@@ -27,20 +29,19 @@ export function meta() {
 export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
-    const staleReview = new URL(request.url).searchParams.get("stale") === "true";
-    const stale = staleReview ? "?stale=true" : "";
+    const staleReview = staleOf(request);
 
     // Columns owed, one account, or every number matched: nothing to ask, never an empty screen.
     const screen = await accountsScreen(draft);
     if (screen.questions.length === 0) {
-      return redirect(`/upload/${draft.id}/${screen.step ?? "review"}${stale}`);
+      return resumeAt(draft.id, screen.step, staleReview);
     }
 
     return {
       steps: {
         current: 3,
         draftId: draft.id,
-        instrumentsSkipped: draft.hadFirstSightings === false,
+        instrumentsSkipped: instrumentsStepSkipped(draft),
         accountsSkipped: false,
       } satisfies UploadStepsData,
       filename: draft.filename,
@@ -57,11 +58,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
-  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const { nextStep } = await answerAccountNumbers(params.draftId, values);
-    return redirect(`/upload/${params.draftId}/${nextStep}${stale}`);
+    return resumeAt(params.draftId, nextStep, staleOf(request));
   } catch (error) {
     if (error instanceof ValidationError) {
       return refused(error, values);

@@ -1,4 +1,4 @@
-import { Form, redirect } from "react-router";
+import { Form } from "react-router";
 
 import { Amount } from "~/components/amount";
 import { FieldError, FormError } from "~/components/error-message";
@@ -18,7 +18,13 @@ import {
 } from "~/lib/instrument-resolution.server";
 import { defaultProvider } from "~/lib/refresh.server";
 import { sameRawStrings } from "~/lib/raw-string";
-import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
+import { resumeAt, staleOf } from "~/lib/upload-resume.server";
+import {
+  STALE_REVIEW_MESSAGE,
+  instrumentsStepSkipped,
+  parseDraft,
+  requireDraft,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
@@ -38,26 +44,25 @@ export function meta() {
 export async function loader({ params, request }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
-    const staleReview = new URL(request.url).searchParams.get("stale") === "true";
-    const stale = staleReview ? "?stale=true" : "";
+    const staleReview = staleOf(request);
 
     // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
     if (result.step === "columns" || result.step === "accounts") {
-      return redirect(`/upload/${draft.id}/${result.step}${stale}`);
+      return resumeAt(draft.id, result.step, staleReview);
     }
-    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
+    if (result.step === null) return resumeAt(draft.id, null, staleReview);
 
     const screen = await resolutionScreen(result.parsed.positions, draft.id);
 
     // A concurrent draft's submit resolving everything is the same skip as above.
-    if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review${stale}`);
+    if (screen.unresolved.length === 0) return resumeAt(draft.id, null, staleReview);
 
     return {
       steps: {
         current: result.accountsSkipped === null ? 3 : 4,
         draftId: draft.id,
-        instrumentsSkipped: draft.hadFirstSightings === false,
+        instrumentsSkipped: instrumentsStepSkipped(draft),
         accountsSkipped: result.accountsSkipped,
       } satisfies UploadStepsData,
       screen,
@@ -73,17 +78,17 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
-  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
+  const stale = staleOf(request);
 
   try {
     const draft = await requireDraft(params.draftId);
     const result = await parseDraft(draft);
     if (result.step === "columns" || result.step === "accounts") {
-      return redirect(`/upload/${draft.id}/${result.step}${stale}`);
+      return resumeAt(draft.id, result.step, stale);
     }
 
     // A double submit finds everything already resolved and moves on, as the loader would.
-    if (result.step === null) return redirect(`/upload/${draft.id}/review${stale}`);
+    if (result.step === null) return resumeAt(draft.id, null, stale);
 
     const { unresolved } = result;
 
@@ -103,7 +108,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       { probe: defaultProvider().probe },
     );
 
-    return redirect(`/upload/${draft.id}/review${stale}`);
+    return resumeAt(draft.id, null, stale);
   } catch (error) {
     if (error instanceof ValidationError) {
       return refused(error, values);
