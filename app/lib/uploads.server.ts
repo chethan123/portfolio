@@ -587,7 +587,7 @@ export type BlockedDraft = {
   problems: DraftProblem[];
 };
 
-function instrumentsStepSkipped(draft: UploadDraft): boolean {
+export function instrumentsStepSkipped(draft: UploadDraft): boolean {
   return draft.hadFirstSightings === false;
 }
 

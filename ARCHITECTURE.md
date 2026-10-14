@@ -1134,8 +1134,9 @@ columns step passes; with one, the file's own strings decide between instruments
 `parseDraft` computes that in one place. `/upload/:draftId` matches two things: a layout
 (`upload/draft.tsx`, which carries the page title, the step strip, and the one expired-draft error
 boundary all four steps throw into) and an index route with no page of its own
-(`upload/index.tsx`), whose loader redirects to whichever step is still owed. Nothing renders at the bare address; a screen there would
-be a fifth step nobody asked to stand on.
+(`upload/index.tsx`), whose loader redirects to whichever step is still owed. Every wizard route
+turns the owed step into its redirect through `resumeAt` (`upload-resume.server.ts`). Nothing
+renders at the bare address; a screen there would be a fifth step nobody asked to stand on.
 
 **A dead draft is one page, not four.** Swept, already committed, mistyped and
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
@@ -1762,7 +1763,7 @@ Three base error types and two upload-specific refinements, with the layer each 
 | `RefusedUpload` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` messages | the review action | the same review re-rendered once with every applicable baseline, filed-behind and removal refusal, and both confirmations cleared |
 | `StaleReviewError` | `uploads.server.ts` | the freshly assembled dated diff, as well as the `ValidationError` message | the review action | the same review re-rendered with its current diff and both confirmations cleared; an intentionally edited undated-file date is named as a redraw, while a same-date revision mismatch keeps the stale warning; only `DraftNotReadyError` redirects to an earlier step |
 | `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: the `upload/review.tsx` action throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
-| `DraftNotReadyError` | `uploads.server.ts` | the step still owed and, when Review must block, only its display fields, step state and source-row problems | the upload routes | a redirect to that step; Review instead renders the narrow blocked payload |
+| `DraftNotReadyError` | `uploads.server.ts` | the step still owed and, when Review must block, only its display fields, step state and source-row problems | the upload routes | a redirect to that step through `resumeAt`; Review instead renders the narrow blocked payload |
 
 **A refusal is an ordinary outcome of a form submission, never a 500.** That rule is what keeps
 routes thin: a route reads the form, hands the raw fields to a domain function, and renders whatever
@@ -1771,7 +1772,7 @@ different answer for.
 
 `DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. Usually the reader's
 next move is an earlier step, so the error names that step and the routes translate it into a
-redirect. The domain instead supplies a narrow blocked payload when a mapping saved before the
+redirect through `resumeAt`. The domain instead supplies a narrow blocked payload when a mapping saved before the
 blank-instrument rule exposes a financial row. Review renders those source-row problems at the
 bookmarked URL, with no diff or commit, and links to Columns. Draft bytes and mapping never ride on
 the error.
@@ -2419,6 +2420,7 @@ open-coded `<FieldError>`) closed with [spec 0027](docs/specs/0027-the-refusal-r
 | `instrument-resolution.server.ts` | First sightings, and the writes that answer them: the instrument, its classification, and the draft's own answer. Also the one lookup (`aliasesFor`) every upload step resolves through, a vocabulary row outranking the draft's answer |
 | `instrument-aliases.server.ts` | Settings → Instruments' alias half: the list, and the previewed repoint or forget behind one compare-and-set write. Reads holdings through `valuation.server.ts`, never its own join |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping, scoped by institution or, null, by the multi-account draft alone (ADR-0015) |
+| `upload-resume.server.ts` | The one shape a wizard route resumes a draft at (spec 0031): `resumeAt` builds the redirect to the step still owed, and `staleOf` is the one reader of `?stale=true`, the flag that alone carries "the review went stale" to the next screen. `stale` is a required argument, because a dropped carry fails silently. The routes still catch and translate; nothing here throws |
 | `statement-routing.server.ts` | The multi-account upload's one matcher (spec 0023, ADR-0015): `routeStatement`, pure, takes a clean multi-account parse, the open and closed accounts, and the draft's answers, and groups rows by the open account whose recorded number matches, a recorded number always outranking an answer. Groups come out in ascending account id, the commit's lock order. It also returns the step each routing problem belongs to — columns, accounts, or routed — and builds the accounts step's questions. Every step after columns reads its groups; nothing downstream re-matches |
 | `review-form.ts` | The review form's one key scheme, drawn and verified (specs 0024 §5, 0028): `sectionKey` and `reviewedFields` for the page and the tests, and `verifyBinding`, the pure comparison the commit makes once under its locks, with the reason order. Browser-safe: types only from `.server` modules |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the backfill and the dividend sweep: each one's candidate query, its batch, its ledger where it has one, and the composition every refresh runs |
@@ -2492,7 +2494,7 @@ there. So does `app/fonts/`, the stylesheet's one asset, listed next.
 | `income.tsx` | What the portfolio pays over the coming year and how much of it is taxed: the same figure by tax treatment and by account, off the same array Holdings reads, which is what makes the two structurally unable to disagree |
 | `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards, the size cap read twice, the empty file and the not-text file, live in `uploads.server.ts` so the action stays a thin translation |
 | `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader, because the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
-| `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
+| `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides, via `resumeAt`). No page: a screen here would be a fifth step nobody asked to stand on |
 | `upload/columns.tsx` | Step two: map the file's columns, once per institution and header, or per header alone for a file of several accounts, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
 | `upload/accounts.tsx` | Step three of a file of several accounts (spec 0023 decision 2, ADR-0015): each account number no open account records is given to one recording none, or skipped. Reached only when the router found such a number; a single-account draft, or a file whose every number matched, is redirected past it |
 | `upload/instruments.tsx` | Step three, or four for several accounts: resolve first sightings, each answered once per draft. The answer rides with the draft and becomes vocabulary at commit; the instrument and classification rows are written here. Reached only on a miss; otherwise the loader redirects to review |

@@ -12,6 +12,7 @@ import {
   refused,
 } from "~/lib/input.server";
 import { requestRefresh } from "~/lib/price-poller.server";
+import { resumeAt, staleOf } from "~/lib/upload-resume.server";
 import {
   DraftNotReadyError,
   RefusedUpload,
@@ -50,6 +51,7 @@ export function meta() {
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const url = new URL(request.url);
+  const staleReview = staleOf(request);
   try {
     const diff = await reviewForDraft(params.draftId, url.searchParams.get("asOf"));
 
@@ -62,8 +64,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         accountsSkipped: diff.accountsSkipped,
       } satisfies UploadStepsData,
       diff,
-      staleReviewMessage:
-        url.searchParams.get("stale") === "true" ? STALE_REVIEW_MESSAGE : null,
+      staleReviewMessage: staleReview ? STALE_REVIEW_MESSAGE : null,
       earliestAsOf: earliestRecordableDate(),
       latestAsOf: latestRecordableDate(),
     };
@@ -85,8 +86,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         };
       }
 
-      const stale = url.searchParams.get("stale") === "true" ? "?stale=true" : "";
-      return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
+      return resumeAt(params.draftId, error.step, staleReview);
     }
     if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
     throw error;
@@ -172,11 +172,9 @@ export async function action({ params, request }: Route.ActionArgs) {
           diff = await reviewForDraft(params.draftId, values.asOf ?? "");
         } catch (reviewError) {
           if (reviewError instanceof DraftNotReadyError) {
-            if (reviewError.blocked !== null) {
-              return redirect(`/upload/${params.draftId}/review`);
-            }
-            const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
-            return redirect(`/upload/${params.draftId}/${reviewError.step}${stale}`);
+            // A blocked review renders no stale warning.
+            if (reviewError.blocked !== null) return resumeAt(params.draftId, null, false);
+            return resumeAt(params.draftId, reviewError.step, values.reviewRevision !== undefined);
           }
           if (reviewError instanceof NotFoundError) {
             const accountId =
@@ -195,11 +193,9 @@ export async function action({ params, request }: Route.ActionArgs) {
       };
     }
     if (error instanceof DraftNotReadyError) {
-      if (error.blocked !== null) {
-        return redirect(`/upload/${params.draftId}/review`);
-      }
-      const stale = values.reviewRevision !== undefined ? "?stale=true" : "";
-      return redirect(`/upload/${params.draftId}/${error.step}${stale}`);
+      // A blocked review renders no stale warning.
+      if (error.blocked !== null) return resumeAt(params.draftId, null, false);
+      return resumeAt(params.draftId, error.step, values.reviewRevision !== undefined);
     }
     if (error instanceof NotFoundError) {
       // Committed-draft re-POST — draft is gone, so the hidden field only feeds the expired page's link.

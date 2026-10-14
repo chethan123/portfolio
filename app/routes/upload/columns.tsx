@@ -1,4 +1,4 @@
-import { Form, redirect } from "react-router";
+import { Form } from "react-router";
 
 import { FieldError, FormError } from "~/components/error-message";
 import {
@@ -15,6 +15,7 @@ import {
   formFields,
   refused,
 } from "~/lib/input.server";
+import { resumeAt, staleOf } from "~/lib/upload-resume.server";
 import {
   STALE_REVIEW_MESSAGE,
   draftFile,
@@ -167,10 +168,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       savedProblems: savedProblems.map((problem) => problem.message),
       savedProblemFields:
         savedMapping === null ? [] : problemFieldsOf(savedMapping, savedProblems),
-      staleReviewMessage:
-        new URL(request.url).searchParams.get("stale") === "true"
-          ? STALE_REVIEW_MESSAGE
-          : null,
+      staleReviewMessage: staleOf(request) ? STALE_REVIEW_MESSAGE : null,
       // Component can't import a `.server` module — sentinel rides down with the data.
       notInFile: NOT_IN_FILE,
     };
@@ -205,7 +203,6 @@ function problemFieldsOf(mapping: StatementMapping, problems: ParseProblem[]): s
 
 export async function action({ params, request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
-  const stale = new URL(request.url).searchParams.get("stale") === "true" ? "?stale=true" : "";
 
   try {
     const draft = await requireDraft(params.draftId);
@@ -227,7 +224,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       };
     }
 
-    return redirect(`/upload/${draft.id}/${outcome.nextStep}${stale}`);
+    return resumeAt(draft.id, outcome.nextStep, staleOf(request));
   } catch (error) {
     if (error instanceof ValidationError) {
       return {
