@@ -991,7 +991,7 @@ gate    oauth2-proxy, pinned to an exact release
         · not published to the host, which is what keeps its verdict honest
         · healthcheck: GET /ping, its own liveness endpoint
 
-caddy   caddy:2-alpine
+caddy   caddy, pinned to an exact release
         · depends_on: app and gate (condition: service_healthy)
         · the only service that publishes a port, and therefore the one place
           the gate can be enforced — host 80 onto its own :8080, because the

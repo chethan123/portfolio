@@ -293,7 +293,10 @@ services:
       start_period: 10s
 
   caddy:
-    image: caddy:2.11.6-alpine
+    # Pinned exactly, like `gate`. Never 2.11.6: its default `read_body_idle` cancels an HTTP/1.1
+    # request with a body 60 s after the body is read, and "Refresh now" is a POST that waits on
+    # the worker for minutes — caddyserver/caddy#8103, fixed in 2.11.7.
+    image: caddy:2.11.7-alpine
     restart: unless-stopped
     logging: *container-logging
     # Own uid, not `app`'s 1000 — shared uids share bind-mount rights, and this is the worst service to join. 65532 = distroless "nonroot".
