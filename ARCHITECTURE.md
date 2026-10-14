@@ -157,7 +157,7 @@ graph TB
     outside(("Beyond the stack<br/>Google, Yahoo — §2"))
 
     subgraph compose["The compose stack — portfolio, seven services on seven networks"]
-        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:8080 → forward_auth gate, then app:$APP_PORT<br/>uid 65532, Caddyfile mounted read-only"]
+        caddy["<b>caddy</b><br/>caddy, pinned exactly<br/>:8080 → forward_auth gate, then app:$APP_PORT<br/>uid 65532, Caddyfile mounted read-only"]
         gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>root, one capability (DAC_READ_SEARCH)<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
         app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>USER node, no published port, no egress of its own<br/><i>refresh loop stays in-process; every fetch crosses to worker</i>"]
         worker["<b>worker</b><br/>same image, entrypoint replaced<br/>uid 1000, no published port<br/>no database credential, no TCP listener"]
