@@ -5,12 +5,13 @@
 // match must not resolve the next upload silently. A global row wins over a draft's answer.
 import { isAssetClass } from "./account-options.ts";
 import { getDb, inTransaction, type Database } from "./db.server.ts";
-import { NotFoundError, ValidationError } from "./input.server.ts";
+import { NotFoundError, ValidationError, recordedDate, unitPrice } from "./input.server.ts";
+import { writeManualPrice } from "./prices.server.ts";
 import { foldLots } from "./statement.ts";
 
 import type { PriceProvider } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
-import type { AssetClass } from "./valuation.server.ts";
+import type { AssetClass, IsoDate } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
 
 // Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" != "none chosen".
@@ -157,6 +158,9 @@ export type ResolutionFields = {
   name?: string;
   // "feed" | "manual" — "fixed" belongs to the seeded USD row alone.
   priceSource?: string;
+  // A manual price's unit price and date, typed from the statement; ignored for a feed.
+  price?: string;
+  priceAsOf?: string;
   // An existing classification id, or NEW_CLASSIFICATION.
   classificationId?: string;
   newClassificationName?: string;
@@ -169,6 +173,8 @@ const RESOLUTION_FIELDS = [
   "symbol",
   "name",
   "priceSource",
+  "price",
+  "priceAsOf",
   "classificationId",
   "newClassificationName",
   "newClassificationAssetClass",
@@ -199,20 +205,24 @@ export type ResolvedAlias = {
 };
 
 // probe is required, not defaulted, so production can't reach the network by omission; tests stub it.
+// now is not a network reach, so it defaults (spec 0031 §3).
 export type ResolutionDeps = {
   probe: PriceProvider["probe"];
+  now?: Date;
 };
 
 type CreatePlan = {
   kind: "create";
   symbol: string | null;
   name: string;
-  priceSource: "feed" | "manual";
   // Null when a new classification is being created instead.
   classificationId: string | null;
   // Trimmed new-classification name, key into the pending map.
   newClassification: string | null;
-};
+} & (
+  | { priceSource: "feed"; manualPrice: null }
+  | { priceSource: "manual"; manualPrice: { price: string; date: IsoDate } }
+);
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
@@ -299,6 +309,19 @@ export async function resolveAll(
       faulted = true;
     }
 
+    let manualPrice: { price: string; date: IsoDate } | null = null;
+    if (priceSource === "manual") {
+      const price = unitPrice("The price").safeParse(fields.price ?? "");
+      const date = recordedDate("The date").safeParse(fields.priceAsOf ?? "");
+      if (!price.success) refuse(index, "price", price.error.issues[0]?.message ?? "");
+      if (!date.success) refuse(index, "priceAsOf", date.error.issues[0]?.message ?? "");
+      if (price.success && date.success) {
+        manualPrice = { price: price.data, date: date.data };
+      } else {
+        faulted = true;
+      }
+    }
+
     const chosenClassification = (fields.classificationId ?? "").trim();
     let classificationId: string | null = null;
     let newClassification: string | null = null;
@@ -344,14 +367,11 @@ export async function resolveAll(
       continue;
     }
 
-    plans.push({
-      kind: "create",
-      symbol,
-      name,
-      priceSource: priceSource as "feed" | "manual",
-      classificationId,
-      newClassification,
-    });
+    const pricing =
+      manualPrice === null
+        ? { priceSource: "feed" as const, manualPrice: null }
+        : { priceSource: "manual" as const, manualPrice };
+    plans.push({ kind: "create", symbol, name, ...pricing, classificationId, newClassification });
   }
 
   // Options were rendered from the database, so a miss here is a forged/stale post — still a sentence, not an FK fault.
@@ -555,6 +575,11 @@ export async function resolveAll(
           .executeTakeFirstOrThrow();
         instrumentId = row.id;
         createdInstrument = true;
+
+        // Before the alias step: a loser deleted there takes its price with it (on delete cascade).
+        if (plan.priceSource === "manual") {
+          await writeManualPrice(trx, { instrumentId, ...plan.manualPrice }, deps.now ?? new Date());
+        }
       }
 
       // Vocabulary gained since the screen was drawn (another upload recorded it) outranks this

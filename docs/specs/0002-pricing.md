@@ -360,6 +360,10 @@ Staleness for a manual instrument is a question of *age*, not of a failed fetch 
 never touches it — so the Instruments tab derives it from the age of the last manual price. That is
 what makes §8.4's "which manual-priced instruments have gone stale?" answerable.
 
+_Superseded in part_ ([0031](0031-manual-prices.md)): the form landed on Settings → Prices, not
+the Instruments tab, and the staleness rule over its dates is still unbuilt. Both tiers are written
+as above, the quote re-read from the latest close rather than the one just typed.
+
 ### Configuration
 
 No new environment variables. `PRICE_POLL_INTERVAL_MINUTES` and `MARKET_TIMEZONE` were validated by

@@ -292,6 +292,9 @@ the household holds, how each one is priced, and what a statement's wording maps
 
 ### 6.1 Stale manual prices — first panel, and first for a reason
 
+_Not built_ ([spec 0031](../specs/0031-manual-prices.md)): the form "Set price" opens is on
+Settings → Prices, not this tab; the age rule and this panel are still to build.
+
 A `.panel`, header "Stale manual prices" with a `.panel-count` of "3 INSTRUMENTS", and a
 `.coverage-note` opening line: "A manual price carries forward until it is changed. These have not
 been updated in over 30 days."
@@ -338,6 +341,10 @@ controls, all 40px tall, ending in a filled `.button` "Save" and a `.button--qui
   as `.form-error` above the row.
 
 ### 6.4 Manual price entry — for CITs
+
+_Superseded in part_ ([spec 0031](../specs/0031-manual-prices.md)): the panel was built on
+Settings → Prices as "Prices typed by hand", and the price is also asked for at the instruments
+step when a manual instrument is created.
 
 Its own `.panel`, "Set a manual price", because this is a recurring chore rather than a one-time
 edit. A `.panel-body` caption above the form: "A workplace plan often holds a collective investment

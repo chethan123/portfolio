@@ -8,6 +8,7 @@ import {
   percentRateRule,
   perShareAmountRule,
   signedQuantityRule,
+  unitPriceRule,
   type DecimalInputRule,
 } from "./decimal-input.ts";
 
@@ -176,7 +177,7 @@ export const recordedDate = (label: string) =>
       }
 
       if (value > latestRecordableDate()) {
-        refuse(`${label} is in the future, and a balance can only be recorded once it is true.`);
+        refuse(`${label} is in the future, and only what is already true can be recorded.`);
       }
     });
 
@@ -197,6 +198,9 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
     .transform((value) => (value === "" ? null : value))
     .nullish()
     .transform((value) => value ?? null);
+
+// Required, unlike perShareAmount: a typed price is the whole point of its form.
+export const unitPrice = (label: string) => decimalText(unitPriceRule(label), true);
 
 // Typed, asked, printed and stored as a percentage (23.8, not 0.238) — conversion to a
 // multiplier happens only where the multiplying does. "23.8%" pasted equals "23.8" typed;

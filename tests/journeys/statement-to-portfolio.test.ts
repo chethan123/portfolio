@@ -84,6 +84,8 @@ function createAnswers(raws: readonly string[]): Record<string, string> {
       [`symbol-${index}`]: raw,
       [`name-${index}`]: `${raw} fund`,
       [`priceSource-${index}`]: "manual",
+      [`price-${index}`]: "52.4100",
+      [`priceAsOf-${index}`]: "2026-01-31",
       [`classificationId-${index}`]: "__new__",
       [`newClassificationName-${index}`]: `Class ${raw}`,
       [`newClassificationAssetClass-${index}`]: "equity",
@@ -192,6 +194,15 @@ describe("a first statement, from the drop screen to the account page", () => {
       ).toEqual([
         ["FZROX", "500.00000000"],
         ["VTI", "100.00000000"],
+      ]);
+      // Created as manual, priced at the instruments step: valued on landing, not "never priced" (#292).
+      expect(
+        page.holdings
+          .map((holding) => [holding.symbol, holding.value, holding.isPriced])
+          .sort(([a], [b]) => String(a).localeCompare(String(b))),
+      ).toEqual([
+        ["FZROX", "26205.0000", true],
+        ["VTI", "5241.0000", true],
       ]);
 
       // Draft deleted in the same transaction as the write — going back is a 404, not a second commit.

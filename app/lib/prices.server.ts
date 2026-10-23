@@ -2,12 +2,17 @@
  * The only price writer (DESIGN.md §6.2, ADR-0006).
  * `price_daily` is dated by the quote's own instant in the market zone, never today's date,
  * and refused outside ±{@link CLOSE_WINDOW_DAYS}. Backfill inserts-where-absent, never
- * overwrites. No clock read: `now` is always a parameter.
+ * overwrites. A typed price ({@link writeManualPrice}) is dated by the person and rewrites its own
+ * date; it touches only `manual` instruments, which no feed path selects. No clock read: `now` is
+ * always a parameter.
  */
 import { sql } from "kysely";
+import { z } from "zod";
 
 import { addDays } from "./chart-range.ts";
+import { couldBeId } from "./database-id.ts";
 import { getDb, getPool, inTransaction, type Database } from "./db.server.ts";
+import { ValidationError, parseInput, recordedDate, unitPrice } from "./input.server.ts";
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import {
   DRIFT_EXTENSION_DAYS,
@@ -15,6 +20,7 @@ import {
   TRAILING_WINDOW_DAYS,
   matchKey,
 } from "./price-provider.server.ts";
+import { fitsTheMoneyColumn } from "./positions.server.ts";
 import type {
   HistoryRange,
   PriceProvider,
@@ -275,6 +281,158 @@ export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<Back
     priceSource: row.price_source,
     willTry: row.will_try,
   }));
+}
+
+export type ManualPriceRow = {
+  id: string;
+  symbol: string | null;
+  name: string;
+  /** The latest close: what `quote` holds for this instrument. Null when never priced. */
+  latest: { date: IsoDate; price: string } | null;
+};
+
+/** Settings → Prices: every `manual` instrument, held or not, with its latest typed close. */
+export async function manualPrices(db: Kysely<Database> = getDb()): Promise<ManualPriceRow[]> {
+  const rows = await db
+    .selectFrom("instrument")
+    .leftJoinLateral(
+      (eb) =>
+        eb
+          .selectFrom("price_daily")
+          .select(["price_daily.date", "price_daily.close"])
+          .whereRef("price_daily.instrument_id", "=", "instrument.id")
+          .orderBy("price_daily.date", "desc")
+          .limit(1)
+          .as("latest"),
+      (join) => join.onTrue(),
+    )
+    .where("instrument.price_source", "=", "manual")
+    .select([
+      "instrument.id",
+      "instrument.symbol",
+      "instrument.name",
+      "latest.date",
+      "latest.close",
+    ])
+    .orderBy("instrument.name")
+    .orderBy("instrument.id")
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    symbol: row.symbol,
+    name: row.name,
+    latest: row.date === null || row.close === null ? null : { date: row.date, price: row.close },
+  }));
+}
+
+export type ManualPrice = { instrumentId: string; date: IsoDate; price: string };
+
+/** Both tiers; `quote` from the latest close, not the one typed (spec 0031 §1). */
+export async function writeManualPrice(
+  db: Kysely<Database>,
+  entry: ManualPrice,
+  now: Date,
+): Promise<{ name: string; symbol: string | null; price: string }> {
+  return inTransaction(db, async (trx) => {
+    // Serialises entries; conflicts with a holding insert's KEY SHARE (spec 0031 §1).
+    const instrument = await trx
+      .selectFrom("instrument")
+      .select(["name", "symbol", "price_source"])
+      .where("id", "=", entry.instrumentId)
+      .forUpdate()
+      .executeTakeFirst();
+
+    if (instrument === undefined) throw ValidationError.form("That instrument no longer exists.");
+    if (instrument.price_source !== "manual") {
+      throw ValidationError.form(
+        instrument.price_source === "feed"
+          ? `${instrument.name} is priced from the feed, so a typed price would be overwritten by the next refresh.`
+          : `${instrument.name} has a fixed price.`,
+      );
+    }
+
+    // Every set: a back-dated close values older ones too (fitsTheMoneyColumn's reason).
+    const largest = await trx
+      .selectFrom("holding")
+      .select(sql<string | null>`max(abs(holding.quantity))`.as("quantity"))
+      .where("holding.instrument_id", "=", entry.instrumentId)
+      .executeTakeFirstOrThrow();
+    if (largest.quantity !== null && !fitsTheMoneyColumn(largest.quantity, entry.price)) {
+      throw new ValidationError({
+        price: `The price times the ${largest.quantity} units held is larger than this application can store.`,
+      });
+    }
+
+    const close = await trx
+      .insertInto("price_daily")
+      .values({ instrument_id: entry.instrumentId, date: entry.date, close: entry.price })
+      .onConflict((conflict) =>
+        conflict.columns(["instrument_id", "date"]).doUpdateSet({
+          close: (builder) => builder.ref("excluded.close"),
+        }),
+      )
+      .returning("close")
+      .executeTakeFirstOrThrow();
+
+    // Named columns, writeQuote's reason: trailing_dividend_* are not this writer's.
+    await trx
+      .insertInto("quote")
+      .columns(["instrument_id", "price", "as_of", "is_stale"])
+      .expression((eb) =>
+        eb
+          .selectFrom("price_daily")
+          .select([
+            "price_daily.instrument_id",
+            "price_daily.close",
+            sql<Date>`${now}::timestamptz`.as("as_of"),
+            sql<boolean>`false`.as("is_stale"),
+          ])
+          .where("price_daily.instrument_id", "=", entry.instrumentId)
+          .orderBy("price_daily.date", "desc")
+          .limit(1),
+      )
+      .onConflict((conflict) =>
+        conflict.column("instrument_id").doUpdateSet({
+          price: (builder) => builder.ref("excluded.price"),
+          as_of: (builder) => builder.ref("excluded.as_of"),
+          is_stale: (builder) => builder.ref("excluded.is_stale"),
+        }),
+      )
+      .execute();
+
+    return { name: instrument.name, symbol: instrument.symbol, price: close.close };
+  });
+}
+
+const manualPriceInput = z.object({
+  instrumentId: z
+    .string({ message: "Choose an instrument priced by hand." })
+    .trim()
+    .refine(couldBeId, { message: "Choose an instrument priced by hand." }),
+  price: unitPrice("The price"),
+  asOf: recordedDate("The date"),
+});
+
+export type RecordedManualPrice = {
+  instrumentId: string;
+  name: string;
+  symbol: string | null;
+  price: string;
+  date: IsoDate;
+};
+
+/** Settings → Prices. */
+export async function recordManualPrice(
+  raw: Record<string, string>,
+  now: Date,
+  db: Kysely<Database> = getDb(),
+): Promise<RecordedManualPrice> {
+  const input = parseInput(manualPriceInput, raw);
+  const entry = { instrumentId: input.instrumentId, date: input.asOf, price: input.price };
+  const written = await writeManualPrice(db, entry, now);
+
+  return { instrumentId: entry.instrumentId, date: entry.date, ...written };
 }
 
 export type BackfillReport = {

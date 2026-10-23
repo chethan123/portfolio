@@ -554,12 +554,14 @@ Settings → Prices. Nothing is fabricated for a day the market did not trade.
 **Failure handling:** a failed fetch keeps the last known price and marks the instrument stale,
 surfaced in the UI. Never zero, never null into a sum.
 
-**Non-trading days** get no `price_daily` row. History queries carry forward the last close, so
+**Non-trading days** get no feed `price_daily` row. History queries carry forward the last close, so
 Saturday's net worth equals Friday's.
 
-**Manual-priced instruments** are to be edited in a form which writes a `price_daily` row, the
-value carrying forward until changed. The form belongs to the unbuilt Settings → Instruments tab
-(§8.4), so today a `manual` instrument stays unpriced until that lands.
+**Manual-priced instruments** take a typed, dated price, which writes a `price_daily` row for its
+date and re-reads `quote` from the latest one, so a back-dated price fills history without moving
+today's figure (spec 0031). It carries forward until a later one is recorded, and every earlier one
+stays. The price is asked for when the instrument is created at the instruments step, so a `manual`
+instrument is never made unpriced, and later ones are typed under Settings → Prices (§8.4).
 
 ---
 
@@ -793,10 +795,10 @@ mutation. Everything else that writes lives behind Settings.
 | Accounts | Create, edit, close. Owner, kind, institution, tax treatment. Closing preserves history (`closed_at`) |
 | People | Create, edit |
 | Classifications | Create, rename, assign `asset_class` |
-| Instruments | View, repoint and forget aliases, each change previewed against what is recorded. Edit symbol, price source, classification. **Set manual prices for CITs** |
+| Instruments | View, repoint and forget aliases, each change previewed against what is recorded. Edit symbol, price source, classification |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
-| Prices | The refresh cadence, meaning how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours. Also the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
+| Prices | The refresh cadence, meaning how often the poller (§6.2) asks the feed, within the padded quote window around regular market hours. **Manual prices for CITs**, each manual instrument's latest price and date beside the form that records the next. Also the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
 | Display | The masking policy; theme follows the system until §12's toggle is built |
 | Passkeys | Enrol and remove credentials used by the household browser lock |
 
@@ -837,9 +839,10 @@ then pretend they are absent.
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments
 have gone stale?", a question you must revisit on a schedule, since CIT prices don't update
-themselves. It's also where a ticker change (§4.3) gets applied, and it is already where a bad
-alias gets repointed or forgotten, behind a preview of what stays recorded. Buried as row
-affordances, those are undiscoverable exactly when needed.
+themselves. The prices themselves are typed under Prices, whose table already shows each one's
+date; the staleness rule over that date is still to build. It's also where a ticker change (§4.3)
+gets applied, and it is already where a bad alias gets repointed or forgotten, behind a preview of
+what stays recorded. Buried as row affordances, those are undiscoverable exactly when needed.
 
 **Manual balance editing is the exception and does not live in Settings.** It's the one write
 allowed on mobile (§11), so it lives on the account's own page, one tap from the account cell on

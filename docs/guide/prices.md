@@ -22,8 +22,9 @@ it stale. An unpriced holding contributes no value to net worth. Known basis or 
 still contribute to their own totals.
 
 Historical valuation needs a daily close on or before the requested date. Backfill fills missing
-earlier coverage when the provider supports it; some gaps remain. The app has no manual-price
-editor yet. A stale price differs from a missing price: the last known value still counts.
+earlier coverage when the provider supports it; some gaps remain. Something no feed quotes is
+priced by hand under Settings → Prices, and each typed price covers its own date and every later
+one until the next. A stale price differs from a missing price: the last known value still counts.
 
 ## Everything is in dollars
 
