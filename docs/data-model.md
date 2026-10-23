@@ -26,7 +26,7 @@ The database values dated positions using price records. Their update rules diff
   current portfolio is the latest photograph per account; the portfolio on a past date is the
   latest photograph at or before that date (DESIGN.md §3, §7).
 - **Prices**: each instrument's price history is a spine of daily closes (`price_daily`), at most
-  one row per trading day, plus a single overwritten current quote (`quote`) and an append-only
+  one row per day (a trading day, for the feed), plus a single overwritten current quote (`quote`) and an append-only
   log of intraday observations (`price_observation`).
 
 Value is always `quantity × price`, computed in SQL at `numeric` precision. **The sign lives in the
@@ -351,7 +351,7 @@ contracts, stated as `COMMENT ON TABLE` in
 | Tier | Table | Contract |
 |---|---|---|
 | current answer | `quote` | one row per instrument, overwritten in place |
-| finished-day spine | `price_daily` | at most one row per instrument per trading day; the only price source for any historical valuation |
+| finished-day spine | `price_daily` | at most one row per instrument per day (a trading day, for the feed); the only price source for any historical valuation |
 | observation log | `price_observation` | instants the provider reported. Append-only, deduped per instant, never pruned, invisible to valuations of past dates |
 
 **`quote`** is the live price behind current-holdings screens.
@@ -385,6 +385,12 @@ updates: a close the instance recorded live is the record, and the feed's later 
 revision nobody asked for
 ([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). That asymmetry is the whole
 of how two writers share one table without one silently owning the other's rows.
+
+**A third writes only what the other two never select.** A `manual` instrument's closes are typed
+by a person (spec 0031): each one dated by its typist, on any calendar day the date control allows,
+a weekend included, so "one row per trading day" is the feed's rule rather than the table's. A typed
+close upserts, re-recording a date corrects it, and `quote` is re-read from the latest one. No feed
+path selects a `manual` instrument, so the feed's asymmetry above is untouched.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -782,6 +788,9 @@ flowchart LR
   rather than this one, is the only importer of the provider library. The **backfill batch** runs on
   the same refresh and writes the other two: `price_daily` again, inserting only days the spine does
   not already hold, and one `price_backfill` row per instrument attempted.
+- **A typed manual price** writes a `manual` instrument's `price_daily` row for the date typed and
+  re-reads its `quote` from the latest close, from Settings → Prices or from the instruments step
+  that creates the instrument (`writeManualPrice`, the same module).
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
   `instrument` that lost the race for its string, an `instrument_alias` the household forgets
   after its preview, a `passkey` a person removes (cascading its own `unlock_grant` rows away
@@ -795,8 +804,9 @@ flowchart LR
 - **Application writes append** `position_set`, `holding`, and `price_observation` rows. There
   is no update-blocking trigger. Retaining rows does not freeze chart answers: backdated statements,
   price changes, and metadata edits can change them. Manual history is operator-managed, and a
-  `price_daily` row is only ever rewritten with the provider's own price for its day, so a finished
-  day changes only if the provider revises its close. Overwritten in place: `quote`, `app_setting`,
+  feed instrument's `price_daily` row is only ever rewritten with the provider's own price for its
+  day, so a finished day changes only if the provider revises its close; a `manual` one's, only when
+  a person records that date again. Overwritten in place: `quote`, `app_setting`,
   an `upload_draft` as its steps write parts back, `account`'s editable columns (name, institution,
   kind, owner, tax treatment and `external_account_number` from the Settings edit. A commit
   also captures an account number where the column is empty. Then `closed_at` when it closes; note for

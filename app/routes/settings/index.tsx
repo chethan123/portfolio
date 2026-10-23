@@ -53,7 +53,8 @@ export default function SettingsIndex() {
               <Link to="/settings/prices">Prices</Link>
             </dt>
             <dd>
-              How often quotes are refreshed from the price feed around regular market hours.
+              How often quotes are refreshed from the price feed around regular market hours, and
+              the prices typed by hand for what no feed quotes.
             </dd>
 
             <dt>
@@ -75,8 +76,8 @@ export default function SettingsIndex() {
             <dt>Classifications and History</dt>
             <dd>
               Asset labels, and the hand-typed net worth series from before this instance
-              existed. Later slices build these, along with ticker and manual-price management
-              under Instruments.
+              existed. Later slices build these, along with ticker management under
+              Instruments.
             </dd>
           </dl>
         </div>

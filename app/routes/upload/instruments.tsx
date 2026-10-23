@@ -1,12 +1,17 @@
+import { useState } from "react";
 import { Form, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
 import { FieldError, FormError } from "~/components/error-message";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
 import { ASSET_CLASSES } from "~/lib/account-options";
+import { unitPriceRule } from "~/lib/decimal-input";
 import {
   NotFoundError,
   ValidationError,
+  earliestRecordableDate,
   formFields,
+  latestRecordableDate,
   refused,
 } from "~/lib/input.server";
 import { describeInstrument } from "~/lib/format";
@@ -18,7 +23,12 @@ import {
 } from "~/lib/instrument-resolution.server";
 import { defaultProvider } from "~/lib/refresh.server";
 import { sameRawStrings } from "~/lib/raw-string";
-import { STALE_REVIEW_MESSAGE, parseDraft, requireDraft } from "~/lib/uploads.server";
+import {
+  STALE_REVIEW_MESSAGE,
+  parseDraft,
+  requireDraft,
+  statedStatementDate,
+} from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
@@ -63,6 +73,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       screen,
       nameColumn: result.mapping.columns.name ?? null,
       newClassification: NEW_CLASSIFICATION,
+      priceAsOfDefault: statedStatementDate(draft, result) ?? "",
+      earliestAsOf: earliestRecordableDate(),
+      latestAsOf: latestRecordableDate(),
       staleReviewMessage: staleReview ? STALE_REVIEW_MESSAGE : null,
     };
   } catch (error) {
@@ -100,7 +113,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     await resolveAll(
       draft.id,
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
-      { probe: defaultProvider().probe },
+      { probe: defaultProvider().probe, now: new Date() },
     );
 
     return redirect(`/upload/${draft.id}/review${stale}`);
@@ -115,6 +128,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 
 export default function Instruments({ loaderData, actionData }: Route.ComponentProps) {
   const { screen, nameColumn, newClassification, staleReviewMessage } = loaderData;
+  const { priceAsOfDefault, earliestAsOf, latestAsOf } = loaderData;
 
   const errors = actionData?.errors;
   // Typed wins over default on a refusal; `actionData` present means a refused submit.
@@ -267,11 +281,21 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     Manual price
                   </label>
                   <p className="field-note">
-                    A manual price is typed from the statement and carries forward until it is
-                    changed.
+                    A manual price is typed from the statement below. It carries forward until a
+                    later one is recorded under Settings → Prices.
                   </p>
                   <FieldError message={errors?.[`priceSource-${index}`]} />
                 </fieldset>
+
+                <ManualPriceFields
+                  index={index}
+                  price={values?.[`price-${index}`] ?? ""}
+                  priceAsOf={values?.[`priceAsOf-${index}`] ?? priceAsOfDefault}
+                  priceError={errors?.[`price-${index}`]}
+                  priceAsOfError={errors?.[`priceAsOf-${index}`]}
+                  earliestAsOf={earliestAsOf}
+                  latestAsOf={latestAsOf}
+                />
 
                 <div>
                   <label htmlFor={`classificationId-${index}`}>
@@ -340,5 +364,72 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
         </div>
       </Form>
     </section>
+  );
+}
+
+// Its own component for the interpreted input's error state, one per item.
+function ManualPriceFields({
+  index,
+  price,
+  priceAsOf,
+  priceError,
+  priceAsOfError,
+  earliestAsOf,
+  latestAsOf,
+}: {
+  index: number;
+  price: string;
+  priceAsOf: string;
+  priceError: string | undefined;
+  priceAsOfError: string | undefined;
+  earliestAsOf: string;
+  latestAsOf: string;
+}) {
+  const [priceErrorActive, setPriceErrorActive] = useState(priceError !== undefined);
+
+  return (
+    <>
+      <div>
+        <label htmlFor={`price-${index}`}>Price per unit</label>
+        <InterpretedNumberInput
+          id={`price-${index}`}
+          name={`price-${index}`}
+          defaultValue={price}
+          // `text`, not `number` — a number input silently drops unparseable paste ("$1,052.41").
+          type="text"
+          inputMode="decimal"
+          placeholder="52.4100"
+          aria-describedby={`price-${index}-format price-${index}-note`}
+          autoComplete="off"
+          noteId={`price-${index}-format`}
+          onServerErrorActiveChange={setPriceErrorActive}
+          rule={unitPriceRule("The price")}
+          serverErrorId={priceError ? `price-${index}-error` : undefined}
+          shape="money"
+        />
+        {priceErrorActive ? <FieldError id={`price-${index}-error`} message={priceError} /> : null}
+      </div>
+
+      <div>
+        <label htmlFor={`priceAsOf-${index}`}>
+          Priced on
+          <input
+            id={`priceAsOf-${index}`}
+            name={`priceAsOf-${index}`}
+            type="date"
+            defaultValue={priceAsOf}
+            min={earliestAsOf}
+            max={latestAsOf}
+            aria-invalid={priceAsOfError ? true : undefined}
+            aria-describedby={`price-${index}-note`}
+          />
+        </label>
+        <p id={`price-${index}-note`} className="field-note">
+          Used only for a manual price: the unit price the statement shows, and the statement's
+          date.
+        </p>
+        <FieldError message={priceAsOfError} />
+      </div>
+    </>
   );
 }

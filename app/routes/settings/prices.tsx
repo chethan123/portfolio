@@ -1,48 +1,79 @@
+import { useState } from "react";
 import { Form } from "react-router";
 
+import { Amount } from "~/components/amount";
 import { FieldError, FormError } from "~/components/error-message";
-import { ValidationError, formFields, refused } from "~/lib/input.server";
-import { backfillGaps } from "~/lib/prices.server";
+import { InterpretedNumberInput } from "~/components/interpreted-number-input";
+import { isoDate } from "~/lib/chart-range";
+import { unitPriceRule } from "~/lib/decimal-input";
+import { describeInstrument } from "~/lib/format";
+import {
+  ValidationError,
+  earliestRecordableDate,
+  formFields,
+  latestRecordableDate,
+  refused,
+} from "~/lib/input.server";
+import { backfillGaps, manualPrices, recordManualPrice } from "~/lib/prices.server";
 import { readRefreshCadence, saveRefreshCadence } from "~/lib/settings.server";
 
-import type { BackfillGap, BackfillOutcome } from "~/lib/prices.server";
+import type { BackfillGap, BackfillOutcome, ManualPriceRow } from "~/lib/prices.server";
 import type { Route } from "./+types/prices";
 
 /**
  * Thin wrapper over `settings.server.ts`/`prices.server.ts` (cadence is a
- * row, not an env var — `0008_refresh_cadence.sql`). Second panel answers
- * "why is this still unpriced" (ADR-0011), listing every gap with a reason,
- * tried or not.
+ * row, not an env var — `0008_refresh_cadence.sql`). Second panel types the
+ * price no feed gives (spec 0031). Third answers "why is this still unpriced"
+ * (ADR-0011), listing every gap with a reason, tried or not.
  */
 export function meta() {
   return [{ title: "Prices · Settings · Portfolio" }];
 }
 
 export async function loader() {
-  const [refreshCadenceMinutes, gaps] = await Promise.all([readRefreshCadence(), backfillGaps()]);
+  const [refreshCadenceMinutes, manual, gaps] = await Promise.all([
+    readRefreshCadence(),
+    manualPrices(),
+    backfillGaps(),
+  ]);
 
-  return { refreshCadenceMinutes, gaps };
+  return {
+    refreshCadenceMinutes,
+    manual,
+    gaps,
+    today: isoDate(Date.now()),
+    earliestAsOf: earliestRecordableDate(),
+    latestAsOf: latestRecordableDate(),
+  };
 }
 
 export async function action({ request }: Route.ActionArgs) {
   const values = formFields(await request.formData());
+  const { intent } = values;
 
   try {
-    await saveRefreshCadence(values);
-
-    // No payload — the loader re-run shows the stored cadence as confirmation.
-    return null;
+    switch (intent) {
+      case "cadence":
+        await saveRefreshCadence(values);
+        // No payload — the loader re-run shows the stored cadence as confirmation.
+        return null;
+      case "manual-price":
+        return { intent, recorded: await recordManualPrice(values, new Date()) };
+      default:
+        throw new Response(`Unknown intent ${JSON.stringify(intent)}.`, { status: 400 });
+    }
   } catch (error) {
     if (error instanceof ValidationError) {
-      return refused(error, values);
+      return { intent, recorded: null, ...refused(error, values) };
     }
     throw error;
   }
 }
 
 export default function Prices({ loaderData, actionData }: Route.ComponentProps) {
-  const { refreshCadenceMinutes, gaps } = loaderData;
-  const error = actionData?.errors.refreshCadenceMinutes;
+  const { refreshCadenceMinutes, manual, gaps } = loaderData;
+  const cadenceRefusal = actionData?.intent === "cadence" && "errors" in actionData ? actionData : null;
+  const error = cadenceRefusal?.errors.refreshCadenceMinutes;
 
   return (
     <>
@@ -50,7 +81,8 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         <div>
           <h1 className="page-title">Prices</h1>
           <p className="page-subtitle">
-            How often prices are fetched from the feed, and what the spine does not cover yet.
+            How often prices are fetched from the feed, the prices typed by hand for what no feed
+            quotes, and what the spine does not cover yet.
             Quotes are asked for from 15 minutes before through 15 minutes after regular market
             hours; a refresh at any hour also fills in past closes for anything held further back
             than the price history reaches.
@@ -64,7 +96,8 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         </header>
 
         <Form method="post" className="panel-form">
-          <FormError message={actionData?.formError} />
+          <input type="hidden" name="intent" value="cadence" />
+          <FormError message={cadenceRefusal?.formError} />
 
           <div>
             <label htmlFor="refresh-cadence">
@@ -75,7 +108,7 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
                 inputMode="numeric"
                 defaultValue={
                   error
-                    ? (actionData?.values.refreshCadenceMinutes ?? "")
+                    ? (cadenceRefusal?.values.refreshCadenceMinutes ?? "")
                     : String(refreshCadenceMinutes)
                 }
                 aria-invalid={error ? true : undefined}
@@ -109,6 +142,14 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
           </button>
         </Form>
       </section>
+
+      <ManualPrices
+        manual={manual}
+        actionData={actionData?.intent === "manual-price" ? actionData : undefined}
+        today={loaderData.today}
+        earliestAsOf={loaderData.earliestAsOf}
+        latestAsOf={loaderData.latestAsOf}
+      />
 
       <section className="panel">
         <header className="panel-header">
@@ -163,11 +204,165 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
   );
 }
 
+function ManualPrices({
+  manual,
+  actionData,
+  today,
+  earliestAsOf,
+  latestAsOf,
+}: {
+  manual: ManualPriceRow[];
+  actionData: NonNullable<Route.ComponentProps["actionData"]> | undefined;
+  today: string;
+  earliestAsOf: string;
+  latestAsOf: string;
+}) {
+  const refusal = actionData !== undefined && "errors" in actionData ? actionData : null;
+  const recorded = actionData?.recorded ?? null;
+  const [priceErrorActive, setPriceErrorActive] = useState(refusal?.errors.price !== undefined);
+
+  return (
+    <section className="panel">
+      <header className="panel-header">
+        <h2 className="panel-title">Prices typed by hand</h2>
+      </header>
+
+      {manual.length === 0 ? (
+        <div className="panel-body">
+          <p className="empty-note">
+            Nothing here is priced by hand. An instrument created with a manual price at upload
+            appears here.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="panel-body">
+            <p className="field-note">
+              For what no feed quotes, such as a workplace plan's trust. A price carries forward
+              until a later one is recorded; every earlier one is kept for history. Recording a date
+              again corrects that date.
+            </p>
+            {recorded === null ? null : (
+              <p className="form-note" role="status">
+                Recorded <Amount value={recorded.price} places={4} /> for{" "}
+                {describeInstrument(recorded)} as of{" "}
+                <span className="u-data">{recorded.date}</span>.
+              </p>
+            )}
+          </div>
+
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Instrument</th>
+                  <th scope="col" className="is-numeric">
+                    Latest price
+                  </th>
+                  <th scope="col">Priced on</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manual.map((row) => (
+                  <tr key={row.id}>
+                    <td>{describeInstrument(row)}</td>
+                    <td className="is-numeric u-data">
+                      <Amount value={row.latest?.price ?? null} places={4} />
+                    </td>
+                    <td className="u-data">{row.latest?.date ?? "never priced"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Keyed on the receipt, so a recorded price empties the boxes and a refusal keeps them. */}
+          <Form
+            method="post"
+            className="panel-form"
+            key={
+              recorded === null
+                ? "form"
+                : `${recorded.instrumentId}-${recorded.date}-${recorded.price}`
+            }
+          >
+            <input type="hidden" name="intent" value="manual-price" />
+            <FormError message={refusal?.formError} />
+
+            <div>
+              <label htmlFor="manual-price-instrument">
+                Instrument
+                <select
+                  id="manual-price-instrument"
+                  name="instrumentId"
+                  defaultValue={refusal?.values.instrumentId ?? ""}
+                  aria-invalid={refusal?.errors.instrumentId ? true : undefined}
+                >
+                  <option value="">Choose…</option>
+                  {manual.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {describeInstrument(row)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <FieldError message={refusal?.errors.instrumentId} />
+            </div>
+
+            <div>
+              <label htmlFor="manual-price-price">Price per unit</label>
+              <InterpretedNumberInput
+                id="manual-price-price"
+                name="price"
+                defaultValue={refusal?.values.price ?? ""}
+                // `text`, not `number` — a number input silently drops unparseable paste ("$1,052.41").
+                type="text"
+                inputMode="decimal"
+                placeholder="52.4100"
+                aria-describedby="manual-price-price-format"
+                autoComplete="off"
+                noteId="manual-price-price-format"
+                onServerErrorActiveChange={setPriceErrorActive}
+                rule={unitPriceRule("The price")}
+                serverErrorId={refusal?.errors.price ? "manual-price-price-error" : undefined}
+                shape="money"
+              />
+              {priceErrorActive ? (
+                <FieldError id="manual-price-price-error" message={refusal?.errors.price} />
+              ) : null}
+            </div>
+
+            <div>
+              <label htmlFor="manual-price-as-of">
+                Priced on
+                <input
+                  id="manual-price-as-of"
+                  name="asOf"
+                  type="date"
+                  defaultValue={refusal?.values.asOf ?? today}
+                  min={earliestAsOf}
+                  max={latestAsOf}
+                  aria-invalid={refusal?.errors.asOf ? true : undefined}
+                />
+              </label>
+              <FieldError message={refusal?.errors.asOf} />
+            </div>
+
+            <button type="submit" className="button">
+              Save price
+            </button>
+          </Form>
+        </>
+      )}
+    </section>
+  );
+}
+
 // Rendering, not a rule — vocabulary is the ledger's (`0010_price_backfill.sql`). Unknown outcome falls back to the stored value, not blank.
 function attemptWords(gap: BackfillGap): React.ReactNode {
   if (!gap.willTry) {
     if (gap.priceSource === "manual") {
-      return "Never — priced by hand, so there is no feed history to fetch.";
+      return "Never fetched — priced by hand. Record a price dated on or before the held-from date above to cover it.";
     }
     if (gap.symbol === null) {
       return "Never — no ticker recorded, so there is nothing to fetch under.";

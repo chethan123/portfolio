@@ -274,8 +274,7 @@ worker caches no pages or financial data.
 ### Not built yet
 
 Settings has no Classifications or History editor, and its Instruments tab holds aliases only.
-There is no manual-price UI,
-export, transaction ledger, realized-gain calculation, or investment-return calculation.
+There is no export, transaction ledger, realized-gain calculation, or investment-return calculation.
 The page-level stale-price summary is also pending. See [accepted limitations](DESIGN.md#14-accepted-limitations).
 
 ## Running an instance

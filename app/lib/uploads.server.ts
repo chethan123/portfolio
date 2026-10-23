@@ -1338,7 +1338,7 @@ function revisionResolved(aliases: ReadonlyMap<string, string>) {
 // and commit is the guard's refusal, not a stale review.
 function statementGroups(
   draft: UploadDraft,
-  parse: Extract<DraftParse, { step: null }>,
+  parse: Extract<DraftParse, { step: "instruments" | null }>,
 ): StatementGroup[] {
   if (draft.accountId !== null) {
     const { positions, combined, skipped, asOfDate } = parse.parsed;
@@ -1357,6 +1357,19 @@ function statementGroups(
   // Unreachable: parseDraft routes every null-account draft whose mapping it accepts.
   if (parse.routed === null) throw new DraftNotReadyError("columns", null);
   return parse.routed;
+}
+
+// The one date every section of the file states, else null: the instruments step's default for a
+// manual price's date. Null rather than today when the date is asked at review (spec 0031 §3).
+export function statedStatementDate(
+  draft: UploadDraft,
+  parse: Extract<DraftParse, { step: "instruments" | null }>,
+): IsoDate | null {
+  // statementGroups' unreachable throw would be a 500 on a screen that only wants a default.
+  if (draft.accountId === null && parse.routed === null) return null;
+  const dates = new Set(statementGroups(draft, parse).map((group) => group.asOfDate));
+  const [only] = dates;
+  return dates.size === 1 && only !== undefined ? only : null;
 }
 
 const REVIEW_REVISION = "v5";
@@ -1978,7 +1991,7 @@ function reasonsToRefuse(
         say(
           `${row.name}'s quantity valued at its current price is a larger figure than this ` +
             "application can hold, so nothing was recorded. Check the quantity column against " +
-            "the sample rows.",
+            "the sample rows, and a price typed by hand under Settings → Prices.",
         ),
         refused,
       );

@@ -42,6 +42,9 @@ timestamp appears on exactly one mobile screen. The design brief for this ticket
       "which CITs have gone stale" answerable on a schedule rather than from memory
 - [ ] A manual price is entered in a form and takes effect immediately in current holdings, and
       carries forward to later dates until it is changed
+
+      _Delivered by [0031](../0031-manual-prices.md)_, on Settings → Prices rather than this tab,
+      and asked for at the instruments step when a manual instrument is created.
 - [ ] An instrument's symbol can be changed, and its position and price history stay one series
       across the change
 - [ ] An instrument's price source and classification can be changed, so a CIT that gains a public

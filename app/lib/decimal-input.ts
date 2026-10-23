@@ -10,7 +10,8 @@ export type DecimalInputReason =
   | "sign"
   | "scale"
   | "size"
-  | "range";
+  | "range"
+  | "zero";
 
 export type DecimalInput =
   | { kind: "decimal"; value: string }
@@ -19,6 +20,7 @@ export type DecimalInput =
 export type DecimalInputOptions = Readonly<{
   allowTrailingPercent?: boolean;
   sign?: "allowed" | "refused";
+  positive?: boolean;
   maxDecimals?: number;
   maxIntegerDigits?: number;
   max?: string;
@@ -58,6 +60,7 @@ export function parseDecimalInput(
   {
     allowTrailingPercent = false,
     sign = "allowed",
+    positive = false,
     maxDecimals,
     maxIntegerDigits,
     max,
@@ -138,6 +141,7 @@ export function parseDecimalInput(
   ) {
     return { kind: "invalid", reason: "range" };
   }
+  if (positive && /^-?0+(\.0+)?$/.test(decimal)) return { kind: "invalid", reason: "zero" };
 
   return { kind: "decimal", value: decimal };
 }
@@ -203,6 +207,25 @@ export function perShareAmountRule(label: string, maxIntegerDigits = 16): Decima
       }
       if (reason === "size") return `${label} is larger than this application can store.`;
       return `${label} must be an amount in dollars, like 92.4150.`;
+    },
+  };
+}
+
+export function unitPriceRule(label: string, maxIntegerDigits = 16): DecimalInputRule {
+  return {
+    label,
+    options: { sign: "refused", positive: true, maxDecimals: 4, maxIntegerDigits },
+    message: (reason) => {
+      if (reason === "grouping") return decimalFormatMessage(label);
+      if (reason === "sign") return `${label} is what one unit is worth, which is never negative.`;
+      if (reason === "zero") {
+        return `${label} must be more than zero — a holding worth nothing is sold, not priced at nothing.`;
+      }
+      if (reason === "scale") {
+        return `${label} is recorded to 4 decimal places, and no further.`;
+      }
+      if (reason === "size") return `${label} is larger than this application can store.`;
+      return `${label} must be an amount in dollars, like 52.4100.`;
     },
   };
 }

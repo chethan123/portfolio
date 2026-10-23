@@ -34,6 +34,7 @@ const MAPPING: StatementMapping = {
 async function stageDraft(
   ctx: Pick<TestContext, "db" | "seedAccount" | "seedUploadDraft">,
   csv: string = CSV,
+  mapping: StatementMapping = MAPPING,
 ): Promise<string> {
   const account = await ctx.seedAccount({ kind: "brokerage" });
   const draft = await ctx.seedUploadDraft({
@@ -42,7 +43,7 @@ async function stageDraft(
     bytes: encode(csv),
   });
 
-  const outcome = await rememberMapping(draft.id, MAPPING, ctx.db);
+  const outcome = await rememberMapping(draft.id, mapping, ctx.db);
   if ("problems" in outcome) {
     throw new Error("This fixture's mapping does not parse its own file.");
   }
@@ -58,6 +59,8 @@ function createAnswer(index: number, raw: string, symbol: string) {
     [`symbol-${index}`]: symbol,
     [`name-${index}`]: `${symbol} fund`,
     [`priceSource-${index}`]: "manual",
+    [`price-${index}`]: "52.4100",
+    [`priceAsOf-${index}`]: "2026-01-31",
     [`classificationId-${index}`]: "__new__",
     [`newClassificationName-${index}`]: `Class ${symbol}`,
     [`newClassificationAssetClass-${index}`]: "equity",
@@ -142,6 +145,8 @@ describe("a step with nothing left to ask", () => {
               symbol: "VTI",
               name: "Vanguard Total Stock Market",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: "__new__",
               newClassificationName: "US equity",
               newClassificationAssetClass: "equity",
@@ -204,6 +209,69 @@ describe("an upload abandoned after this step", () => {
 
       // Nothing became vocabulary: the answer stayed the abandoned draft's own.
       expect(await ctx.db.selectFrom("instrument_alias").select("raw_string").execute()).toEqual([]);
+    }),
+  );
+});
+
+describe("a manual price typed at creation", () => {
+  it(
+    "dates it by default on the date the file states",
+    withDatabase(async (ctx) => {
+      const draftId = await stageDraft(
+        ctx,
+        ["Symbol,Quantity,As of", "VTI,100,2026-01-30", "VXUS,50,2026-01-30"].join("\n"),
+        { ...MAPPING, columns: { ...MAPPING.columns, asOf: "As of" } },
+      );
+
+      const page = await outcomeOf(() =>
+        loader(args(get(`/upload/${draftId}/instruments`), { draftId })),
+      );
+
+      expect(page).toMatchObject({ priceAsOfDefault: "2026-01-30" });
+    }),
+  );
+
+  it(
+    "leaves the date blank when the file states none, rather than guessing today",
+    withDatabase(async (ctx) => {
+      const draftId = await stageDraft(ctx);
+
+      const page = await outcomeOf(() =>
+        loader(args(get(`/upload/${draftId}/instruments`), { draftId })),
+      );
+
+      expect(page).toMatchObject({ priceAsOfDefault: "" });
+    }),
+  );
+
+  it(
+    "prices the new instrument, so the step leaves nothing unpriced behind it",
+    withDatabase(async (ctx) => {
+      const draftId = await stageDraft(ctx);
+
+      await redirectTo(() =>
+        action(
+          args(
+            post(`/upload/${draftId}/instruments`, {
+              ...createAnswer(0, "VTI", "VTI"),
+              ...createAnswer(1, "VXUS", "VXUS"),
+            }),
+            { draftId },
+          ),
+        ),
+      );
+
+      const quotes = await ctx.db
+        .selectFrom("quote")
+        .innerJoin("instrument", "instrument.id", "quote.instrument_id")
+        .select(["instrument.symbol", "quote.price"])
+        .where("instrument.symbol", "in", ["VTI", "VXUS"])
+        .orderBy("instrument.symbol")
+        .execute();
+      expect(quotes).toEqual([
+        { symbol: "VTI", price: "52.4100" },
+        { symbol: "VXUS", price: "52.4100" },
+      ]);
     }),
   );
 });

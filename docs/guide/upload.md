@@ -162,7 +162,9 @@ For each, either:
 
 **Price source** is **Feed**, looked up automatically and needing a symbol, or **Manual price**,
 typed by hand and carried forward until changed. A workplace plan's collective investment trust is
-the usual manual case.
+the usual manual case. A manual price is asked for here: the **price per unit** the statement shows,
+and the date it is **priced on**, which starts as the statement's own date when the file states one.
+Later prices are typed under [Settings → Prices](settings.md).
 
 **Classification** is picked from the list, or **New classification…** with a name and one of Equity,
 Bonds, Cash or Other.

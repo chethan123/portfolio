@@ -369,6 +369,8 @@ describe("resolveAll — creating an instrument", () => {
               symbol: "",
               name: "Vanguard Target Retirement 2045 Trust II",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: classification.id,
               newClassificationName: "",
               newClassificationAssetClass: "",
@@ -394,6 +396,118 @@ describe("resolveAll — creating an instrument", () => {
         .where("raw_string", "=", "VANG TARGET RET 2045")
         .executeTakeFirstOrThrow();
       expect(answer.instrument_id).toBe(instrument.id);
+    }),
+  );
+
+  it(
+    "writes the manual price typed with it, so the instrument is never made unpriced",
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
+
+      await resolveAll(
+        draftId,
+        [
+          {
+            raw: "VANG TARGET RET 2045",
+            fields: createFields({
+              symbol: "",
+              name: "Vanguard Target Retirement 2045 Trust II",
+              priceSource: "manual",
+              price: "$1,052.41",
+              priceAsOf: "2026-01-30",
+            }),
+          },
+        ],
+        { probe: forbiddenProbe, now: new Date("2026-02-02T15:00:00Z") },
+        db,
+      );
+
+      const instrument = await db
+        .selectFrom("instrument")
+        .select("id")
+        .where("name", "=", "Vanguard Target Retirement 2045 Trust II")
+        .executeTakeFirstOrThrow();
+      const closes = await db
+        .selectFrom("price_daily")
+        .select(["date", "close"])
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+      const quote = await db
+        .selectFrom("quote")
+        .select(["price", "as_of", "is_stale"])
+        .where("instrument_id", "=", instrument.id)
+        .executeTakeFirstOrThrow();
+      expect(closes).toEqual([{ date: "2026-01-30", close: "1052.4100" }]);
+      expect(quote).toEqual({
+        price: "1052.4100",
+        as_of: new Date("2026-02-02T15:00:00Z"),
+        is_stale: false,
+      });
+    }),
+  );
+
+  it(
+    "refuses a manual instrument with no price or no date, and creates nothing",
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
+      const manual = { symbol: "", priceSource: "manual" };
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          draftId,
+          [
+            {
+              raw: "TRUST A",
+              fields: createFields({ ...manual, name: "Trust A", priceAsOf: "2026-01-30" }),
+            },
+            { raw: "TRUST B", fields: createFields({ ...manual, name: "Trust B", price: "10" }) },
+          ],
+          { probe: forbiddenProbe },
+          db,
+        ),
+      );
+
+      expect(refusal.fieldErrors).toMatchObject({
+        "price-0": expect.stringMatching(/required/),
+        "priceAsOf-1": expect.stringMatching(/required/),
+      });
+      expect(refusal.fieldErrors["priceAsOf-0"]).toBeUndefined();
+      expect(refusal.fieldErrors["price-1"]).toBeUndefined();
+      const created = await db
+        .selectFrom("instrument")
+        .select("id")
+        .where("name", "in", ["Trust A", "Trust B"])
+        .execute();
+      expect(created).toEqual([]);
+    }),
+  );
+
+  it(
+    "ignores price fields left behind on an instrument priced from the feed",
+    withDatabase(async (ctx) => {
+      const { db } = ctx;
+      const draftId = await aDraft(ctx);
+
+      await resolveAll(
+        draftId,
+        [{ raw: "VXUS", fields: createFields({ price: "-1", priceAsOf: "not a date" }) }],
+        { probe: async () => new Map([["VXUS", { status: "unavailable" as const }]]) },
+        db,
+      );
+
+      const instrument = await db
+        .selectFrom("instrument")
+        .select("id")
+        .where("symbol", "=", "VXUS")
+        .executeTakeFirstOrThrow();
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+      expect(closes).toEqual([]);
     }),
   );
 
@@ -597,6 +711,8 @@ describe("resolveAll — the USD probe", () => {
           symbol: "VWRL",
           name: `Vanguard FTSE All-World (${priceSource})`,
           priceSource,
+          price: "52.4100",
+          priceAsOf: "2026-01-31",
           classificationId: classification.id,
           newClassificationName: "",
           newClassificationAssetClass: "",
@@ -634,6 +750,8 @@ describe("resolveAll — the USD probe", () => {
               symbol: "VWRL",
               name: "Vanguard FTSE All-World",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: classification.id,
               newClassificationName: "",
               newClassificationAssetClass: "",
@@ -760,6 +878,8 @@ describe("resolveAll — the USD probe", () => {
               symbol: "",
               name: "Vanguard Target Retirement 2045 Trust II",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: classification.id,
               newClassificationName: "",
               newClassificationAssetClass: "",
@@ -825,6 +945,8 @@ describe("resolveAll — the whole submission", () => {
               symbol: "",
               name: "Cash sweep",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: NEW_CLASSIFICATION,
               newClassificationName: "Sweep",
               newClassificationAssetClass: "cash",
@@ -918,6 +1040,8 @@ describe("resolveAll — the whole submission", () => {
               symbol: "",
               name: "Vanguard Target Retirement 2045 Trust II",
               priceSource: "manual",
+              price: "52.4100",
+              priceAsOf: "2026-01-31",
               classificationId: classification.id,
             }),
           },

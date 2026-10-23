@@ -12,8 +12,8 @@ so nobody hunts for it:
 
 - **Classifications.** The asset labels an instrument is filed under.
 - **History.** The hand-typed net worth series from before this instance existed.
-- The rest of **Instruments**: managing tickers, and typing a price by hand for something with no
-  public quote. The tab today holds the names a statement taught the app, below.
+- The rest of **Instruments**: managing tickers. The tab today holds the names a statement taught
+  the app, below.
 
 They are named together, with a sentence and nothing to click. See [Not built
 yet](../../README.md#not-built-yet).
@@ -93,9 +93,17 @@ echoes how it normalizes the rate's punctuation while you type.
 ![The same tab on a phone](images/settings-prices-mobile.png)
 
 Set the quote-refresh cadence, in whole minutes from 1 to 1440; the default is 15. The next scheduled
-tick picks up a change. This tab also lists missing historical price coverage and the last backfill outcome.
+tick picks up a change.
+
+**Prices typed by hand** lists everything priced by hand, with its latest price and the date it is
+priced on. Choose one, type the price per unit and its date, and **Save price**. A price carries
+forward until a later one; earlier ones are kept for history, and saving a date again corrects that
+date.
+
+This tab also lists missing historical price coverage and the last backfill outcome.
 Rows marked **Never** have no supported feed history (manual pricing, no ticker, or another price
-source); waiting for another backfill will not fill them.
+source); waiting for another backfill will not fill them. A manual one is covered by typing a price
+dated on or before its held-from date.
 It is not a list of all stale current quotes. See [Prices](prices.md).
 
 ## Display
