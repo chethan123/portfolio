@@ -10,6 +10,7 @@ Keep original evidence and rejected options intact; add a dated follow-up when a
 
 ## Reports
 
+- [Dependency and CVE audit](2026-10-23-dependency-audit.md) — 2026-10-23. Ten npm CVEs (Vite, Vitest mocker, source-map-js, Hono, ip-address) with fixes on current majors; Node 24.22.1, PostgreSQL 17.11, OAuth2 Proxy and Caddy advisory checks; non-npm dependency inventory.
 - [Dependency updates — verification](2026-10-03-dependency-update-verification.md) — 2026-10-03. Security dependency patches, automated checks, browser workflows and OAuth callback log-redaction regression.
 - [Architecture review — deepening opportunities, second pass](2026-09-24-architecture-review.md) — 2026-09-24. Thirteen candidates over ingest, pricing, the read path and the lock, one reopened refutation from the August review, and the stale line references found on the way; includes the visual report.
 - [Loading and responsiveness review](2026-09-20-loading-responsiveness-review.md) — 2026-09-20. Formatter reuse, chart serialization, pending-navigation feedback, and static-cache measurements; includes the visual report and reproduction evidence.
