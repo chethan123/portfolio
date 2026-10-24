@@ -69,7 +69,7 @@ Real browser, real server, real database. No new dependency: `playwright` is alr
 devDependency (`scripts/capture-screenshots.ts` is the usage to copy). The worktree may have no
 `node_modules`: run `npm ci` first.
 
-Harness, in the file's `beforeAll(fn, 180_000)` / `afterAll(fn, 60_000)`:
+Harness, in the file's `beforeAll(fn, 300_000)` / `afterAll(fn, 60_000)`:
 - **Database.** On `TEST_DATABASE_URL` (`tests/support/database.ts:19`), `create database
   portfolio_browser_<random hex>`. Migrate with `applyPendingMigrations(createPool(url))`
   (`server/migrations.ts:73`, `server/db.ts:24`); the directory defaults to
@@ -78,13 +78,16 @@ Harness, in the file's `beforeAll(fn, 180_000)` / `afterAll(fn, 60_000)`:
   `app/lib/db.server.ts:23`) — committed, since the server is another process. No passkey, so the
   lock is open (`app/lib/lock.server.ts:64`). In `afterAll`: `destroy()` the Kysely handle, `end()`
   the pool, then `drop database … with (force)` from the admin connection.
-- **Server.** Free port from `node:net` (listen 0, read, close). Spawn
-  `node_modules/.bin/react-router dev --port <p> --strictPort`, `detached: true`,
-  `stdio: "ignore"` (an undrained pipe stalls Vite), env
-  `{ ...process.env, DATABASE_URL: <that db>, PUBLIC_ORIGIN: "http://localhost:<p>" }` — the
-  override matters, vitest sets `PUBLIC_ORIGIN=https://portfolio.local`; a developer's `.env`
-  cannot override it (Vite's `loadEnv` lets `process.env` win). Ready when `GET /healthz` answers
-  200, polled within the hook's budget. `afterAll`: kill the process group (`process.kill(-pid)`).
+- **Server.** Free port from `node:net` (listen 0, read, close). Build with
+  `node_modules/.bin/react-router build` every run (a stale `build/` would test old code; the
+  gitignored directory is overwritten), then spawn
+  `node_modules/.bin/react-router-serve ./server/server-build.ts` (`npm start`), `detached: true`,
+  `stdio: "ignore"`, env `{ ...process.env, NODE_ENV: "production", PORT: <p>, DATABASE_URL: <that
+  db>, PUBLIC_ORIGIN: "http://localhost:<p>" }` — vitest sets `NODE_ENV=test` and
+  `PUBLIC_ORIGIN=https://portfolio.local`, so both overrides matter. Built, not `react-router dev`:
+  Vite's dependency optimizer force-reloads a cold page, wiping dirty input. Ready when
+  `GET /healthz` answers 200; the poll rejects at once on the child's `error` or early exit.
+  `afterAll`: kill the process group (`process.kill(-pid)`).
 - **Browser.** `chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE })`. If launch
   throws, rethrow with a message naming `npx playwright install chromium` and
   `docs/developing.md`'s Chromium paragraph (fail loudly, like `tests/support/database.ts:40-43`;
@@ -96,9 +99,13 @@ Timing: each `it` gets `60_000`. Every `expect.poll` passes `{ timeout: 10_000 }
 DOM state is read with `expect.poll` on `locator.inputValue()`. DB reads use a Kysely handle on the
 browser database.
 
+Hydration: after each `goto`/`reload`, wait until the save form carries a `__reactFiber` key (an
+un-hydrated form POSTs natively), then set `window.__mounted`. Every save asserts the marker
+survived, so a reload fails the test — the issue's "no remount or navigation in A" made executable.
+
 Settling a save: every successful save changes Name; it has settled when `expect.poll` of the page
-`<h1>` text equals the posted Name. A refused save has settled when the Name field's error text is
-visible.
+`<h1>` text equals the posted Name. A refused save has settled when the Name input reports
+`aria-invalid` (not a bare `.field-error`: a stale number can draw a second error).
 
 Cases (one `describe`, run in order, sharing A and B):
 1. **Two unrelated saves keep a number stored from another tab** — the issue's sequence:
@@ -109,8 +116,9 @@ Cases (one `describe`, run in order, sharing A and B):
    No reload or navigation in A.
 2. **A deliberate clear after the redraw still clears** — A clears the box, changes Name, saves;
    DB number `NULL`, box blank, baseline blank.
-3. **A refusal keeps the typed edits and the baseline** — A types `Q-1` in the number, blanks Name,
-   saves; refused; box still `Q-1`, Name box still blank, baseline unchanged, DB unchanged.
+3. **A refusal keeps the typed edits and the baseline** — B reloads (its page predates A's clear),
+   stores `R-5`. A types `Q-1` in the number, blanks Name, saves; refused; box still `Q-1`, Name
+   box still blank, baseline still blank (not rebased to `R-5`), DB still the row holding `R-5`.
 
 Already covered server-side, not duplicated: deliberate clear (`tests/accounts.test.ts:499-517`),
 stale edit refused (`tests/accounts.test.ts:411-443`, `tests/routes/settings-account.test.ts:94-128`).

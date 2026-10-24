@@ -187,6 +187,11 @@ hold across modules, `tests/support/` for the helpers below, and `tests/fixtures
 real brokerage CSVs, which is what you want for anything touching ingest, and is the directory you
 will not find by guessing.
 
+`tests/browser/` is the exception to "no DOM" below: a real Chromium against the built app
+(`react-router-serve`, rebuilt into `build/` each run) and its own database, for what only a mounted
+DOM shows (retained input state). It needs a browser; see the Chromium paragraph under
+[Retake screenshots](#retake-screenshots-after-changing-a-screen).
+
 ### How the suite is built
 
 The reasoning is [ARCHITECTURE §9](../ARCHITECTURE.md#9-testing-architecture); what follows is only
@@ -214,8 +219,8 @@ what changes how you run and write things.
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing
   that releases them. Nothing fails if you forget: the handles simply leak until the worker exits,
   which is exactly why it is a convention rather than an error.
-- **There is no DOM.** No jsdom, no `@testing-library/react`, no `screen.getByText`; a component test
-  calls `renderToStaticMarkup` on the component and asserts against the string.
+- **There is no DOM**, outside `tests/browser/`. No jsdom, no `@testing-library/react`, no
+  `screen.getByText`; a component test calls `renderToStaticMarkup` on the component and asserts against the string.
   [`../tests/support/render.tsx`](../tests/support/render.tsx) covers the two cases beyond a bare
   component: `renderRoute` renders a route module's default export through `createRoutesStub` with
   hydration data and a `masked` flag, and `renderThroughLayout` renders a path through the real
