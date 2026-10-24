@@ -74,6 +74,9 @@ Instrument and Quantity are required and must use different columns. Name, Cost 
 and Account number are optional. Choose **Not in this file** for an absent column; an unchosen
 optional field is also saved as absent.
 
+A one-account file whose rows name two account numbers is refused at this step; it belongs under
+**Several accounts**.
+
 For cost basis, specify whether the file gives a per-share figure or the whole position's total.
 The app stores per-share basis to four decimals, so dividing a total by quantity can lose precision.
 Use the preview values rather than relying on column names alone.
