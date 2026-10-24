@@ -60,6 +60,7 @@ their original status still says proposed. Two deliberate exceptions to preservi
 | [0030](0030-the-router-owns-its-steps.md) | The router owns which step each routing problem belongs to and builds the accounts step's questions; `readDraft` the one read a wizard request takes its result from (architecture review 2026-09-24 §2.8) |
 | [0031](0031-manual-prices.md) | Manual prices: a typed, dated price writing both tiers, asked for when a manual instrument is created at upload and recorded afterwards on Settings → Prices (#292) |
 | [0032](0032-two-numbers-refused-before-the-fold.md) | A one-account file naming two account numbers refused by the parser at the columns step, before the raw-symbol and alias folds can merge its rows and hide the second number from the commit's guard (#399) |
+| [0033](0033-account-number-kept-across-saves.md) | A successful save on Settings → account redraws its form from the stored account, so a number another tab recorded is shown and kept rather than cleared by the next unrelated save (#400) |
 
 ## The ticket directories
 

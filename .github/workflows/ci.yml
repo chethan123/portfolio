@@ -44,6 +44,11 @@ jobs:
           # migrate.ts calls loadConfig, which validates the whole schema.
           PUBLIC_ORIGIN: https://portfolio.example.com
 
+      # tests/browser launches Chromium. Headless with no `channel` uses the
+      # headless shell, so the full browser is not needed.
+      - name: Install Chromium
+        run: npx playwright install --with-deps --only-shell chromium
+
       - name: Test
         run: npm test
         env:

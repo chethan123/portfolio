@@ -1,4 +1,5 @@
-import { Form, Link, redirect } from "react-router";
+import { useState } from "react";
+import { Form, Link, redirect, useNavigation } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
 import { FormError } from "~/components/error-message";
@@ -68,6 +69,14 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
     fromExternalAccountNumber: account.externalAccountNumber ?? "",
   };
 
+  // Remount the save form once per settled save so boxes redraw from what was stored (#400).
+  // Needs the loader to revalidate after the action; `shouldRevalidate` false would break it.
+  const navigation = useNavigation();
+  const [drawn, setDrawn] = useState({ after: actionData, key: 0 });
+  if (navigation.state === "idle" && actionData?.saved && drawn.after !== actionData) {
+    setDrawn({ after: actionData, key: drawn.key + 1 });
+  }
+
   return (
     <>
       <p className="breadcrumb">
@@ -97,7 +106,7 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
       ) : null}
 
       <section className="panel">
-        <Form method="post" className="panel-form">
+        <Form key={drawn.key} method="post" className="panel-form">
           <FormError message={actionData?.formError} />
 
           <AccountFields
