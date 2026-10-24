@@ -579,11 +579,12 @@ export function parseStatement(
     }
 
     const fold = foldLots(group);
+    const accountNumber = group.find((record) => record.accountNumber !== null)?.accountNumber ?? null;
     const position = signed({
       row: first.row,
       instrument,
       name: first.name,
-      accountNumber: first.accountNumber,
+      accountNumber,
       quantity: fold.quantity,
       costBasisPerShare: fold.costBasisPerShare,
       weightedBasisUnits: fold.weightedBasisUnits,
@@ -592,9 +593,7 @@ export function parseStatement(
     positions.push(position);
     combined.push({
       // Single mode reads the number too (the one-account guard), and leaves it off.
-      ...(multiAccount && first.accountNumber !== null
-        ? { accountNumber: first.accountNumber }
-        : {}),
+      ...(multiAccount && accountNumber !== null ? { accountNumber } : {}),
       instrument,
       rowCount: group.length,
       quantity: position.quantity,
@@ -613,6 +612,27 @@ export function parseStatement(
       asOfSightings: accountAsOfSightings,
       unnumbered,
     };
+  }
+
+  const numbered = records.find((record) => record.accountNumber !== null);
+  const differing =
+    numbered === undefined
+      ? undefined
+      : records.find(
+          (record) =>
+            record.accountNumber !== null && record.accountNumber !== numbered.accountNumber,
+        );
+  if (numbered !== undefined && differing !== undefined) {
+    problems.push({
+      row: differing.row,
+      column: columns.accountNumber ?? null,
+      message:
+        `This file says it describes account "${numbered.accountNumber}" on line ` +
+        `${numbered.row + 1} and "${differing.accountNumber}" on line ${differing.row + 1}, and ` +
+        "a statement describes one account. Check which account this export belongs to. " +
+        'A file holding several accounts uploads as "Several accounts", which routes each row ' +
+        "by its number.",
+    });
   }
 
   const { asOfDate, problem } = resolveAsOf(asOfSightings, columns.asOf ?? null);

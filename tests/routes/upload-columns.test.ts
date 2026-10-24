@@ -496,3 +496,34 @@ describe("a multi-account file the router refuses, on the columns step", () => {
     }),
   );
 });
+
+// spec 0032: the parser refuses two numbers in a one-account file, at this step, before anything folds
+describe("a one-account draft naming two account numbers", () => {
+  it(
+    "shows both numbers beside the account-number column, and saves nothing",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount();
+      const draft = await ctx.seedUploadDraft({
+        account,
+        bytes: encode("Symbol,Quantity,Account\nVTI,10,A-111\nVTI,20,B-222\n"),
+      });
+
+      const refused = await problemsOf(
+        saveColumns(draft.id, {
+          instrument: "Symbol",
+          quantity: "Quantity",
+          accountNumber: "Account",
+          name: undefined,
+          costBasis: undefined,
+          asOf: undefined,
+        }),
+      );
+
+      expect(refused.problems).toHaveLength(1);
+      expect(refused.problems[0]).toMatch(/"A-111" on line 2/);
+      expect(refused.problems[0]).toMatch(/"B-222" on line 3/);
+      expect(refused.problemFields).toEqual(["accountNumber"]);
+      expect((await requireDraft(draft.id, ctx.db)).mapping).toBeNull();
+    }),
+  );
+});

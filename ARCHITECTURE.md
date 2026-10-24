@@ -1243,9 +1243,7 @@ flowchart TD
     D2 -->|yes| D3{"current state at reviewed date<br/>reproduces posted revision?"}
     D3 -->|yes| R10a["refuse: redraw for the chosen date,<br/>without claiming another change"]
     D3 -->|no| R10["refuse: review no longer describes<br/>this statement and account"]
-    D2 -->|no| E{"file names two<br/>different accounts?"}
-    E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
-    E -->|no| F{"file's number ≠<br/>account's recorded number?"}
+    D2 -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
     F -->|no| H{"quantity × basis, price or<br/>dividend rate overflows<br/>numeric(20,4)?"}
     H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
@@ -1264,17 +1262,16 @@ flowchart TD
     T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R0,R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R10a refuse
+    class R0,R1,R2,R4,R5,R6,R7,R8,R9,R10,R10a refuse
 ```
 
 These deserve emphasis:
 
-- **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the two-account and
-  account-number guards rather than between them. When the file dates itself, that date is used;
-  when it does not, the date the reader typed is validated here, not in `parseStatement`, which
-  never saw it. Resolving it first is what lets every guard after read the dated baseline the
-  commit will actually act on, and it is the one refusal in this diagram that is not a
-  `RefusedUpload`: no diff exists yet for a bad date to attach to.
+- **The as-of guard moved inside `assembleDiff` (#181)**, ahead of the account-number guard. When
+  the file dates itself, that date is used; when it does not, the date the reader typed is validated
+  here, not in `parseStatement`, which never saw it. Resolving it first is what lets every guard
+  after read the dated baseline the commit will actually act on, and it is the one refusal in this
+  diagram that is not a `RefusedUpload`: no diff exists yet for a bad date to attach to.
 - **The review revision binds the server-rendered interpretation.** `assembleDiff` hashes the raw
   file, mapping, effective raw-string meanings returned by `aliasesFor`, folded rows, chosen date,
   dated baseline set, latest-set context and an account-wide append watermark
@@ -1321,15 +1318,17 @@ These deserve emphasis:
 
 **On this path — an account chosen up front — the account number is only a guard.** A file naming an
 account different from the one the draft targets is refused; it is never silently rerouted to the
-account it names. It is also *captured*, inside the same transaction: `chosenAccountNumber` reads the
-folded rows, and when the account has no number recorded and the committed file carries one,
-`commitUnderLocks` writes it onto the account, guarded by `where external_account_number is null`;
-the account lock makes a concurrent upload impossible, and the predicate stays as the write's own
-statement of the rule. The guard arms itself on the first upload, and every later statement is
-checked against it; a settings form open across that capture cannot disarm it, because the save
-compares the box against the number it was drawn with (§7.2). Zero rows written refuses (a stored
-blank): a blank is not none to the guard's `is null` predicate, so `recordAccountNumber`
-(`uploads.server.ts`) treats it as a case Settings must clear first rather than write over silently.
+account it names. A file naming two numbers of its own never gets this far: `parseStatement` refuses
+it at the columns step, so the folded rows the guard reads state one number. The number is also
+*captured*, inside the same transaction: `chosenAccountNumber` reads the folded rows, and when the
+account has no number recorded and the committed file carries one, `commitUnderLocks` writes it onto
+the account, guarded by `where external_account_number is null`; the account lock makes a concurrent
+upload impossible, and the predicate stays as the write's own statement of the rule. The guard arms
+itself on the first upload, and every later statement is checked against it; a settings form open
+across that capture cannot disarm it, because the save compares the box against the number it was
+drawn with (§7.2). Zero rows written refuses (a stored blank): a blank is not none to the guard's
+`is null` predicate, so `recordAccountNumber` (`uploads.server.ts`) treats it as a case Settings
+must clear first rather than write over silently.
 
 On the other path — no account chosen, "Several accounts" — the same column is the selector instead
 (ADR-0015, spec 0023): `routeStatement` (`statement-routing.server.ts`) sends each row to the open

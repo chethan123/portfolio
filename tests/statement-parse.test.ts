@@ -858,6 +858,79 @@ describe("the as-of date", () => {
   });
 });
 
+// spec 0032: the rule runs before either fold can merge two numbers into one
+describe("one account's number", () => {
+  const columns = { instrument: "Symbol", quantity: "Qty", accountNumber: "Account" };
+  const header = ["Symbol", "Qty", "Account"];
+
+  it("refuses two lots of one instrument under two account numbers, naming both lines, rather than combining them", () => {
+    const parsed = parseStatement(
+      [header, ["VTI", "10", "A-111"], ["VTI", "20", "B-222"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ row: 2, column: "Account" });
+    expect(parsed.problems[0]?.message).toMatch(/"A-111" on line 2/);
+    expect(parsed.problems[0]?.message).toMatch(/"B-222" on line 3/);
+    expect(parsed.problems[0]?.message).toMatch(/one account/);
+    expect(parsed.problems[0]?.message).toMatch(/"Several accounts"/);
+  });
+
+  it("refuses the same two numbers with the rows reversed, naming them in the file's order", () => {
+    const parsed = parseStatement(
+      [header, ["VTI", "20", "B-222"], ["VTI", "10", "A-111"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]?.message).toMatch(/"B-222" on line 2/);
+    expect(parsed.problems[0]?.message).toMatch(/"A-111" on line 3/);
+  });
+
+  it("refuses two different instruments under two account numbers, since the rule is the file's, not the instrument's", () => {
+    const parsed = parseStatement(
+      [header, ["IN1", "10", "A-111"], ["IN2", "5", "B-222"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]?.message).toMatch(/"A-111" on line 2/);
+    expect(parsed.problems[0]?.message).toMatch(/"B-222" on line 3/);
+  });
+
+  it("ignores blank cells, so the number a later lot states is the position's whichever lot comes first", () => {
+    for (const rows of [
+      [["VTI", "10", ""], ["VTI", "20", "A-111"]],
+      [["VTI", "20", "A-111"], ["VTI", "10", ""]],
+    ]) {
+      const parsed = parseStatement([header, ...rows], mapping({ columns }));
+
+      expect(parsed.problems).toEqual([]);
+      expect(parsed.positions[0]).toMatchObject({ quantity: "30.00000000", accountNumber: "A-111" });
+    }
+  });
+
+  it("combines two lots under one number as before, quantity summed and basis weighted", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "Basis", "Account"],
+        ["VTI", "10", "100.00", "A-111"],
+        ["VTI", "20", "130.00", "A-111"],
+      ],
+      mapping({ columns: { ...columns, costBasis: "Basis" } }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.positions[0]).toMatchObject({
+      quantity: "30.00000000",
+      costBasisPerShare: "120.0000",
+      accountNumber: "A-111",
+    });
+    expect(parsed.combined).toEqual([{ instrument: "VTI", rowCount: 2, quantity: "30.00000000" }]);
+  });
+});
+
 // spec 0023: grouped per account number; sign, as-of agreement and blank numbers are the router's
 describe("multi-account mode", () => {
   const spreadsheet = {

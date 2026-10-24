@@ -1279,29 +1279,117 @@ describe("recordUpload", () => {
     }),
   );
 
+  const NUMBERED_MAPPING: StatementMapping = {
+    ...BASE_MAPPING,
+    columns: { ...BASE_MAPPING.columns, accountNumber: "Acct" },
+  };
+
   it(
-    "refuses a file whose own rows disagree about the account number, naming both",
-    withDatabase(async (ctx) => {
-      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+    "refuses at the columns step a file whose rows name two account numbers, keeping the draft and recording nothing",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
       const account = await seedAccount({ kind: "brokerage" });
-      const one = await seedInstrument({ symbol: "IN1", name: "Intra One" });
-      const two = await seedInstrument({ symbol: "IN2", name: "Intra Two" });
-      await seedInstrumentAlias({ instrument: one, rawString: "IN1" });
-      await seedInstrumentAlias({ instrument: two, rawString: "IN2" });
-
-      const draftId = await stage(
-        ctx,
+      const draft = await seedUploadDraft({
         account,
-        "Symbol,Quantity,Basis,Acct\nIN1,10,,A-111\nIN2,5,,B-222\n",
-        { columns: { accountNumber: "Acct" } },
+        filename: FILENAME,
+        bytes: encode("Symbol,Quantity,Basis,Acct\nIN1,10,,A-111\nIN2,5,,B-222\n"),
+      });
+
+      const outcome = await rememberMapping(draft.id, NUMBERED_MAPPING, db);
+      if (!("problems" in outcome)) throw new Error("Expected the mapping to be refused.");
+      expect(outcome.problems).toHaveLength(1);
+      const message = outcome.problems[0]?.message;
+      expect(message).toMatch(/A-111/);
+      expect(message).toMatch(/B-222/);
+      expect(message).toMatch(/one account/);
+      expect(message).toContain(
+        'A file holding several accounts uploads as "Several accounts", which routes each row ' +
+          "by its number.",
       );
 
-      const refusal = await refusalOf(() =>
-        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
-      );
-      expect(refusal.fieldErrors.form).toMatch(/A-111/);
-      expect(refusal.fieldErrors.form).toMatch(/B-222/);
-      expect(refusal.fieldErrors.form).toMatch(/one account/);
+      expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(0);
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBeNull();
+    }),
+  );
+
+  it(
+    "sends a draft whose saved mapping predates the rule back to the columns step, capturing no number and touching neither account",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      // #399: VTI under A-111 and B-222, account A chosen, the mapping already remembered
+      const a = await seedAccount({ kind: "brokerage" });
+      const b = await seedAccount({ kind: "brokerage", externalAccountNumber: "B-222" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market ETF" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      await seedPositionSet({
+        account: b,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: vti, quantity: "20" }],
+      });
+      const draft = await ctx.seedUploadDraft({
+        account: a,
+        filename: FILENAME,
+        bytes: encode("Symbol,Quantity,Basis,Acct\nVTI,10,,A-111\nVTI,20,,B-222\n"),
+        mapping: NUMBERED_MAPPING,
+      });
+
+      await expect(reviewForDraft(draft.id, "2026-06-30", db)).rejects.toMatchObject({
+        name: "DraftNotReadyError",
+        step: "columns",
+      });
+      await expect(
+        recordUpload(draft.id, { accountId: a.id, asOf: "2026-06-30" }, db),
+      ).rejects.toMatchObject({ name: "DraftNotReadyError", step: "columns" });
+
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", a.id)
+        .execute();
+      expect(sets).toHaveLength(0);
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", a.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBeNull();
+      const held = await accountHoldings(b.id, db);
+      expect(held).toHaveLength(1);
+      expect(held[0]?.quantity).toBe("20.00000000");
+      await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
+    }),
+  );
+
+  it(
+    "refuses two spellings of one instrument under two account numbers before they can fold",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedInstrumentAlias, seedUploadDraft }) => {
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market ETF" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VANGUARD TOTAL STOCK MARKET ETF" });
+      const draft = await seedUploadDraft({
+        account,
+        filename: FILENAME,
+        bytes: encode(
+          "Symbol,Quantity,Basis,Acct\nVTI,10,,A-111\nVANGUARD TOTAL STOCK MARKET ETF,20,,B-222\n",
+        ),
+      });
+
+      const outcome = await rememberMapping(draft.id, NUMBERED_MAPPING, db);
+      if (!("problems" in outcome)) throw new Error("Expected the mapping to be refused.");
+      expect(outcome.problems).toHaveLength(1);
+      expect(outcome.problems[0]?.message).toMatch(/A-111/);
+      expect(outcome.problems[0]?.message).toMatch(/B-222/);
 
       const sets = await db
         .selectFrom("position_set")
@@ -1315,6 +1403,79 @@ describe("recordUpload", () => {
         .where("id", "=", account.id)
         .executeTakeFirstOrThrow();
       expect(stored.external_account_number).toBeNull();
+    }),
+  );
+
+  it(
+    "combines two spellings of one instrument under one number, with exact quantity and weighted basis, and captures the number",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market ETF" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VTI" });
+      await seedInstrumentAlias({ instrument: vti, rawString: "VANGUARD TOTAL STOCK MARKET ETF" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\n" +
+          "VTI,10,100.00,A-111\n" +
+          "VANGUARD TOTAL STOCK MARKET ETF,20,130.00,A-111\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const { added } = onlySection(await diffForDraft(draftId, db));
+      expect(added).toHaveLength(1);
+      expect(added[0]).toMatchObject({ quantity: "30.00000000", costBasisPerShare: "120.0000" });
+      expect(added[0]?.note).toMatch(/2 rows combined/);
+
+      onlyRecorded(
+        await reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
+      );
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(1);
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBe("A-111");
+    }),
+  );
+
+  it(
+    "captures the number a later lot states when the first lot's cell is blank",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "CAP", name: "Captured Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "CAP" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nCAP,10,,\nCAP,20,,Z-999\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const { added } = onlySection(await diffForDraft(draftId, db));
+      expect(added).toHaveLength(1);
+      expect(added[0]?.quantity).toBe("30.00000000");
+
+      onlyRecorded(
+        await reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
+      );
+
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBe("Z-999");
     }),
   );
 
@@ -1366,33 +1527,6 @@ describe("recordUpload", () => {
         .where("id", "=", account.id)
         .executeTakeFirstOrThrow();
       expect(stored.external_account_number).toBe("Z-999");
-    }),
-  );
-
-  it(
-    "points a one-account upload whose rows name two numbers at Several accounts",
-    withDatabase(async (ctx) => {
-      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
-      const account = await seedAccount({ kind: "brokerage" });
-      for (const symbol of ["ONE", "TWO"]) {
-        const fund = await seedInstrument({ symbol, name: `Fund ${symbol}` });
-        await seedInstrumentAlias({ instrument: fund, rawString: symbol });
-      }
-
-      const draftId = await stage(
-        ctx,
-        account,
-        "Symbol,Quantity,Basis,Acct\nONE,10,,A-111\nTWO,5,,B-222\n",
-        { columns: { accountNumber: "Acct" } },
-      );
-
-      const refusal = await refusalOf(() =>
-        reviewAndRecord(draftId, db, { asOf: "2026-06-30", extra: { accountId: account.id } }),
-      );
-      expect(refusal.fieldErrors.form).toContain(
-        'A file holding several accounts uploads as "Several accounts", which routes each row ' +
-          "by its number.",
-      );
     }),
   );
 

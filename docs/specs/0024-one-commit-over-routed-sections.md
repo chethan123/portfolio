@@ -61,12 +61,18 @@ from the guard's refusal into a stale-review one.
 The single path's own behaviour — the two-numbers-in-one-file refusal (`:1755-1769`), the
 recorded-number guard (`:1771-1785`), capture from the file with its `boundedNumber` refusal and
 `numberHolder` pre-read (`:1787-1808`) — has to read the *folded* rows (`FileRow.accountNumber`,
-first non-null per instrument) and refuse with the assembled diff. Checking the raw positions
-instead would refuse more files. So it stays a commit-time step over the one assembled section:
+first non-null per instrument) and refuse with the assembled diff. ~~Checking the raw positions
+instead would refuse more files.~~ So it stays a commit-time step over the one assembled section:
 `chosenAccountNumber(section, account, diff, db): Promise<string | null>`. It returns the number to
 record, or null, and throws the same `RefusedUpload`s with the same wording. The review's card said
 "the single-path guard produces the group". Here the group is trivial and the guard produces the
 group's number. That is the same split, with the guard running where its inputs exist.
+
+**Reversed** by [0032](0032-two-numbers-refused-before-the-fold.md) for the two-numbers refusal
+alone: the files raw positions would have refused are the ones the fold hid from this guard
+([#399](https://github.com/chethan123/portfolio/issues/399)), and the rule moved into
+`parseStatement`, at the columns step. The recorded-number guard and capture stay here, over the
+folded rows.
 
 ## 2. Function inventory (`app/lib/uploads.server.ts`)
 

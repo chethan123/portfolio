@@ -1578,30 +1578,17 @@ export async function recordUpload(
   );
 }
 
-// A chosen account's number guard. Over the folded rows (FileRow.accountNumber), not the raw
-// positions, which would refuse more files; after assembleDiff, because the date it resolves
-// decides the baseline (#181). The number to capture, with the refusal its write owes, or null.
+// A chosen account's number guard. Over the folded rows (FileRow.accountNumber): the parser
+// refuses a file naming two numbers, so every row's is the file's one. After assembleDiff, because
+// the date it resolves decides the baseline (#181). The number to capture, with the refusal its
+// write owes, or null.
 async function chosenAccountNumber(
   { rows }: AssembledSection,
   account: Account,
   diff: UploadDiff,
   db: Kysely<Database>,
 ): Promise<{ number: string; refuse: (who: string) => Error } | null> {
-  // Intra-file half of the guard: refuse naming both numbers, never resolve by picking one.
-  const numbers = rows.flatMap((row) =>
-    row.accountNumber !== null ? [row.accountNumber] : [],
-  );
-  const firstNumber = numbers[0];
-  const differingNumber = numbers.find((number) => number !== firstNumber);
-  if (firstNumber !== undefined && differingNumber !== undefined) {
-    throw new RefusedUpload(
-      `This file says it describes account "${firstNumber}" on one row and ` +
-        `"${differingNumber}" on another, and a statement describes one account. ` +
-        "Check which account this export belongs to — nothing was recorded. A file holding " +
-        'several accounts uploads as "Several accounts", which routes each row by its number.',
-      diff,
-    );
-  }
+  const firstNumber = rows.find((row) => row.accountNumber !== null)?.accountNumber ?? null;
 
   // Account-number guard: never a selector.
   if (account.externalAccountNumber !== null) {
@@ -1621,7 +1608,7 @@ async function chosenAccountNumber(
 
   // Only for an account with none: a recorded number is never overwritten (recordAccountNumber).
   const captured =
-    account.externalAccountNumber === null && firstNumber !== undefined
+    account.externalAccountNumber === null && firstNumber !== null
       ? boundedNumber(firstNumber)
       : { number: null };
   if ("refusal" in captured) {

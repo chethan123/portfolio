@@ -259,6 +259,9 @@ unchanged.
 The intra-file "two numbers" refusal on a single-account upload gains one sentence pointing at the
 multi-account option.
 
+**Moved** by [0032](0032-two-numbers-refused-before-the-fold.md): the refusal, sentence included, is
+now `parseStatement`'s, at the columns step, rather than the commit's.
+
 ### The done page
 
 `route("upload/done", …)` is added to `app/routes.ts` by hand; a static segment outranks
